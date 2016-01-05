@@ -34,6 +34,7 @@ usage () {
 export FLAGS=
 structure=false
 pc=false
+settings_only=false
 gzip=false
 max_allowed_packet=1000M
 output=
@@ -43,6 +44,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
     --structure|--schema) structure=true;;
     --pc) pc=true;;
+    --settings_only) settings_only=true;;
     -z|--g|--gz|--gzi|--gzip) gzip=true;;
     -o|--out|--outp|--outpu|--output)
         test "$#" -gt 1 -a -z "$output" || usage
@@ -97,6 +99,8 @@ database_dump () {
         pcs=`echo 'select group_concat(contactId) from ContactInfo where (roles & 7) != 0' | eval "$MYSQL $myargs $FLAGS -N $dbname"`
         eval "$MYSQLDUMP $myargs $FLAGS --where='contactId in ($pcs)' $dbname TopicInterest"
         eval "$MYSQLDUMP $myargs $FLAGS $dbname Settings TopicArea"
+    elif $settings_only; then
+        eval "$MYSQLDUMP $myargs $FLAGS $dbname Settings"
     else
         eval "$MYSQLDUMP $myargs $FLAGS $dbname"
     fi
