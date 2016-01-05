@@ -1,0 +1,9 @@
+delete from Paper;
+delete from PaperStorage;
+delete from PaperReview;
+delete from ActionLog;
+delete from PaperOption;
+delete from PaperTag;
+delete from PaperTopic;
+delete from PaperComment;
+delete from PaperWatch;
