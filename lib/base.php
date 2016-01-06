@@ -84,8 +84,8 @@ function prefix_word_wrap($prefix, $text, $indent = 18, $totWidth = 75) {
         $text = substr($text, 1);
     }
 
-    while (($line = UnicodeHelper::utf8_word_prefix($text, $totWidth - $indentlen, $text)) !== "")
-        $out .= $indent . $line . "\n";
+    while (($line = UnicodeHelper::utf8_line_break($text, $totWidth - $indentlen)) !== false)
+        $out .= $indent . preg_replace('/^\pZ+/u', '', $line) . "\n";
     if (strlen($prefix) <= $indentlen) {
         $prefix = str_pad($prefix, $indentlen, " ", STR_PAD_LEFT);
         $out = $prefix . substr($out, $indentlen);
@@ -100,8 +100,10 @@ function center_word_wrap($text, $totWidth = 75, $multi_center = false) {
     if (strlen($text) <= $totWidth && !preg_match('/[\200-\377]/', $text))
         return str_pad($text, (int) (($totWidth + strlen($text)) / 2), " ", STR_PAD_LEFT) . "\n";
     $out = "";
-    while (($line = UnicodeHelper::utf8_word_prefix($text, $totWidth, $text)) !== "")
-        $out .= str_pad($line, (int) (($totWidth + UnicodeHelper::utf8_glyphlen($line)) / 2), " ", STR_PAD_LEFT) . "\n";
+    while (($line = UnicodeHelper::utf8_line_break($text, $totWidth)) !== false) {
+        $linelen = UnicodeHelper::utf8_glyphlen($line);
+        $out .= str_pad($line, (int) (($totWidth + $linelen) / 2), " ", STR_PAD_LEFT) . "\n";
+    }
     return $out;
 }
 
@@ -192,6 +194,41 @@ if (!defined("JSON_UNESCAPED_UNICODE"))
 
 // array and object helpers
 
+function get($var, $idx, $default = null) {
+    if (is_array($var))
+        return array_key_exists($idx, $var) ? $var[$idx] : $default;
+    else if (is_object($var))
+        return property_exists($var, $idx) ? $var->$idx : $default;
+    else if ($var === null)
+        return $default;
+    else {
+        error_log(json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)));
+        return $default;
+    }
+}
+
+function get_s($var, $idx, $default = null) {
+    return (string) get($var, $idx, $default);
+}
+
+function opt($idx, $default = null) {
+    global $Opt;
+    return get($Opt, $idx, $default);
+}
+
+function req($idx, $default = null) {
+    if (isset($_POST[$idx]))
+        return $_POST[$idx];
+    else if (isset($_GET[$idx]))
+        return $_GET[$idx];
+    else
+        return $default;
+}
+
+function req_s($idx, $default = null) {
+    return (string) req($idx, $default);
+}
+
 function defval($var, $idx, $defval = null) {
     if (is_array($var))
         return (isset($var[$idx]) ? $var[$idx] : $defval);
@@ -236,14 +273,14 @@ function caller_landmark($position = 1, $skipfunction_re = null) {
     $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
     $fname = null;
     for (++$position; isset($trace[$position]); ++$position) {
-        $fname = (string) @$trace[$position]["class"];
+        $fname = get_s($trace[$position], "class");
         $fname .= ($fname ? "::" : "") . $trace[$position]["function"];
         if ((!$skipfunction_re || !preg_match($skipfunction_re, $fname))
-            && ($fname !== "call_user_func" || @$trace[$position - 1]["file"]))
+            && ($fname !== "call_user_func" || get($trace[$position - 1], "file")))
             break;
     }
     $t = "";
-    if ($position > 0 && ($pi = @$trace[$position - 1]) && @$pi["file"])
+    if ($position > 0 && ($pi = $trace[$position - 1]) && isset($pi["file"]))
         $t = $pi["file"] . ":" . $pi["line"];
     if ($fname)
         $t .= ($t ? ":" : "") . $fname;
