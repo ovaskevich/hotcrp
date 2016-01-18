@@ -108,6 +108,15 @@ class LoginHelper {
                 return null;
         }
 
+        // is email valid?
+        if (!validate_email($_REQUEST["email"])) {
+            // can we make it valid by adding the default domain?
+            if (isset($Opt["defaultEmailDomain"])
+                    && validate_email($_REQUEST["email"] . "@" . $Opt["defaultEmailDomain"])) {
+                $_REQUEST["email"] = $_REQUEST["email"] . "@" . $Opt["defaultEmailDomain"];
+            }
+        }
+
         // look up user in our database
         if (strpos($_REQUEST["email"], "@") === false)
             self::unquote_double_quoted_request();
@@ -137,6 +146,10 @@ class LoginHelper {
                 return Conf::msg_error($Conf->db_error_html(true, "while adding your account"));
             if ($Conf->setting("setupPhase", false))
                 return self::first_user($user, $msg);
+            // automatically make new LDAP users PC members. 
+            if (isset($Opt["ldap_AutoNewUserPc"])) {
+                $user->save_roles(Contact::ROLE_PC, null);
+            }
         }
 
         // if no user found, then fail
