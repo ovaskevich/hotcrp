@@ -184,13 +184,13 @@ if (!$Me->isPC) {
     if (Conf::$gShortName && Conf::$gShortName != Conf::$gLongName)
         $confname .= " (" . Conf::$gShortName . ")";
     echo '<div class="homegrp">
-Welcome to the ', htmlspecialchars($confname), " submissions site.";
+Welcome to the ', htmlspecialchars($confname), " site.";
     if (isset($Opt["conferenceSite"]))
         echo " For general conference information, see <a href=\"", htmlspecialchars($Opt["conferenceSite"]), "\">", htmlspecialchars($Opt["conferenceSite"]), "</a>.";
     echo '</div>';
 }
 if (!$Me->has_email() || isset($_REQUEST["signin"])) {
-    echo "<div class=\"homegrp\">Sign in to submit or review papers.</div>";
+    echo "<div class=\"homegrp\">Sign in using your <strong>COE credentials</strong> (same as for ECE/COE email). Only ECE faculty has access. Please contact COE Computer Help for password problems.</div>";
     $passwordFocus = ($email_class == "" && $password_class != "");
     echo '<hr class="home" />
 <div class="homegrp foldo" id="homeacct">',
