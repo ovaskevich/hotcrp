@@ -1866,7 +1866,7 @@ class PaperTable {
     }
 
     function echoActions($top) {
-        global $Conf, $Me;
+        global $Conf, $Me, $Opt;
         $prow = $this->prow;
 
         $buttons = $this->_collectActionButtons();
@@ -1887,7 +1887,7 @@ class PaperTable {
             $v = defval($_REQUEST, "emailNote", "");
             echo "  <div class='g'></div>\n  <table>\n",
                 "    <tr><td>",
-                Ht::checkbox("doemail", 1, true), "&nbsp;",
+                Ht::checkbox("doemail", 1, defval($Opt, "newSubmitEmailDefault", true)), "&nbsp;",
                 Ht::label("Email authors, including:"), "&nbsp; ",
                 Ht::entry("emailNote", $v,
                           array("id" => "emailNote", "size" => 30, "placeholder" => "Optional explanation")),
