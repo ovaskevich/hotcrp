@@ -86,7 +86,6 @@ CREATE TABLE `Formula` (
   `heading` varchar(200) NOT NULL DEFAULT '',
   `headingTitle` varbinary(4096) NOT NULL,
   `expression` varbinary(4096) NOT NULL,
-  `authorView` tinyint(1) NOT NULL DEFAULT '1',
   `createdBy` int(11) NOT NULL DEFAULT '0',
   `timeModified` int(11) NOT NULL DEFAULT '0',
   PRIMARY KEY (`formulaId`),
@@ -105,11 +104,11 @@ CREATE TABLE `MailLog` (
   `recipients` varbinary(200) NOT NULL,
   `q` varbinary(4096) DEFAULT NULL,
   `t` varbinary(200) DEFAULT NULL,
-  `paperIds` text,
-  `cc` text,
-  `replyto` text,
-  `subject` text,
-  `emailBody` text,
+  `paperIds` blob,
+  `cc` blob,
+  `replyto` blob,
+  `subject` blob,
+  `emailBody` blob,
   PRIMARY KEY (`mailId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
@@ -143,6 +142,7 @@ CREATE TABLE `Paper` (
   `mimetype` varbinary(80) NOT NULL DEFAULT '',
   `timestamp` int(11) NOT NULL DEFAULT '0',
   `withdrawReason` varbinary(1024) DEFAULT NULL,
+  `paperFormat` tinyint(1) DEFAULT NULL,
   PRIMARY KEY (`paperId`),
   UNIQUE KEY `paperId` (`paperId`),
   KEY `timeSubmitted` (`timeSubmitted`),
@@ -173,6 +173,7 @@ CREATE TABLE `PaperComment` (
   `commentTags` varbinary(1024) DEFAULT NULL,
   `commentRound` int(11) NOT NULL DEFAULT '0',
   `commentFormat` tinyint(1) DEFAULT NULL,
+  `commentOverflow` longblob DEFAULT NULL,
   PRIMARY KEY (`commentId`),
   UNIQUE KEY `commentId` (`commentId`),
   KEY `contactId` (`contactId`),
@@ -192,8 +193,7 @@ CREATE TABLE `PaperConflict` (
   `paperId` int(11) NOT NULL,
   `contactId` int(11) NOT NULL,
   `conflictType` tinyint(1) NOT NULL DEFAULT '0',
-  UNIQUE KEY `contactPaper` (`contactId`,`paperId`),
-  UNIQUE KEY `contactPaperConflict` (`contactId`,`paperId`,`conflictType`)
+  PRIMARY KEY (`contactId`,`paperId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
@@ -282,8 +282,8 @@ CREATE TABLE `PaperReviewPreference` (
   `contactId` int(11) NOT NULL,
   `preference` int(4) NOT NULL DEFAULT '0',
   `expertise` int(4) DEFAULT NULL,
-  UNIQUE KEY `contactPaper` (`contactId`,`paperId`),
-  KEY `paperId` (`paperId`)
+  PRIMARY KEY (`paperId`,`contactId`),
+  UNIQUE KEY `contactPaper` (`contactId`,`paperId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
@@ -341,7 +341,7 @@ CREATE TABLE `PaperTag` (
   `paperId` int(11) NOT NULL,
   `tag` varchar(40) NOT NULL,		# see TAG_MAXLEN in header.php
   `tagIndex` float NOT NULL DEFAULT '0',
-  UNIQUE KEY `paperTag` (`paperId`,`tag`)
+  PRIMARY KEY (`paperId`,`tag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
@@ -352,9 +352,9 @@ CREATE TABLE `PaperTag` (
 
 DROP TABLE IF EXISTS `PaperTopic`;
 CREATE TABLE `PaperTopic` (
-  `topicId` int(11) NOT NULL,
   `paperId` int(11) NOT NULL,
-  UNIQUE KEY `paperTopic` (`paperId`,`topicId`)
+  `topicId` int(11) NOT NULL,
+  PRIMARY KEY (`paperId`,`topicId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
@@ -368,8 +368,7 @@ CREATE TABLE `PaperWatch` (
   `paperId` int(11) NOT NULL,
   `contactId` int(11) NOT NULL,
   `watch` int(11) NOT NULL DEFAULT '0',
-  UNIQUE KEY `contactPaper` (`contactId`,`paperId`),
-  UNIQUE KEY `contactPaperWatch` (`contactId`,`paperId`,`watch`)
+  PRIMARY KEY (`paperId`,`contactId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
@@ -445,13 +444,13 @@ CREATE TABLE `TopicInterest` (
   `contactId` int(11) NOT NULL,
   `topicId` int(11) NOT NULL,
   `interest` int(1) DEFAULT NULL,
-  UNIQUE KEY `contactTopic` (`contactId`,`topicId`)
+  PRIMARY KEY (`contactId`,`topicId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
 
 
-insert into Settings (name, value) values ('allowPaperOption', 115);
+insert into Settings (name, value) values ('allowPaperOption', 122);
 insert into Settings (name, value) values ('setupPhase', 1);
 -- collect PC conflicts from authors by default, but not collaborators
 insert into Settings (name, value) values ('sub_pcconf', 1);
@@ -466,6 +465,6 @@ insert into Settings (name, value) values ('extrev_view', 2);
 -- default outcome map
 insert into Settings (name, value, data) values ('outcome_map', 1, '{"0":"Unspecified","-1":"Rejected","1":"Accepted"}');
 -- default review form
-insert into Settings (name, value, data) values ('review_form',1,'{"overAllMerit":{"name":"Overall merit","position":1,"view_score":1,"options":["Reject","Weak reject","Weak accept","Accept","Strong accept"]},"reviewerQualification":{"name":"Reviewer expertise","position":2,"view_score":1,"options":["No familiarity","Some familiarity","Knowledgeable","Expert"]},"suitableForShort":{"name":"Suitable for short paper","view_score":1,"options":["Not suitable","Can''t tell","Suitable"]},"paperSummary":{"name":"Paper summary","position":3,"display_space":5,"view_score":1},"commentsToAuthor":{"name":"Comments for author","position":4,"display_space":15,"view_score":1},"commentsToPC":{"name":"Comments for PC","position":5,"display_space":10,"view_score":0}}');
+insert into Settings (name, value, data) values ('review_form',1,'{"overAllMerit":{"name":"Overall merit","position":1,"visibility":"au","options":["Reject","Weak reject","Weak accept","Accept","Strong accept"]},"reviewerQualification":{"name":"Reviewer expertise","position":2,"visibility":"au","options":["No familiarity","Some familiarity","Knowledgeable","Expert"]},"suitableForShort":{"name":"Suitable for short paper","visibility":"au","options":["Not suitable","Can''t tell","Suitable"]},"paperSummary":{"name":"Paper summary","position":3,"display_space":5,"visibility":"au"},"commentsToAuthor":{"name":"Comments for author","position":4,"display_space":15,"visibility":"au"},"commentsToPC":{"name":"Comments for PC","position":5,"display_space":10,"visibility":"pc"}}');
 
 insert into PaperStorage set paperStorageId=1, paperId=0, timestamp=0, mimetype='text/plain', paper='' on duplicate key update paper='';

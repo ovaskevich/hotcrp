@@ -1211,7 +1211,7 @@ span.asspref-1 {
 	margin: 0 -6px;
 }
 .pc_ctable {
-	margin: 0 -6px -4px;
+	margin: 0 -12px -4px;
 }
 .ctelt {
 	-webkit-column-break-inside: avoid;
@@ -2395,7 +2395,7 @@ span.revinfo {
 }
 .rvg .revvt {
 	margin-right: 2em;
-	margin-bottom: 2px;
+	padding-bottom: 2px;
 }
 .revet > .revfn {
 	color: #683131;
@@ -2466,7 +2466,7 @@ span.rev_rating_summary {
 /* comments */
 div.cmtcard {
 	margin: 24px 0 0 14em;
-	padding: 2px 0 5px;
+	padding: 5px 0 5px;
 	background: #e6e1cf;
 	position: relative;
 	border: 1px solid #99aabf;
@@ -2476,7 +2476,7 @@ div.cmtcard.response {
 	background: #ffddc1;
 }
 div.cmtcard_head {
-	padding: 3px 12px 4px;
+	padding: 0 12px 4px;
 }
 div.cmtcard_body {
 	background: #ffffff;
@@ -2588,7 +2588,7 @@ div.cmttext.has_wordsover {
 	margin: 0 -5px -3px;
 	padding: 0 5px 3px;
 	background: #f5ecec;
-	background: linear-gradient(to right, #f5ecec, #f5ecec 650px, rgba(245,236,236,0) 650px);
+	background: linear-gradient(to right, #f5ecec, #f5ecec 655px, rgba(245,236,236,0) 655px);
 }
 div.wordsover_mark {
 	position: absolute;

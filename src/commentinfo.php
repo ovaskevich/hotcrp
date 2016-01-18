@@ -18,6 +18,7 @@ class CommentInfo {
     public $commentTags;
     public $commentRound;
     public $commentFormat;
+    public $commentOverflow;
 
     static private $watching;
     static private $visibility_map = array(COMMENTTYPE_ADMINONLY => "admin", COMMENTTYPE_PCONLY => "pc", COMMENTTYPE_REVIEWER => "rev", COMMENTTYPE_AUTHOR => "au");
@@ -100,7 +101,7 @@ class CommentInfo {
 
     private static function _user($x) {
         if (isset($x->reviewEmail))
-            return (object) array("firstName" => get($x, "reviewFirstName"), "lastName" => get($x, "reviewLastName"), "email" => get($x, "reviewEmail"));
+            return (object) ["firstName" => get($x, "reviewFirstName"), "lastName" => get($x, "reviewLastName"), "email" => $x->reviewEmail];
         else
             return $x;
     }
@@ -167,7 +168,12 @@ class CommentInfo {
         }
 
         // text
-        $cj->text = $this->comment;
+        if ($this->commentOverflow)
+            $cj->text = $this->commentOverflow;
+        else
+            $cj->text = $this->comment;
+
+        // format
         if (($fmt = $this->commentFormat) === null)
             $fmt = Conf::$gDefaultFormat;
         if ($fmt)
@@ -196,7 +202,11 @@ class CommentInfo {
                 $x .= center_word_wrap($tagger->unparse_hashed($tags));
         }
         $x .= "---------------------------------------------------------------------------\n";
-        return $x . $this->comment . "\n";
+        if ($this->commentOverflow)
+            $x .= $this->commentOverflow;
+        else
+            $x .= $this->comment;
+        return $x . "\n";
     }
 
     static public function unparse_flow_entry($crow, $contact, $trclass) {
@@ -302,9 +312,12 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
             /* do nothing */;
         else if (!$this->commentId) {
             $change = true;
-            $qa = ["contactId, $LinkColumn, commentType, comment, timeModified, replyTo"];
-            $qb = [$contact->contactId, $this->prow->$LinkColumn, $ctype, "?", $Now, 0];
-            $qv[] = $text;
+            $qa = ["contactId, $LinkColumn, commentType, comment, commentOverflow, timeModified, replyTo"];
+            $qb = [$contact->contactId, $this->prow->$LinkColumn, $ctype, "?", "?", $Now, 0];
+            if (strlen($text) <= 32000)
+                array_push($qv, $text, null);
+            else
+                array_push($qv, UnicodeHelper::utf8_prefix($text, 200), $text);
             if ($ctags !== null) {
                 $qa[] = "commentTags";
                 $qb[] = "?";
@@ -324,7 +337,7 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
                 $q .= " from (select $LinkTable.$LinkColumn, coalesce(commentId, 0) commentId
                 from $LinkTable
                 left join $Table on ($Table.$LinkColumn=$LinkTable.$LinkColumn and (commentType&" . COMMENTTYPE_RESPONSE . ")!=0 and commentRound=$this->commentRound)
-                where $LinkTable.$LinkColumn={$this->prow->$LinkColumn} group by $LinkTable.$LinkColumn) t
+                where $LinkTable.$LinkColumn={$this->prow->$LinkColumn} limit 1) t
         where t.commentId=0";
             }
         } else {
@@ -340,8 +353,11 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
                 $qa .= ", timeNotified=$Now";
             if (!$this->timeDisplayed && $displayed)
                 $qa .= ", timeDisplayed=$Now";
-            $q = "update $Table set timeModified=$Now$qa, commentType=$ctype, comment=?, commentTags=? where commentId=$this->commentId";
-            $qv[] = $text;
+            $q = "update $Table set timeModified=$Now$qa, commentType=$ctype, comment=?, commentOverflow=?, commentTags=? where commentId=$this->commentId";
+            if (strlen($text) <= 32000)
+                array_push($qv, $text, null);
+            else
+                array_push($qv, UnicodeHelper::utf8_prefix($text, 200), $text);
             $qv[] = $ctags;
         }
 

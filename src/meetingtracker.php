@@ -127,7 +127,7 @@ class MeetingTracker {
             $status->position_at = $tracker->position_at;
         $pids = array_slice($tracker->ids, $tracker->position, 3);
 
-        $pc_conflicts = $acct->privChair || @$acct->is_tracker_kiosk;
+        $pc_conflicts = $acct->privChair || $acct->tracker_kiosk_state;
         $col = $j = "";
         if ($pc_conflicts) {
             $col = ", allconfs.conflictIds";
@@ -145,7 +145,7 @@ class MeetingTracker {
         while (($row = edb_orow($result))) {
             $papers[$row->paperId] = $p = (object) array();
             if (($acct->privChair || !$row->conflictType || !@$status->hide_conflicts)
-                && (!@$acct->is_tracker_kiosk || @$acct->tracker_kiosk_show_papers)) {
+                && $acct->tracker_kiosk_state != 1) {
                 $p->pid = (int) $row->paperId;
                 $p->title = $row->title;
             }
@@ -209,7 +209,7 @@ class MeetingTracker {
             return "off";
     }
 
-    static function trackerstatus_api() {
+    static function trackerstatus_api($user = null, $qreq = null, $prow = null) {
         $tracker = self::lookup();
         $a = array("ok" => true, "tracker_status" => self::tracker_status($tracker));
         if ($tracker && $tracker->position_at)
@@ -226,7 +226,8 @@ class MeetingTracker {
         else {
             $args = preg_split('/\s+/', $_REQUEST["track"]);
             if (count($args) >= 2
-                && ($xlist = SessionList::lookup($args[1]))) {
+                && ($xlist = SessionList::lookup($args[1]))
+                && str_starts_with($xlist->listid, "p/")) {
                 $position = null;
                 if (count($args) >= 3 && ctype_digit($args[2]))
                     $position = array_search((int) $args[2], $xlist->ids);

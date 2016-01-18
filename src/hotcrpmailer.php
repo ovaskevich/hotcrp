@@ -141,7 +141,9 @@ class HotCRPMailer extends Mailer {
                 from PaperReview r join Paper p using (paperId)
                 where r.contactId=" . $contact->contactId . "
                 and r.timeRequested>r.timeRequestNotified$since
-                and r.reviewSubmitted is null and r.reviewNeedsSubmit!=0
+                and r.reviewSubmitted is null
+                and r.reviewNeedsSubmit!=0
+                and p.timeSubmitted>0
                 order by r.paperId");
         $text = "";
         while (($row = edb_row($result)))
@@ -249,7 +251,7 @@ class HotCRPMailer extends Mailer {
         if ($what == "%REVIEWNUMBER%")
             return $this->reviewNumber;
         if ($what == "%AUTHOR%" || $what == "%AUTHORS%") {
-            if (!@$this->permissionContact->is_site_contact
+            if (!$this->permissionContact->is_site_contact
                 && !$this->row->has_author($this->permissionContact)
                 && !$this->permissionContact->can_view_authors($this->row, false))
                 return ($isbool ? false : "Hidden for blind review");

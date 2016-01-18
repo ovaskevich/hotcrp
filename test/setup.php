@@ -46,7 +46,7 @@ foreach ($json->contacts as $c) {
         die_hard("* failed to create user $c->email\n");
 }
 foreach ($json->papers as $p) {
-    $ps = new PaperStatus;
+    $ps = new PaperStatus(null);
     if (!$ps->save($p))
         die_hard("* failed to create paper $p->title:\n" . htmlspecialchars_decode(join("\n", $ps->error_html())) . "\n");
 }
@@ -233,6 +233,22 @@ function xassert_assign($who, $override, $what) {
     $assignset = new AssignmentSet($who, $override);
     $assignset->parse($what);
     xassert($assignset->execute());
+}
+
+function call_api($fn, $user, $qreq, $prow) {
+    if (!($qreq instanceof Qobject))
+        $qreq = new Qobject($qreq);
+    xassert(isset(SiteLoader::$api_map[$fn]));
+    $uf = SiteLoader::$api_map[$fn];
+    JsonResultException::$capturing = true;
+    $result = null;
+    try {
+        call_user_func($uf[0], $user, $qreq, $prow);
+    } catch (JsonResultException $jre) {
+        $result = new Qobject($jre->result);
+    }
+    JsonResultException::$capturing = false;
+    return $result;
 }
 
 echo "* Tests initialized.\n";

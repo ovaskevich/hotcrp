@@ -39,7 +39,7 @@ class FormulaGraph {
         } else if (preg_match('/\A(?:count|bar|bars|barchart)\z/i', $fy)) {
             $this->type = self::BARCHART;
             $this->fy = new Formula("sum(1)", true);
-        } else if (preg_match('/\A(?:frac|fraction)\z/i', $fy)) {
+        } else if (preg_match('/\A(?:stack|frac|fraction)\z/i', $fy)) {
             $this->type = self::FBARCHART;
             $this->fy = new Formula("sum(1)", true);
         } else {
@@ -390,13 +390,14 @@ class FormulaGraph {
         global $Conf, $Me;
         $f = $axis == "x" ? $this->fx : $this->fy;
         $t = array();
+        $counttype = $this->fx->needs_review() ? "reviews" : "papers";
         if ($axis == "y" && $this->type == self::FBARCHART)
-            $t[] = "ylabel:\"fraction of papers\",yfraction:true";
+            $t[] = "ylabel:\"fraction of $counttype\",yfraction:true";
         else if ($axis == "y" && $this->type == self::BARCHART
                  && $f->expression === "sum(1)")
-            $t[] = "ylabel:\"# papers\"";
+            $t[] = "ylabel:\"# $counttype\"";
         else if ($axis == "y" && $this->type == self::CDF)
-            $t[] = "ylabel:\"CDF\"";
+            $t[] = "ylabel:\"CDF of $counttype\"";
         else if ($axis != "x" || !$this->fx_query)
             $t[] = "{$axis}label:" . json_encode($f->expression);
         $format = $f->result_format();

@@ -115,14 +115,14 @@ assert_search_papers($user_shenker, "au:berkeley sort:title", "15 13 1 6");
 
 // correct conflict information returned
 $pl = new PaperList(new PaperSearch($user_shenker, "1 2 3 4 5 15-18"),
-                    array("reviewer" => $user_mgbaker));
+                    ["reviewer" => $user_mgbaker]);
 $j = $pl->text_json("id selconf");
 xassert_eqq(join(";", array_keys($j)), "1;2;3;4;5;15;16;17;18");
 xassert(!@$j[1]->selconf && !@$j[2]->selconf && @$j[3]->selconf && !@$j[4]->selconf && !@$j[5]->selconf
        && !@$j[15]->selconf && !@$j[16]->selconf && !@$j[17]->selconf && @$j[18]->selconf);
 
 $pl = new PaperList(new PaperSearch($user_shenker, "1 2 3 4 5 15-18"),
-                    array("reviewer" => $user_jon));
+                    ["reviewer" => $user_jon]);
 $j = $pl->text_json("id selconf");
 xassert_eqq(join(";", array_keys($j)), "1;2;3;4;5;15;16;17;18");
 xassert(!@$j[1]->selconf && !@$j[2]->selconf && !@$j[3]->selconf && !@$j[4]->selconf && !@$j[5]->selconf
@@ -235,9 +235,12 @@ xassert(!$user_jon->can_accept_review_assignment($paper17));
 // check shepherd search visibility
 $paper11 = $Conf->paperRow(11, $user_chair);
 $paper12 = $Conf->paperRow(12, $user_chair);
-xassert(PaperActions::set_shepherd($paper11, $user_estrin, $user_chair));
-xassert(PaperActions::set_shepherd($paper12, $user_estrin, $user_chair));
+$j = call_api("setshepherd", $user_chair, ["shepherd" => $user_estrin->email], $paper11);
+xassert_eqq($j->ok, true);
+$j = call_api("setshepherd", $user_chair, ["shepherd" => $user_estrin->email], $paper12);
+xassert_eqq($j->ok, true);
 assert_search_papers($user_chair, "shep:any", "11 12");
+assert_search_papers($user_chair, "shep:estrin", "11 12");
 assert_search_papers($user_shenker, "shep:any", "11 12");
 
 // tag searches

@@ -143,15 +143,15 @@ function hoturl_site_relative($page, $options = null) {
 }
 
 function hoturl($page, $options = null) {
-    global $ConfSiteBase;
+    $siteurl = Navigation::siteurl();
     $t = hoturl_site_relative($page, $options);
     if ($page !== "index")
-        return $ConfSiteBase . $t;
+        return $siteurl . $t;
     $trail = substr($t, 5 + strlen(Navigation::php_suffix()));
     if (@$trail[0] === "/")
-        return $ConfSiteBase . $t;
-    else if ($ConfSiteBase !== "")
-        return $ConfSiteBase . $trail;
+        return $siteurl . $t;
+    else if ($siteurl !== "")
+        return $siteurl . $trail;
     else
         return Navigation::site_path() . $trail;
 }
@@ -257,9 +257,20 @@ function redirectSelf($extra = array()) {
     go(selfHref($extra, array("raw" => true)));
 }
 
-function json_exit($json) {
+class JsonResultException extends Exception {
+    public $result;
+    static public $capturing = false;
+    function __construct($j) {
+        $this->result = $j;
+    }
+}
+
+function json_exit($json, $div = false) {
     global $Conf;
-    $Conf->ajaxExit($json);
+    if (JsonResultException::$capturing)
+        throw new JsonResultException($json);
+    else
+        $Conf->ajaxExit($json, $div);
 }
 
 function foldbutton($foldtype, $foldnum = 0, $content = "") {
@@ -622,7 +633,7 @@ function _one_quicklink($id, $baseUrl, $urlrest, $listtype, $isprev) {
 }
 
 function quicklinks($id, $baseUrl, $args, $listtype) {
-    global $Me, $Conf, $ConfSiteBase;
+    global $Me, $Conf;
 
     $list = SessionList::active($listtype, $id);
     if (!$list)
@@ -635,7 +646,7 @@ function quicklinks($id, $baseUrl, $args, $listtype) {
     if (@$list->description) {
         $x .= ($list->id_position > 0 ? "&nbsp;&nbsp;" : "");
         if (@$list->url)
-            $x .= '<a id="quicklink_list" class="x" href="' . $ConfSiteBase . htmlspecialchars($list->url) . "\">" . $list->description . "</a>";
+            $x .= '<a id="quicklink_list" class="x" href="' . htmlspecialchars(Navigation::siteurl() . $list->url) . "\">" . $list->description . "</a>";
         else
             $x .= '<span id="quicklink_list">' . $list->description . '</span>';
     }

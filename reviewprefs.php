@@ -193,9 +193,9 @@ $search = new PaperSearch($Me, array("t" => "rable",
                                      "urlbase" => hoturl_site_relative_raw("reviewprefs", "reviewer=$reviewer"),
                                      "q" => defval($_REQUEST, "q", ""),
                                      "reviewer" => $reviewer));
-$pl = new PaperList($search, ["sort" => true, "list" => true, "foldtype" => "pf", "reviewer" => $reviewer_contact]);
+$pl = new PaperList($search, ["sort" => true, "list" => true, "foldtype" => "pf", "reviewer" => $reviewer_contact], make_qreq());
 $pl_text = $pl->table_html("editReviewPreference",
-                array("class" => "pltable_full",
+                array("class" => "pltable_full", "table_id" => "foldpl",
                       "attributes" => array("data-fold-session" => "pfdisplay.$"),
                       "footer_extra" => "<div id='plactr'>" . Ht::submit("update", "Save changes", array("class" => "hb")) . "</div>"));
 SessionList::change($pl->listNumber, array("revprefs" => true));

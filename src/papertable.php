@@ -64,7 +64,6 @@ class PaperTable {
         if ($prow->myReviewType >= REVIEW_SECONDARY
             || $Me->allow_administer($prow))
             $ms["assign"] = true;
-        $ms["api"] = true;
         if (!$mode)
             $mode = @$_REQUEST["m"] ? : @$_REQUEST["mode"];
         if ($mode === "pe")
@@ -127,6 +126,7 @@ class PaperTable {
     static public function do_header($paperTable, $id, $action_mode) {
         global $Conf, $Me;
         $prow = $paperTable ? $paperTable->prow : null;
+        $format = 0;
 
         $t = '<div id="header_page" class="header_page_submission';
         if ($prow && $paperTable && ($list = SessionList::active()))
@@ -157,9 +157,22 @@ class PaperTable {
             }
             $t .= '"><a class="q" href="' . hoturl("paper", array("p" => $prow->paperId, "ls" => null))
                 . '"><span class="taghl"><span class="pnum">' . $title . '</span>'
-                . ' &nbsp; <span class="ptitle">';
-            if ($paperTable && $paperTable->matchPreg && isset($paperTable->matchPreg["title"]))
-                $t .= Text::highlight($prow->title, $paperTable->matchPreg["title"], $paperTable->entryMatches);
+                . ' &nbsp; ';
+            $highlight = null;
+            if ($paperTable && $paperTable->matchPreg)
+                $highlight = get($paperTable->matchPreg, "title");
+            if (!$highlight && ($format = $prow->paperFormat) === null)
+                $format = Conf::$gDefaultFormat;
+            if ($format && ($f = $Conf->format_info($format))
+                && ($regex = get($f, "simple_regex"))
+                && preg_match($regex, $prow->title))
+                $format = 0;
+            if ($format)
+                $t .= '<span class="ptitle preformat" data-format="' . $format . '">';
+            else
+                $t .= '<span class="ptitle">';
+            if ($highlight)
+                $t .= Text::highlight($prow->title, $highlight, $paperTable->entryMatches);
             else
                 $t .= htmlspecialchars($prow->title);
             $t .= '</span></span></a>';
@@ -172,6 +185,8 @@ class PaperTable {
             $t .= $paperTable->_paptabBeginKnown();
 
         $Conf->header($title, $id, actionBar($action_mode, $prow), $t);
+        if ($format)
+            $Conf->echoScript("render_text.titles()");
     }
 
     private function echoDivEnter() {
@@ -364,7 +379,7 @@ class PaperTable {
             }
 
             foreach (PaperOption::option_list() as $id => $o)
-                if (@$o->near_submission
+                if ($o->display() === PaperOption::DISP_SUBMISSION
                     && $o->has_document()
                     && $prow
                     && $Me->can_view_paper_option($prow, $o)
@@ -422,7 +437,7 @@ class PaperTable {
         $Conf->footerScript("jQuery(function(){var x=\$\$(\"paperUpload\");if(x&&x.value)fold(\"isready\",0)})");
     }
 
-    private function echo_editable_document($docx, $storageId, $flags) {
+    private function echo_editable_document(PaperOption $docx, $storageId, $flags) {
         global $Conf, $Me, $Opt;
 
         $prow = $this->prow;
@@ -444,7 +459,7 @@ class PaperTable {
         $accepts = $docclass->mimetypes();
         if (count($accepts))
             echo $this->editable_papt($docx->abbr, htmlspecialchars($docx->name) . ' <span class="papfnh">(' . htmlspecialchars(Mimetype::description($accepts)) . ", max " . ini_get("upload_max_filesize") . "B)</span>");
-        if (@$docx->description)
+        if ($docx->description)
             echo '<div class="paphint">', $docx->description, "</div>";
         echo '<div class="papev">';
 
@@ -818,8 +833,11 @@ class PaperTable {
 
         foreach ($this->prow->options() as $oa) {
             $o = $oa->option;
-            if ((@$o->near_submission && $o->has_document() && $Me->can_view_paper_option($this->prow, $o))
-                || (!$showAllOptions && !$Me->can_view_paper_option($this->prow, $o)))
+            if (($o->display() === PaperOption::DISP_SUBMISSION
+                 && $o->has_document()
+                 && $Me->can_view_paper_option($this->prow, $o))
+                || (!$showAllOptions
+                    && !$Me->can_view_paper_option($this->prow, $o)))
                 continue;
 
             // create option display value
@@ -860,7 +878,7 @@ class PaperTable {
 
             // display it
             $folded = $showAllOptions && !$Me->can_view_paper_option($this->prow, $o, false);
-            if (@$o->highlight || @$o->near_submission) {
+            if ($o->display() !== PaperOption::DISP_TOPICS) {
                 $x = '<div class="pgsm' . ($folded ? " fx8" : "") . '">'
                     . '<div class="pavt"><span class="pavfn">'
                     . ($show_on ? $on : $ox) . "</span>"
@@ -1177,8 +1195,8 @@ class PaperTable {
             return;
         assert(!!$this->editable);
         foreach ($opt as $o) {
-            if (!@($display_types[$o->display_type()])
-                || (@$o->final && !$this->canUploadFinal)
+            if (!($display_types & (1 << $o->display()))
+                || ($o->final && !$this->canUploadFinal)
                 || ($prow && !$Me->can_view_paper_option($prow, $o, true)))
                 continue;
 
@@ -1201,12 +1219,12 @@ class PaperTable {
             if ($o->type === "checkbox") {
                 echo $this->editable_papt($optid, Ht::checkbox_h($optid, 1, $myval) . "&nbsp;" . Ht::label(htmlspecialchars($o->name)),
                                           array("id" => "{$optid}_div"));
-                if (@$o->description)
+                if ($o->description)
                     echo '<div class="paphint">', $o->description, "</div>";
                 Ht::stash_script("jQuery('#{$optid}_div').click(function(e){if(e.target==this)jQuery(this).find('input').click();})");
             } else if (!$o->is_document()) {
                 echo $this->editable_papt($optid, htmlspecialchars($o->name));
-                if (@$o->description)
+                if ($o->description)
                     echo '<div class="paphint">', $o->description, "</div>";
                 echo '<div class="papev">';
                 if ($o->type === "selector")
@@ -1382,7 +1400,7 @@ class PaperTable {
                            ($value && isset($pc[$value]) ? htmlspecialchars($pc[$value]->email) : "0"),
                            array("id" => "fold${type}_d")),
                 '</div></form>';
-            $Conf->footerScript('make_pseditor("' . $type . '",{p:' . $this->prow->paperId . ',m:"api",fn:"set' . $type . '"})');
+            $Conf->footerScript('make_pseditor("' . $type . '",{p:' . $this->prow->paperId . ',fn:"set' . $type . '"})');
         }
 
         if ($wholefold === null)
@@ -1420,21 +1438,18 @@ class PaperTable {
                                         !$this->prow->has_conflict($Me));
         $unfolded = $is_editable && (isset($Error["tags"]) || defval($_REQUEST, "atab") === "tags");
 
-        $this->_papstripBegin("tags", !$unfolded,
-                              array("data-onunfold" => "Miniajax.submit('tagreportform')"));
+        $this->_papstripBegin("tags", !$unfolded, ["data-onunfold" => "save_tags.load_report()"]);
         $color = TagInfo::color_classes($viewable);
         echo '<div class="', trim("has_hotcrp_tag_classes pscopen $color"), '">';
 
         if ($is_editable)
-            echo Ht::form_div(hoturl_post("paper", "p=" . $this->prow->paperId . "&amp;m=api&amp;fn=settags"), array("id" => "tagform", "onsubmit" => "return save_tags()"));
+            echo Ht::form_div(hoturl("paper", "p=" . $this->prow->paperId), array("id" => "tagform", "onsubmit" => "return save_tags()"));
 
         echo $this->papt("tags", "Tags", array("type" => "ps", "editfolder" => ($is_editable ? "tags" : 0))),
             '<div class="psv" style="position:relative">';
         if ($is_editable) {
             // tag report form
-            $Conf->footerHtml(Ht::form(hoturl_post("paper", "p=" . $this->prow->paperId . "&amp;tagreport=1"), array("id" => "tagreportform", "onsubmit" => "return Miniajax.submit('tagreportform')"))
-                              . "</form>");
-            $treport = PaperActions::tag_report($this->prow);
+            $treport = PaperApi::tagreport($Me, $this->prow);
 
             // uneditable
             echo '<div class="fn taghl">';
@@ -1458,7 +1473,6 @@ class PaperTable {
                 $tagger->unparse($editable),
                 "</textarea></div>",
                 '<div style="padding:1ex 0;text-align:right">',
-                Ht::hidden("settags", "1"),
                 Ht::submit("cancelsettags", "Cancel", array("class" => "bsm", "onclick" => "return fold('tags',1)")),
                 " &nbsp;", Ht::submit("Save", array("class" => "bsm")),
                 "</div>",
@@ -1485,7 +1499,7 @@ class PaperTable {
             '</div></form><p class="fn odname">',
             htmlspecialchars($Conf->decision_name($this->prow->outcome)),
             "</p></div></div>\n";
-        $Conf->footerScript('make_pseditor("decision",{p:' . $this->prow->paperId . ',m:"api",fn:"setdecision"})');
+        $Conf->footerScript('make_pseditor("decision",{p:' . $this->prow->paperId . ',fn:"setdecision"})');
     }
 
     function papstripReviewPreference() {
@@ -1995,7 +2009,7 @@ class PaperTable {
 
         $this->editable_title();
         $this->echo_editable_submission(!$prow || $prow->size == 0 ? PaperTable::ENABLESUBMIT : 0);
-        $this->editable_options(array("near_submission" => true));
+        $this->editable_options(1 << PaperOption::DISP_SUBMISSION);
 
         // Authorship
         $this->editable_authors();
@@ -2011,7 +2025,8 @@ class PaperTable {
 
         // Topics and options
         $this->editable_topics();
-        $this->editable_options(array("normal" => true, "highlight" => true));
+        $this->editable_options((1 << PaperOption::DISP_PROMINENT)
+                                | (1 << PaperOption::DISP_TOPICS));
 
         // Potential conflicts
         if ($this->editable !== "f" || $this->admin) {

@@ -18,7 +18,7 @@ class PaperColumn extends Column {
 
     public static function lookup_local($name) {
         $lname = strtolower($name);
-        return defval(self::$by_name, $lname, null);
+        return get(self::$by_name, $lname, null);
     }
 
     public static function lookup($name, $errors = null) {
@@ -122,8 +122,8 @@ class SelectorPaperColumn extends PaperColumn {
             return false;
         if ($this->name == "selconf" || $this->name == "selunlessconf")
             $pl->qopts["reviewer"] = $pl->reviewer_cid();
-        if ($this->name == "selconf")
-            $pl->add_footer_script("add_conflict_ajax()");
+        if ($this->name == "selconf" && ($tid = $pl->table_id()))
+            $pl->add_header_script("add_conflict_ajax(" . json_encode("#$tid") . ")");
         return true;
     }
     public function header($pl, $ordinal) {
@@ -135,7 +135,7 @@ class SelectorPaperColumn extends PaperColumn {
     private function checked($pl, $row) {
         $def = ($this->name == "selon"
                 || ($this->name == "selconf" && $row->reviewerConflictType > 0));
-        return $pl->papersel ? !!defval($pl->papersel, $row->paperId, $def) : $def;
+        return $pl->papersel ? !!get($pl->papersel, $row->paperId, $def) : $def;
     }
     public function content($pl, $row, $rowidx) {
         if ($this->name == "selunlessconf" && $row->reviewerConflictType)
@@ -160,6 +160,8 @@ class SelectorPaperColumn extends PaperColumn {
 
 class TitlePaperColumn extends PaperColumn {
     private $has_badges = false;
+    private $highlight = false;
+    private $nformats = 0;
     public function __construct() {
         parent::__construct("title", Column::VIEW_COLUMN | Column::COMPLETABLE,
                             array("minimal" => true, "comparator" => "title_compare"));
@@ -169,6 +171,7 @@ class TitlePaperColumn extends PaperColumn {
             && TagInfo::has_badges();
         if ($this->has_badges)
             $pl->qopts["tags"] = 1;
+        $this->highlight = get($pl->search->matchPreg, "title");
         return true;
     }
     public function title_compare($a, $b) {
@@ -178,16 +181,38 @@ class TitlePaperColumn extends PaperColumn {
         return "Title";
     }
     public function content($pl, $row, $rowidx) {
-        $href = $pl->_paperLink($row);
-        $x = Text::highlight($row->title, defval($pl->search->matchPreg, "title"));
-        $badge = "";
+        global $Conf;
+        $t = '<a href="' . $pl->_paperLink($row) . '" class="ptitle taghl';
+
+        $format = 0;
+        if ($pl->live_table && !$this->highlight
+            && ($format = $row->paperFormat) === null)
+            $format = Conf::$gDefaultFormat;
+        if ($format && ($f = $Conf->format_info($format))
+            && ($regex = get($f, "simple_regex"))
+            && preg_match($regex, $row->title))
+            $format = 0;
+        if ($format) {
+            $t .= ' preformat" data-format="' . $format;
+            $Conf->footerScript('$(render_text.titles)', 'render_titles');
+            ++$this->nformats;
+        }
+
+        $t .= '" tabindex="5">' . Text::highlight($row->title, $this->highlight) . '</a>'
+            . $pl->_contentDownload($row);
+
         if ($this->has_badges && $pl->contact->can_view_tags($row, true)
             && (string) $row->paperTags !== ""
             && ($t = $pl->tagger->viewable($row->paperTags)) !== ""
             && ($t = $pl->tagger->unparse_badges_html($t)) !== "")
-            $badge = $pl->maybe_conflict_nooverride($row, $t, $pl->contact->can_view_tags($row, false));
-        return "<a href=\"$href\" class=\"ptitle taghl\" tabindex=\"5\">"
-            . $x . "</a>" . $pl->_contentDownload($row) . $badge;
+            $t .= $pl->maybe_conflict_nooverride($row, $t, $pl->contact->can_view_tags($row, false));
+
+        if ($this->nformats && $rowidx % 16 == 15) {
+            $t .= '<script>render_text.titles()</script>';
+            $this->nformats = 0;
+        }
+
+        return $t;
     }
     public function text($pl, $row) {
         return $row->title;
@@ -291,73 +316,84 @@ class AuthorsPaperColumn extends PaperColumn {
     }
     public function prepare(PaperList $pl, $visible) {
         $this->aufull = !$pl->is_folded("aufull");
-        return true;
+        return $pl->contact->can_view_some_authors();
     }
-    private function full_authors($row) {
-        $lastaff = "";
-        $anyaff = false;
-        $aus = $affaus = array();
-        foreach ($row->author_list() as $au) {
-            if ($au->affiliation != $lastaff && count($aus)) {
-                $affaus[] = array($aus, $lastaff);
-                $aus = array();
-                $anyaff = $anyaff || ($au->affiliation != "");
-            }
-            $lastaff = $au->affiliation;
-            $aus[] = $au->name();
+    private function affiliation_map($row) {
+        $nonempty_count = 0;
+        $aff = [];
+        foreach ($row->author_list() as $i => $au) {
+            if ($i && $au->affiliation === $aff[$i - 1])
+                $aff[$i - 1] = null;
+            $aff[] = $au->affiliation;
+            $nonempty_count += ($au->affiliation !== "");
         }
-        if (count($aus))
-            $affaus[] = array($aus, $lastaff);
-        foreach ($affaus as &$ax)
-            if ($ax[1] === "" && $anyaff)
-                $ax[1] = "unaffiliated";
-        return $affaus;
+        if ($nonempty_count != 0 && $nonempty_count != count($aff)) {
+            foreach ($aff as &$affx)
+                if ($affx === "")
+                    $affx = "unaffiliated";
+        }
+        return $aff;
     }
     public function content_empty($pl, $row) {
         return !$pl->contact->can_view_authors($row, true);
     }
     public function content($pl, $row, $rowidx) {
-        $aus = array();
-        $highlight = defval($pl->search->matchPreg, "authorInformation", "");
-        if ($this->aufull) {
-            $affaus = $this->full_authors($row);
-            foreach ($affaus as &$ax) {
-                foreach ($ax[0] as &$axn)
-                    $axn = Text::highlight($axn, $highlight);
-                unset($axn);
-                $aff = Text::highlight($ax[1], $highlight);
-                $ax = commajoin($ax[0]) . ($aff ? " <span class='auaff'>($aff)</span>" : "");
-            }
-            return commajoin($affaus);
-        } else if (!$highlight) {
+        $out = [];
+        $highlight = get($pl->search->matchPreg, "authorInformation", "");
+        if (!$highlight && !$this->aufull) {
             foreach ($row->author_list() as $au)
-                $aus[] = $au->abbrevname_html();
-            return join(", ", $aus);
+                $out[] = $au->abbrevname_html();
+            return join(", ", $out);
         } else {
-            foreach ($row->author_list() as $au) {
-                $first = htmlspecialchars($au->firstName);
-                $x = Text::highlight($au->name(), $highlight, $nm);
-                if ((!$nm || substr($x, 0, strlen($first)) == $first)
-                    && ($initial = Text::initial($first)) != "")
-                    $x = $initial . substr($x, strlen($first));
-                $aus[] = $x;
+            $affmap = $this->affiliation_map($row);
+            $aus = $affout = [];
+            $any_affhl = false;
+            foreach ($row->author_list() as $i => $au) {
+                $name = Text::highlight($au->name(), $highlight, $didhl);
+                if (!$this->aufull
+                    && ($first = htmlspecialchars($au->firstName))
+                    && (!$didhl || substr($name, 0, strlen($first)) === $first)
+                    && ($initial = Text::initial($first)) !== "")
+                    $name = $initial . substr($name, strlen($first));
+                $auy[] = $name;
+                if ($affmap[$i] !== null) {
+                    $out[] = $this->aufull ? commajoin($auy) : join(", ", $auy);
+                    $affout[] = Text::highlight($affmap[$i], $highlight, $didhl);
+                    $any_affhl = $any_affhl || $didhl;
+                    $auy = [];
+                }
             }
-            return join(", ", $aus);
+            // $affout[0] === "" iff there are no nonempty affiliations
+            if (($any_affhl || $this->aufull) && $affout[0] !== "") {
+                foreach ($out as $i => &$x)
+                    $x .= ' <span class="auaff">(' . $affout[$i] . ')</span>';
+            }
+            if ($this->aufull)
+                return commajoin($out);
+            else
+                return join($any_affhl ? "; " : ", ", $out);
         }
     }
     public function text($pl, $row) {
         if (!$pl->contact->can_view_authors($row, true))
             return "";
-        if ($this->aufull) {
-            $affaus = $this->full_authors($row);
-            foreach ($affaus as &$ax)
-                $ax = commajoin($ax[0]) . ($ax[1] ? " ($ax[1])" : "");
-            return commajoin($affaus);
-        } else {
-            $aus = array();
+        $out = [];
+        if (!$this->aufull) {
             foreach ($row->author_list() as $au)
-                $aus[] = $au->abbrevname_text();
-            return join(", ", $aus);
+                $out[] = $au->abbrevname_text();
+            return join(", ", $out);
+        } else {
+            $affmap = $this->affiliation_map($row);
+            $aus = [];
+            foreach ($row->author_list() as $i => $au) {
+                $aus[] = $au->name();
+                if ($affmap[$i] !== null) {
+                    $aff = ($affmap[$i] !== "" ? " ($affmap[$i])" : "");
+                    $out[] = commajoin($aus) . $aff;
+                    $aus = [];
+                }
+            }
+            return commajoin($out);
         }
     }
 }
@@ -368,7 +404,7 @@ class CollabPaperColumn extends PaperColumn {
     }
     public function prepare(PaperList $pl, $visible) {
         global $Conf;
-        return !!$Conf->setting("sub_collab");
+        return !!$Conf->setting("sub_collab") && $pl->contact->can_view_some_authors();
     }
     public function header($pl, $ordinal) {
         return "Collaborators";
@@ -382,7 +418,7 @@ class CollabPaperColumn extends PaperColumn {
         $x = "";
         foreach (explode("\n", $row->collaborators) as $c)
             $x .= ($x === "" ? "" : ", ") . trim($c);
-        return Text::highlight($x, defval($pl->search->matchPreg, "collaborators"));
+        return Text::highlight($x, get($pl->search->matchPreg, "collaborators"));
     }
     public function text($pl, $row) {
         $x = "";
@@ -459,7 +495,7 @@ class AbstractPaperColumn extends PaperColumn {
         return $row->abstract == "";
     }
     public function content($pl, $row, $rowidx) {
-        return Text::highlight($row->abstract, defval($pl->search->matchPreg, "abstract"));
+        return Text::highlight($row->abstract, get($pl->search->matchPreg, "abstract"));
     }
     public function text($pl, $row) {
         return $row->abstract;
@@ -485,7 +521,7 @@ class TopicListPaperColumn extends PaperColumn {
         return !isset($row->topicIds) || $row->topicIds == "";
     }
     public function content($pl, $row, $rowidx) {
-        return PaperInfo::unparse_topics($row->topicIds, @$row->topicInterest, true);
+        return PaperInfo::unparse_topics($row->topicIds, get($row, "topicInterest"), true);
     }
 }
 
@@ -619,8 +655,8 @@ class AssignReviewPaperColumn extends ReviewerTypePaperColumn {
     public function prepare(PaperList $pl, $visible) {
         if (!$pl->contact->is_manager())
             return false;
-        if ($visible > 0)
-            $pl->add_footer_script("add_assrev_ajax()");
+        if ($visible > 0 && ($tid = $pl->table_id()))
+            $pl->add_header_script("add_assrev_ajax(" . json_encode("#$tid") . ")");
         $pl->qopts["reviewer"] = $pl->reviewer_cid();
         return true;
     }
@@ -646,9 +682,7 @@ class AssignReviewPaperColumn extends ReviewerTypePaperColumn {
                              -1 => "Conflict");
         else
             $options = array(0 => "None", -1 => "Conflict");
-        return Ht::select("assrev$row->paperId", $options, $rt,
-                           array("tabindex" => 3,
-                                 "onchange" => "hiliter(this)"));
+        return Ht::select("assrev$row->paperId", $options, $rt, ["tabindex" => 3]);
     }
 }
 
@@ -671,10 +705,10 @@ class DesirabilityPaperColumn extends PaperColumn {
         return "Desirability";
     }
     public function content($pl, $row, $rowidx) {
-        return htmlspecialchars(@($row->desirability + 0));
+        return htmlspecialchars($this->text($pl, $row));
     }
     public function text($pl, $row) {
-        return @($row->desirability + 0);
+        return get($row, "desirability") + 0;
     }
 }
 
@@ -721,11 +755,11 @@ class PreferencePaperColumn extends PaperColumn {
             $pl->qopts["reviewerPreference"] = $pl->qopts["topicInterestScore"] = 1;
             $pl->qopts["reviewer"] = $pl->reviewer_cid();
         }
-        if ($this->editable && $visible > 0) {
-            $arg = "ajax=1&amp;setrevpref=1";
-            if ($pl->contact->privChair && $pl->reviewer_cid())
-                $arg .= "&amp;reviewer=" . $pl->reviewer_cid();
-            $pl->add_footer_script("add_revpref_ajax(" . json_encode(hoturl_post_raw("paper", $arg)) . ")");
+        if ($this->editable && $visible > 0 && ($tid = $pl->table_id())) {
+            $reviewer_cid = 0;
+            if ($pl->contact->privChair)
+                $reviewer_cid = $pl->reviewer_cid() ? : 0;
+            $pl->add_header_script("add_revpref_ajax(" . json_encode("#$tid") . ",$reviewer_cid)");
         }
         return true;
     }
@@ -758,11 +792,11 @@ class PreferencePaperColumn extends PaperColumn {
         else if ($row->reviewerConflictType > 0)
             return "N/A";
         else
-            return '<input id="revpref' . $row->paperId . '" name="revpref' . $row->paperId
-                . '" value="' . $pref . '" type="text" size="4" tabindex="2" placeholder="0" />';
+            return '<input name="revpref' . $row->paperId
+                . '" class="revpref" value="' . ($pref !== "0" ? $pref : "") . '" type="text" size="4" tabindex="2" placeholder="0" />';
     }
     public function text($pl, $row) {
-        return @($row->reviewerPreference + 0);
+        return get($row, "reviewerPreference") + 0;
     }
 }
 
@@ -797,7 +831,7 @@ class PreferenceListPaperColumn extends PaperColumn {
         $ts = array();
         if ($prefs || $topics)
             foreach (pcMembers() as $pcid => $pc) {
-                $pref = @$prefs[$pcid] ? : array();
+                $pref = get($prefs, $pcid, array());
                 if ($this->topics)
                     $pref[2] = $row->topic_interest_score($pc);
                 if (($pspan = unparse_preference_span($pref)) !== "")
@@ -842,13 +876,13 @@ class ReviewerListPaperColumn extends PaperColumn {
         $x = array();
         foreach ($pl->review_list[$row->paperId] as $xrow) {
             $ranal = new PaperListReviewAnalysis($xrow);
-            if ($pcm && ($p = @$pcm[$xrow->contactId]))
+            if ($pcm && ($p = get($pcm, $xrow->contactId)))
                 $n = $p->reviewer_html();
             else
                 $n = Text::name_html($xrow);
             $n .= "&nbsp;" . $ranal->icon_html(false);
             if ($prefs || $topics) {
-                $pref = @$prefs[$xrow->contactId];
+                $pref = get($prefs, $xrow->contactId);
                 if ($topics)
                     $pref[2] = $row->topic_interest_score((int) $xrow->contactId);
                 $n .= unparse_preference_span($pref);
@@ -878,7 +912,7 @@ class PCConflictListPaperColumn extends PaperColumn {
         $conf = $row->conflicts();
         $y = array();
         foreach (pcMembers() as $id => $pc)
-            if (@$conf[$id])
+            if (get($conf, $id))
                 $y[] = $pc->reviewer_html();
         return join(", ", $y);
     }
@@ -900,10 +934,10 @@ class ConflictMatchPaperColumn extends PaperColumn {
             return "<strong>Potential conflict in collaborators</strong>";
     }
     public function content_empty($pl, $row) {
-        return defval($pl->search->matchPreg, $this->field, "") == "";
+        return get($pl->search->matchPreg, $this->field, "") == "";
     }
     public function content($pl, $row, $rowidx) {
-        $preg = defval($pl->search->matchPreg, $this->field, "");
+        $preg = get($pl->search->matchPreg, $this->field, "");
         if ($preg == "")
             return "";
         $text = "";
@@ -1041,33 +1075,27 @@ class EditTagPaperColumn extends TagPaperColumn {
         return parent::register(new EditTagPaperColumn($name, substr($name, $p + 1), $this->is_value));
     }
     public function prepare(PaperList $pl, $visible) {
-        if (($p = parent::prepare($pl, $visible)) && $visible > 0) {
-            $pl->add_footer_html(
-                 Ht::form(hoturl_post("paper", "settags=1&amp;forceShow=1"),
-                           array("id" => "edittagajaxform",
-                                 "style" => "display:none")) . "<div>"
-                 . Ht::hidden("p") . Ht::hidden("addtags")
-                 . Ht::hidden("deltags") . "</div></form>",
-                 "edittagajaxform");
-            $sorter = @$pl->sorters[0];
+        if (($p = parent::prepare($pl, $visible)) && $visible > 0
+            && ($tid = $pl->table_id())) {
+            $sorter = get($pl->sorters, 0);
+            $s = "";
             if (("edit" . $sorter->type == $this->name
                  || $sorter->type == $this->name)
                 && !$sorter->reverse
                 && !$pl->search->thenmap
                 && $this->is_value)
-                $pl->add_footer_script("add_edittag_ajax('$this->dtag')");
-            else
-                $pl->add_footer_script("add_edittag_ajax()");
+                $s = "," . json_encode($this->dtag);
+            $pl->add_header_script("add_edittag_ajax(" . json_encode("#$tid") . $s . ")");
         }
         return $p;
     }
     public function content($pl, $row, $rowidx) {
         $v = $this->_tag_value($row);
         if (!$this->is_value)
-            return "<input type='checkbox' class='cb' name='tag:$this->dtag $row->paperId' value='x' tabindex='6'"
+            return "<input type='checkbox' class='cb edittag' name='tag:$this->dtag $row->paperId' value='x' tabindex='6'"
                 . ($v !== null ? " checked='checked'" : "") . " />";
         else
-            return "<input type='text' size='4' name='tag:$this->dtag $row->paperId' value=\""
+            return "<input type='text' class='edittagval' size='4' name='tag:$this->dtag $row->paperId' value=\""
                 . ($v !== null ? htmlspecialchars($v) : "") . "\" tabindex='6' />";
     }
 }
@@ -1176,9 +1204,9 @@ class ScorePaperColumn extends PaperColumn {
         if ($scores) {
             $my_score = null;
             if (!$this->xreviewer)
-                $my_score = @$scores[$pl->reviewer_cid()];
+                $my_score = get($scores, $pl->reviewer_cid());
             else if (isset($row->_xreviewer))
-                $my_score = @$scores[$row->_xreviewer->reviewContactId];
+                $my_score = get($scores, $row->_xreviewer->reviewContactId);
             $t = $this->form_field->unparse_graph($scores, 1, $my_score);
             if ($pl->live_table && $rowidx % 16 == 15)
                 $t .= "<script>scorechart()</script>";
@@ -1199,7 +1227,7 @@ class FormulaPaperColumn extends PaperColumn {
                             array("minimal" => true, "comparator" => "formula_compare"));
         $this->cssname = "formula";
         $this->formula = $formula;
-        if ($formula && @$formula->formulaId)
+        if ($formula && $formula->formulaId)
             self::$list[$formula->formulaId] = $formula;
     }
     public static function lookup_all() {
@@ -1242,7 +1270,7 @@ class FormulaPaperColumn extends PaperColumn {
             $view_bound = max($view_bound, VIEWSCORE_AUTHOR - 1);
         if (!$pl->scoresOk
             || !$this->formula->check()
-            || $this->formula->base_view_score() <= $view_bound)
+            || $this->formula->view_score($pl->contact) <= $view_bound)
             return false;
         $this->formula_function = $this->formula->compile_function($pl->contact);
         if ($visible)
@@ -1378,7 +1406,7 @@ class NumericOrderPaperColumn extends PaperColumn {
         $this->order = $order;
     }
     public function numeric_order_compare($a, $b) {
-        return @$this->order[$a->paperId] - @$this->order[$b->paperId];
+        return +get($this->order, $a->paperId) - +get($this->order, $b->paperId);
     }
 }
 
@@ -1466,6 +1494,7 @@ function initialize_paper_columns() {
     PaperColumn::register(new ReviewerListPaperColumn);
     PaperColumn::register(new AuthorsPaperColumn);
     PaperColumn::register(new CollabPaperColumn);
+    PaperColumn::register_synonym("co", "collab");
     PaperColumn::register(new TagListPaperColumn);
     PaperColumn::register(new SearchOptsPaperColumn);
     PaperColumn::register(new AbstractPaperColumn);

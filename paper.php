@@ -75,26 +75,6 @@ if (!$newPaper)
 
 
 // paper actions
-function handle_api() {
-    global $Conf, $Me, $prow;
-    if (!check_post() || !@$_REQUEST["fn"])
-        $Conf->ajaxExit(array("ok" => false));
-    if (!$prow)
-        $Conf->ajaxExit(array("ok" => false, "error" => "No such paper."));
-    if ($_REQUEST["fn"] == "setdecision")
-        $Conf->ajaxExit(PaperActions::set_decision($prow));
-    else if ($_REQUEST["fn"] == "setlead")
-        PaperActions::set_lead($prow, @$_REQUEST["lead"], $Me, true);
-    else if ($_REQUEST["fn"] == "setshepherd")
-        PaperActions::set_shepherd($prow, @$_REQUEST["shepherd"], $Me, true);
-    else if ($_REQUEST["fn"] == "setmanager")
-        PaperActions::set_manager($prow, @$_REQUEST["manager"], $Me, true);
-    else if ($_REQUEST["fn"] == "settags")
-        PaperActions::setTags($prow, true);
-    $Conf->ajaxExit(array("ok" => false, "error" => "Unknown action."));
-}
-if (@$_REQUEST["m"] === "api")
-    handle_api();
 if (isset($_REQUEST["setrevpref"]) && $prow && check_post()) {
     PaperActions::setReviewPreference($prow);
     loadRows();
@@ -139,8 +119,7 @@ if (isset($_REQUEST["withdraw"]) && !$newPaper && check_post()) {
         if ($reason == "" && $Me->privChair && defval($_REQUEST, "doemail") > 0)
             $reason = defval($_REQUEST, "emailNote", "");
         Dbl::qe("update Paper set timeWithdrawn=$Now, timeSubmitted=if(timeSubmitted>0,-100,0), withdrawReason=? where paperId=$prow->paperId", $reason != "" ? $reason : null);
-        $result = Dbl::qe("update PaperReview set reviewNeedsSubmit=0 where paperId=$prow->paperId");
-        $numreviews = $result ? $result->affected_rows : false;
+        $numreviews = Dbl::fetch_ivalue("select count(*) from PaperReview where paperId=$prow->paperId and reviewNeedsSubmit!=0");
         $Conf->update_papersub_setting(false);
         loadRows();
 
@@ -170,9 +149,6 @@ if (isset($_REQUEST["withdraw"]) && !$newPaper && check_post()) {
 if (isset($_REQUEST["revive"]) && !$newPaper && check_post()) {
     if (!($whyNot = $Me->perm_revive_paper($prow))) {
         Dbl::qe("update Paper set timeWithdrawn=0, timeSubmitted=if(timeSubmitted=-100,$Now,0), withdrawReason=null where paperId=$prow->paperId");
-        Dbl::qe_raw("update PaperReview set reviewNeedsSubmit=1 where paperId=$prow->paperId and reviewSubmitted is null");
-        Dbl::qe_raw("update PaperReview join PaperReview as Req on (Req.paperId=$prow->paperId and Req.requestedBy=PaperReview.contactId and Req.reviewType=" . REVIEW_EXTERNAL . ") set PaperReview.reviewNeedsSubmit=-1 where PaperReview.paperId=$prow->paperId and PaperReview.reviewSubmitted is null and PaperReview.reviewType=" . REVIEW_SECONDARY);
-        Dbl::qe_raw("update PaperReview join PaperReview as Req on (Req.paperId=$prow->paperId and Req.requestedBy=PaperReview.contactId and Req.reviewType=" . REVIEW_EXTERNAL . " and Req.reviewSubmitted>0) set PaperReview.reviewNeedsSubmit=0 where PaperReview.paperId=$prow->paperId and PaperReview.reviewSubmitted is null and PaperReview.reviewType=" . REVIEW_SECONDARY);
         $Conf->update_papersub_setting(true);
         loadRows();
         $Me->log_activity("Revived", $prow->paperId);
@@ -391,8 +367,8 @@ function update_paper($pj, $opj, $action, $diffs) {
     global $Conf, $Me, $Opt, $OK, $Error, $prow;
     // XXX lock tables
 
-    $ps = new PaperStatus;
-    $saved = $ps->save($pj, $opj);
+    $ps = new PaperStatus($Me);
+    $saved = $ps->save($pj);
 
     if (!$saved && !$prow && fileUploaded($_FILES["paperUpload"]))
         $ps->set_error_html("paper", "<strong>The submission you tried to upload was ignored.</strong>");
@@ -531,7 +507,7 @@ if ((@$_POST["update"] || @$_POST["submitfinal"])
                  || @$Opt["noPapers"]))
         $action = "submit";
 
-    $ps = new PaperStatus;
+    $ps = new PaperStatus($Me);
     $opj = $prow ? $ps->row_to_json($prow, array("docids" => true)) : null;
     $pj = request_to_json($opj, $action);
     $diffs = request_differences($pj, $opj, $action);
@@ -570,7 +546,7 @@ if ((@$_POST["update"] || @$_POST["submitfinal"])
 
 if (isset($_POST["updatecontacts"]) && check_post() && $prow) {
     if ($Me->can_administer($prow) || $Me->act_author_view($prow)) {
-        $ps = new PaperStatus;
+        $ps = new PaperStatus($Me);
         $opj = $ps->row_to_json($prow, array("docids" => true));
         $pj = paper_json_clone($opj);
         request_contacts_to_json($pj);
@@ -617,21 +593,6 @@ if (isset($_REQUEST["delete"]) && check_post()) {
         $prow = null;
         errorMsgExit("");
     }
-}
-
-
-// paper actions
-if (isset($_REQUEST["settags"]) && check_post()) {
-    PaperActions::setTags($prow);
-    loadRows();
-}
-if (isset($_REQUEST["tagreport"]) && check_post()) {
-    $treport = PaperActions::tag_report($prow);
-    if (count($treport->warnings))
-        $Conf->warnMsg(join("<br>", $treport->warnings));
-    if (count($treport->messages))
-        $Conf->infoMsg(join("<br>", $treport->messages));
-    $Conf->ajaxExit(array("ok" => $treport->ok), true);
 }
 
 

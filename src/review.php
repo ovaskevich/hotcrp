@@ -5,7 +5,7 @@
 
 // JSON schema for settings["review_form"]:
 // {FIELD:{"name":NAME,"description":DESCRIPTION,"position":POSITION,
-//         "display_space":ROWS,"view_score":AUTHORVIEW,
+//         "display_space":ROWS,"visibility":VISIBILITY,
 //         "options":[DESCRIPTION,...],"option_letter":LEVELCHAR}}
 
 class ReviewField {
@@ -31,11 +31,21 @@ class ReviewField {
     public $allow_empty = false;
     private $analyzed = false;
 
-    static private $view_score_map = array("secret" => VIEWSCORE_ADMINONLY,
-                                           "admin" => VIEWSCORE_REVIEWERONLY,
-                                           "pc" => VIEWSCORE_PC,
-                                           "author" => VIEWSCORE_AUTHOR);
-    static private $view_score_rmap = null;
+    static private $view_score_map = [
+        "secret" => VIEWSCORE_ADMINONLY, "admin" => VIEWSCORE_REVIEWERONLY,
+        "pc" => VIEWSCORE_PC,
+        "audec" => VIEWSCORE_AUTHORDEC, "authordec" => VIEWSCORE_AUTHORDEC,
+        "au" => VIEWSCORE_AUTHOR, "author" => VIEWSCORE_AUTHOR
+    ];
+    // Hard-code the database's `view_score` values as of January 2016
+    static private $view_score_upgrade_map = [
+        "-2" => "secret", "-1" => "admin", "0" => "pc", "1" => "au"
+    ];
+    static private $view_score_rmap = [
+        VIEWSCORE_ADMINONLY => "secret", VIEWSCORE_REVIEWERONLY => "admin",
+        VIEWSCORE_PC => "pc", VIEWSCORE_AUTHORDEC => "audec",
+        VIEWSCORE_AUTHOR => "au"
+    ];
 
     public function __construct($id, $has_options) {
         $this->id = $id;
@@ -43,29 +53,30 @@ class ReviewField {
     }
 
     public function assign($j) {
-        $this->name = (@$j->name ? $j->name : "Field name");
+        $this->name = (get($j, "name") ? : "Field name");
         $this->name_html = htmlspecialchars($this->name);
-        $this->description = (@$j->description ? $j->description : "");
-        $this->display_space = (int) @$j->display_space;
+        $this->description = (get($j, "description") ? : "");
+        $this->display_space = get_i($j, "display_space");
         if (!$this->has_options && $this->display_space < 3)
             $this->display_space = 3;
-        $this->view_score = @$j->view_score;
-        if (is_string($this->view_score)
-            && isset(self::$view_score_map[$this->view_score]))
-            $this->view_score = self::$view_score_map[$this->view_score];
-        else if (!is_numeric($this->view_score)
-                 || ($vs = intval($this->view_score)) < VIEWSCORE_FALSE
-                 || $vs > VIEWSCORE_AUTHOR)
-            $this->view_score = VIEWSCORE_PC;
-        if (@$j->position) {
+        $vis = get($j, "visibility");
+        if ($vis === null) {
+            $vis = get($j, "view_score");
+            if (is_int($vis))
+                $vis = self::$view_score_upgrade_map[$vis];
+        }
+        $this->view_score = VIEWSCORE_PC;
+        if (is_string($vis) && isset(self::$view_score_map[$vis]))
+            $this->view_score = self::$view_score_map[$vis];
+        if (get($j, "position")) {
             $this->displayed = true;
             $this->display_order = $j->position;
         } else
             $this->displayed = $this->display_order = false;
-        $this->round_mask = (int) @$j->round_mask;
+        $this->round_mask = get_i($j, "round_mask");
         if ($this->has_options) {
-            $options = @$j->options ? $j->options : array();
-            $ol = @$j->option_letter;
+            $options = get($j, "options") ? : array();
+            $ol = get($j, "option_letter");
             if ($ol && ctype_alpha($ol) && strlen($ol) == 1)
                 $this->option_letter = ord($ol) + count($options);
             else if ($ol && (is_int($ol) || ctype_digit($ol)))
@@ -80,9 +91,9 @@ class ReviewField {
                 foreach ($options as $i => $n)
                     $this->options[$i + 1] = $n;
             }
-            if (@$j->option_class_prefix)
-                $this->option_class_prefix = $j->option_class_prefix;
-            if (@$j->allow_empty)
+            if (($p = get($j, "option_class_prefix")))
+                $this->option_class_prefix = $p;
+            if (get($j, "allow_empty"))
                 $this->allow_empty = true;
         }
         $this->analyzed = false;
@@ -97,7 +108,7 @@ class ReviewField {
             $j->display_space = $this->display_space;
         if ($this->displayed)
             $j->position = $this->display_order;
-        $j->view_score = $this->unparse_view_score();
+        $j->visibility = $this->unparse_visibility();
         if ($this->has_options) {
             $j->options = array();
             foreach ($this->options as $otext)
@@ -120,17 +131,15 @@ class ReviewField {
         return $j;
     }
 
-    static public function unparse_view_score_value($vs) {
-        if (!self::$view_score_rmap)
-            self::$view_score_rmap = array_flip(self::$view_score_map);
+    static public function unparse_visibility_value($vs) {
         if (isset(self::$view_score_rmap[$vs]))
             return self::$view_score_rmap[$vs];
         else
             return $vs;
     }
 
-    public function unparse_view_score() {
-        return self::unparse_view_score_value($this->view_score);
+    public function unparse_visibility() {
+        return self::unparse_visibility_value($this->view_score);
     }
 
     public function is_round_visible($rrow) {
@@ -370,16 +379,16 @@ class ReviewForm {
         // parse JSON
         if (!$rfj)
             $rfj = json_decode('{
-"overAllMerit":{"name":"Overall merit","position":1,"view_score":1,
+"overAllMerit":{"name":"Overall merit","position":1,"visibility":"au",
   "options":["Reject","Weak reject","Weak accept","Accept","Strong accept"]},
-"reviewerQualification":{"name":"Reviewer expertise","position":2,"view_score":1,
+"reviewerQualification":{"name":"Reviewer expertise","position":2,"visibility":"au",
   "options":["No familiarity","Some familiarity","Knowledgeable","Expert"]},
-"paperSummary":{"name":"Paper summary","position":3,"display_space":5,"view_score":1},
-"commentsToAuthor":{"name":"Comments to authors","position":4,"view_score":1},
-"commentsToPC":{"name":"Comments to PC","position":5,"view_score":0}}');
+"paperSummary":{"name":"Paper summary","position":3,"display_space":5,"visibility":"au"},
+"commentsToAuthor":{"name":"Comments to authors","position":4,"visibility":"au"},
+"commentsToPC":{"name":"Comments to PC","position":5,"visibility":"pc"}}');
 
         foreach ($rfj as $fname => $j)
-            if (@($f = $this->fmap[$fname]))
+            if (($f = get($this->fmap, $fname)))
                 $f->assign($j);
 
         // assign field order
@@ -432,13 +441,13 @@ class ReviewForm {
 
     static public function field($fid) {
         $rf = self::get();
-        $f = @$rf->fmap[$fid];
+        $f = get($rf->fmap, $fid);
         return $f && $f->displayed ? $f : null;
     }
 
     static public function field_search($name) {
         $rf = self::get();
-        $f = @$rf->fmap[$name];
+        $f = get($rf->fmap, $name);
         if ($f && $f->displayed)
             return $f;
         $a = preg_split("/([^a-zA-Z0-9])/", $name, -1, PREG_SPLIT_NO_EMPTY | PREG_SPLIT_DELIM_CAPTURE);
@@ -495,11 +504,10 @@ class ReviewForm {
     private static function format_description($rrow, $text) {
         if (($format = $rrow ? $rrow->reviewFormat : null) === null)
             $format = Conf::$gDefaultFormat;
-        $format_info = Conf::format_info();
-        if (($f = @$format_info[$format])) {
-            if ($text && @$f["description_text"])
-                return $f["description_text"];
-            $t = @$f["description"];
+        if (($f = Conf::format_info($format))) {
+            if ($text && ($t = get($f, "description_text")))
+                return $t;
+            $t = get($f, "description");
             if ($text && $t)
                 $t = self::cleanDescription($t);
             return $t;
@@ -554,10 +562,8 @@ class ReviewForm {
                 }
                 echo "</select>";
             } else {
-                if ($format_description) {
+                if ($format_description)
                     echo $format_description;
-                    $format_description = null;
-                }
                 echo Ht::textarea($field, $fval,
                         array("class" => "reviewtext", "rows" => $f->display_space,
                               "cols" => 60, "onchange" => "hiliter(this)",
@@ -844,7 +850,7 @@ class ReviewForm {
         }
 
         // if external, forgive the requestor from finishing their review
-        if ($rrow && $rrow->reviewType == REVIEW_EXTERNAL && $submit)
+        if ($rrow && $rrow->reviewType < REVIEW_SECONDARY && $rrow->requestedBy && $submit)
             $Conf->q("update PaperReview set reviewNeedsSubmit=0 where paperId=$prow->paperId and contactId=$rrow->requestedBy and reviewType=" . REVIEW_SECONDARY . " and reviewSubmitted is null");
 
         if ($tf !== null) {
@@ -1067,10 +1073,8 @@ $blind\n";
                     $fval = "No entry";
                 else
                     $fval = "(Your choice here)";
-            } else if ($format_description) {
+            } else if ($format_description)
                 $x .= prefix_word_wrap("==-== ", $format_description, "==-== ");
-                $format_description = null;
-            }
             $x .= "\n" . preg_replace("/^==\\+==/m", "\\==+==", $fval) . "\n";
         }
         return $x . "\n==+== Scratchpad (for unsaved private notes)\n\n==+== End Review\n";

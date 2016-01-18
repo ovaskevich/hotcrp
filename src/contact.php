@@ -16,8 +16,8 @@ class Contact_Update {
 
 class Contact {
     static public $rights_version = 1;
+    static public $trueuser_privChair = null;
 
-    // Information from the SQL definition
     public $contactId = 0;
     public $contactDbId = 0;
     private $cid;               // for forward compatibility
@@ -27,13 +27,15 @@ class Contact {
     public $nameAmbiguous = null;
     private $name_html_ = null;
     private $reviewer_html_ = null;
-    var $email = "";
-    var $preferredEmail = "";
-    var $sorter = "";
+    public $email = "";
+    public $preferredEmail = "";
+    public $sorter = "";
+    public $sort_position = null;
+
     public $affiliation = "";
     public $country = null;
-    var $collaborators;
-    var $voicePhoneNumber;
+    public $collaborators;
+    public $voicePhoneNumber;
 
     private $password = "";
     private $passwordTime = 0;
@@ -43,10 +45,12 @@ class Contact {
 
     public $disabled = false;
     public $activity_at = false;
+    private $lastLogin = null;
+    public $creationTime = 0;
     private $updateTime = 0;
-    private $data_ = null;
+    private $data = null;
     private $topic_interest_map_ = null;
-    var $defaultWatch = WATCH_COMMENT;
+    public $defaultWatch = WATCH_COMMENT;
 
     // Roles
     const ROLE_PC = 1;
@@ -57,19 +61,30 @@ class Contact {
     const ROLE_REVIEWER = 32;
     private $is_author_;
     private $has_review_;
-    private $has_outstanding_review_;
+    private $has_outstanding_review_ = null;
     private $is_requester_;
     private $is_lead_;
     private $is_explicit_manager_;
+    public $is_site_contact = false;
     private $rights_version_ = 0;
-    var $roles = 0;
+    public $roles = 0;
     var $isPC = false;
     var $privChair = false;
     var $contactTags = null;
+    public $tracker_kiosk_state = false;
     const CAP_AUTHORVIEW = 1;
     private $capabilities = null;
     private $review_tokens_ = null;
     private $activated_ = false;
+
+    // Per-paper DB information, usually null
+    public $myReviewType = null;
+    public $myReviewSubmitted = null;
+    public $myReviewNeedsSubmit = null;
+    public $conflictType = null;
+    public $watch = null;
+    public $prefOrdinal = null;
+    public $topicInterest = null;
 
     static private $status_info_cache = array();
     static private $contactdb_dblink = false;
@@ -98,8 +113,8 @@ class Contact {
             $name = $user;
         else
             $name = Text::analyze_name($user);
-        $this->firstName = (string) @$name->firstName;
-        $this->lastName = (string) @$name->lastName;
+        $this->firstName = get_s($name, "firstName");
+        $this->lastName = get_s($name, "lastName");
         if (isset($user->unaccentedName))
             $this->unaccentedName = $user->unaccentedName;
         else if (isset($name->unaccentedName))
@@ -123,7 +138,7 @@ class Contact {
         if (isset($user->disabled))
             $this->disabled = !!$user->disabled;
         foreach (["defaultWatch", "passwordTime", "passwordUseTime",
-                  "updateTime"] as $k)
+                  "updateTime", "creationTime"] as $k)
             if (isset($user->$k))
                 $this->$k = (int) $user->$k;
         if (property_exists($user, "contactTags"))
@@ -135,15 +150,17 @@ class Contact {
         else if (isset($user->lastLogin))
             $this->activity_at = (int) $user->lastLogin;
         if (isset($user->data) && $user->data)
-            $this->data_ = array_to_object_recursive($user->data);
+            // this works even if $user->data is a JSON string
+            // (array_to_object_recursive($str) === $str)
+            $this->data = array_to_object_recursive($user->data);
         if (isset($user->roles) || isset($user->isPC) || isset($user->isAssistant)
             || isset($user->isChair)) {
-            $roles = (int) @$user->roles;
-            if (@$user->isPC)
+            $roles = (int) get($user, "roles");
+            if (get($user, "isPC"))
                 $roles |= self::ROLE_PC;
-            if (@$user->isAssistant)
+            if (get($user, "isAssistant"))
                 $roles |= self::ROLE_ADMIN;
-            if (@$user->isChair)
+            if (get($user, "isChair"))
                 $roles |= self::ROLE_CHAIR;
             $this->assign_roles($roles);
         }
@@ -169,34 +186,37 @@ class Contact {
         if (isset($this->disabled))
             $this->disabled = !!$this->disabled;
         foreach (["defaultWatch", "passwordTime", "passwordUseTime",
-                  "updateTime"] as $k)
+                  "updateTime", "creationTime"] as $k)
             $this->$k = (int) $this->$k;
         if (!$this->activity_at && isset($this->lastLogin))
             $this->activity_at = (int) $this->lastLogin;
-        if (isset($this->data) && $this->data)
-            $this->data_ = array_to_object_recursive($this->data);
+        if ($this->data)
+            // this works even if $user->data is a JSON string
+            // (array_to_object_recursive($str) === $str)
+            $this->data = array_to_object_recursive($this->data);
         if (isset($this->roles))
             $this->assign_roles((int) $this->roles);
     }
 
     // begin changing contactId to cid
     public function __get($name) {
-        if ($name == "cid")
+        if ($name === "cid")
             return $this->contactId;
         else
             return null;
     }
 
     public function __set($name, $value) {
-        if ($name == "cid")
+        if ($name === "cid")
             $this->contactId = $this->cid = $value;
-        else
+        else {
+            error_log(caller_landmark(1) . ": writing nonexistent property $name");
             $this->$name = $value;
+        }
     }
 
     static public function set_sorter($c) {
-        global $Opt;
-        if (@$Opt["sortByLastName"]) {
+        if (opt("sortByLastName")) {
             if (($m = Text::analyze_von($c->lastName)))
                 $c->sorter = trim("$m[1] $c->firstName $m[0] $c->email");
             else
@@ -273,7 +293,7 @@ class Contact {
                     $_SESSION["last_actas"] = $actascontact->email;
                 }
                 if ($this->privChair || ($truecontact && $truecontact->privChair))
-                    $actascontact->trueuser_privChair = true;
+                    self::$trueuser_privChair = $actascontact;
                 return $actascontact->activate();
             }
         }
@@ -346,11 +366,10 @@ class Contact {
     }
 
     static public function contactdb() {
-        global $Opt;
         if (self::$contactdb_dblink === false) {
             self::$contactdb_dblink = null;
-            if (@$Opt["contactdb_dsn"])
-                list(self::$contactdb_dblink, $dbname) = Dbl::connect_dsn($Opt["contactdb_dsn"]);
+            if (($dsn = opt("contactdb_dsn")))
+                list(self::$contactdb_dblink, $dbname) = Dbl::connect_dsn($dsn);
         }
         return self::$contactdb_dblink;
     }
@@ -601,22 +620,22 @@ class Contact {
     }
 
     private function make_data() {
-        if (is_string($this->data_))
-            $this->data_ = json_decode($this->data_);
-        if (!$this->data_)
-            $this->data_ = (object) array();
+        if (is_string($this->data))
+            $this->data = json_decode($this->data);
+        if (!$this->data)
+            $this->data = (object) array();
     }
 
     function data($key = null) {
         $this->make_data();
         if ($key)
-            return @$this->data_->$key;
+            return get($this->data, $key);
         else
-            return $this->data_;
+            return $this->data;
     }
 
     private function encode_data() {
-        if ($this->data_ && ($t = json_encode($this->data_)) !== "{}")
+        if ($this->data && ($t = json_encode($this->data)) !== "{}")
             return $t;
         else
             return null;
@@ -628,14 +647,14 @@ class Contact {
 
     function merge_data($data) {
         $this->make_data();
-        object_replace_recursive($this->data_, array_to_object_recursive($data));
+        object_replace_recursive($this->data, array_to_object_recursive($data));
     }
 
     function merge_and_save_data($data) {
         $this->activate_database_account();
         $this->make_data();
         $old = $this->encode_data();
-        object_replace_recursive($this->data_, array_to_object_recursive($data));
+        object_replace_recursive($this->data, array_to_object_recursive($data));
         $new = $this->encode_data();
         if ($old !== $new)
             Dbl::qe("update ContactInfo set data=? where contactId=$this->contactId", $new);
@@ -643,10 +662,10 @@ class Contact {
 
     private function data_str() {
         $d = null;
-        if (is_string($this->data_))
-            $d = $this->data_;
-        else if (is_object($this->data_))
-            $d = json_encode($this->data_);
+        if (is_string($this->data))
+            $d = $this->data;
+        else if (is_object($this->data))
+            $d = json_encode($this->data);
         return $d === "{}" ? null : $d;
     }
 
@@ -1034,12 +1053,14 @@ class Contact {
     static function id_by_email($email) {
         $result = Dbl::qe("select contactId from ContactInfo where email=?", trim($email));
         $row = edb_row($result);
+        Dbl::free($result);
         return $row ? $row[0] : false;
     }
 
     static function email_by_id($id) {
         $result = Dbl::qe("select email from ContactInfo where contactId=" . (int) $id);
         $row = edb_row($result);
+        Dbl::free($result);
         return $row ? $row[0] : false;
     }
 
@@ -1093,8 +1114,7 @@ class Contact {
     }
 
     public static function password_storage_cleartext() {
-        global $Opt;
-        return $Opt["safePasswords"] < 1;
+        return opt("safePasswords") < 1;
     }
 
     public function has_password() {
@@ -1102,15 +1122,13 @@ class Contact {
     }
 
     public function allow_contactdb_password() {
-        global $Opt;
         $cdbu = $this->contactdb_user();
-        return $cdbu && $cdbu->password && !@$Opt["contactdb_noPasswords"];
+        return $cdbu && $cdbu->password && !opt("contactdb_noPasswords");
     }
 
     private function prefer_contactdb_password() {
-        global $Opt;
         $cdbu = $this->contactdb_user();
-        return $cdbu && $cdbu->password && !@$Opt["contactdb_noPasswords"]
+        return $cdbu && $cdbu->password && !opt("contactdb_noPasswords")
             && (!$this->has_database_account() || $this->password === "*"
                 || $this->passwordIsCdb);
     }
@@ -1126,12 +1144,12 @@ class Contact {
 
     // obsolete
     private static function password_hmac_key($keyid) {
-        global $Conf, $Opt;
+        global $Conf;
         if ($keyid === null)
-            $keyid = defval($Opt, "passwordHmacKeyid", 0);
-        $key = @$Opt["passwordHmacKey.$keyid"];
+            $keyid = opt("passwordHmacKeyid", 0);
+        $key = opt("passwordHmacKey.$keyid");
         if (!$key && $keyid == 0)
-            $key = @$Opt["passwordHmacKey"];
+            $key = opt("passwordHmacKey");
         if (!$key) /* backwards compatibility */
             $key = $Conf->setting_data("passwordHmacKey.$keyid");
         if (!$key) {
@@ -1167,8 +1185,7 @@ class Contact {
     }
 
     static private function password_hash_method() {
-        global $Opt;
-        $m = @$Opt["passwordHashMethod"];
+        $m = opt("passwordHashMethod");
         if (function_exists("password_verify") && !is_string($m))
             return is_int($m) ? $m : PASSWORD_DEFAULT;
         if (!function_exists("hash_hmac"))
@@ -1179,16 +1196,14 @@ class Contact {
     }
 
     static private function preferred_password_keyid($iscdb) {
-        global $Opt;
         if ($iscdb)
-            return defval($Opt, "contactdb_passwordHmacKeyid", 0);
+            return opt("contactdb_passwordHmacKeyid", 0);
         else
-            return defval($Opt, "passwordHmacKeyid", 0);
+            return opt("passwordHmacKeyid", 0);
     }
 
     static private function check_password_encryption($hash, $iscdb) {
-        global $Opt;
-        $safe = $Opt[$iscdb ? "contactdb_safePasswords" : "safePasswords"];
+        $safe = opt($iscdb ? "contactdb_safePasswords" : "safePasswords");
         if ($safe < 1
             || ($method = self::password_hash_method()) === false
             || ($hash && $safe == 1 && @$hash[0] !== " "))
@@ -1205,7 +1220,6 @@ class Contact {
     }
 
     static private function hash_password($input, $iscdb) {
-        global $Opt;
         $method = self::password_hash_method();
         if ($method === false)
             return $input;
@@ -1221,8 +1235,8 @@ class Contact {
     }
 
     public function check_password($input) {
-        global $Conf, $Opt, $Now;
-        assert(!isset($Opt["ldapLogin"]) && !isset($Opt["httpAuthLogin"]));
+        global $Conf, $Now;
+        assert(!self::external_login());
         if ($this->contactId && $this->is_password_disabled())
             return false;
         // update passwordUseTime once a month
@@ -1279,13 +1293,13 @@ class Contact {
     const CHANGE_PASSWORD_NO_CDB = 2;
 
     public function change_password($old, $new, $flags) {
-        global $Conf, $Opt, $Now;
-        assert(!isset($Opt["ldapLogin"]) && !isset($Opt["httpAuthLogin"]));
+        global $Conf, $Now;
+        assert(!self::external_login());
 
         $hash = $cdbu = null;
         if (!($flags & self::CHANGE_PASSWORD_NO_CDB))
             $cdbu = $this->contactdb_user();
-        if ($cdbu && $cdbu->password && !@$Opt["contactdb_noPasswords"]
+        if ($cdbu && $cdbu->password && !opt("contactdb_noPasswords")
             && (!$old || self::check_hashed_password($old, $cdbu->password, $this->email))) {
             if ($new && !($flags & self::CHANGE_PASSWORD_PLAINTEXT)
                 && self::check_password_encryption(false, true))
@@ -1401,8 +1415,7 @@ class Contact {
             if ($this->review_tokens_)
                 $qr = " or r.reviewToken in (" . join(",", $this->review_tokens_) . ")";
             $result = Dbl::qe("select max(conf.conflictType),
-                r.contactId as reviewer,
-                max(r.reviewNeedsSubmit) as reviewNeedsSubmit
+                r.contactId as reviewer
                 from ContactInfo c
                 left join PaperConflict conf on (conf.contactId=c.contactId)
                 left join PaperReview r on (r.contactId=c.contactId$qr)
@@ -1411,7 +1424,7 @@ class Contact {
         $row = edb_row($result);
         $this->is_author_ = $row && $row[0] >= CONFLICT_AUTHOR;
         $this->has_review_ = $row && $row[1] > 0;
-        $this->has_outstanding_review_ = $row && $row[2] > 0;
+        Dbl::free($result);
 
         // Update contact information from capabilities
         if ($this->capabilities)
@@ -1422,7 +1435,8 @@ class Contact {
 
     private function check_rights_version() {
         if ($this->rights_version_ !== self::$rights_version) {
-            unset($this->is_author_, $this->has_review_, $this->has_outstanding_review_, $this->is_requester_, $this->is_lead_, $this->is_explicit_manager_);
+            $this->is_author_ = $this->has_review_ = $this->has_outstanding_review_ =
+                $this->is_requester_ = $this->is_lead_ = $this->is_explicit_manager_ = null;
             $this->rights_version_ = self::$rights_version;
         }
     }
@@ -1456,8 +1470,22 @@ class Contact {
 
     function has_outstanding_review() {
         $this->check_rights_version();
-        if (!isset($this->has_outstanding_review_))
-            $this->load_author_reviewer_status();
+        if ($this->has_outstanding_review_ === null) {
+            // Load from database
+            $result = null;
+            if ($this->contactId > 0) {
+                $qr = "";
+                if ($this->review_tokens_)
+                    $qr = " or r.reviewToken in (" . join(",", $this->review_tokens_) . ")";
+                $result = Dbl::qe("select r.reviewId from PaperReview r
+                    join Paper p on (p.paperId=r.paperId and p.timeSubmitted>0)
+                    where (r.contactId=$this->contactId$qr)
+                    and r.reviewNeedsSubmit!=0 limit 1");
+            }
+            $row = edb_row($result);
+            Dbl::free($result);
+            $this->has_outstanding_review_ = !!$row;
+        }
         return $this->has_outstanding_review_;
     }
 
@@ -1721,7 +1749,7 @@ class Contact {
         global $Conf;
         return $this->privChair
             || ($this->isPC && $Conf->check_tracks(null, $this, "viewtracker"))
-            || @$this->is_tracker_kiosk;
+            || $this->tracker_kiosk_state;
     }
 
     public function view_conflict_type(PaperInfo $prow = null) {
@@ -2128,8 +2156,11 @@ class Contact {
         // See also PaperInfo::can_view_review_identity_of.
         return ($rights->act_author_view
                 && $rrowSubmitted
-                && $viewscore >= VIEWSCORE_AUTHOR
-                && $this->can_view_submitted_review_as_author($prow))
+                && $this->can_view_submitted_review_as_author($prow)
+                && ($viewscore >= VIEWSCORE_AUTHOR
+                    || ($viewscore >= VIEWSCORE_AUTHORDEC
+                        && $prow->outcome
+                        && $this->can_view_decision($prow, $forceShow))))
             || ($rights->allow_pc
                 && $rrowSubmitted
                 && $viewscore >= VIEWSCORE_PC
@@ -2649,10 +2680,11 @@ class Contact {
     function view_score_bound(PaperInfo $prow, $rrow, $forceShow = null) {
         // Returns the maximum view_score for an invisible review
         // field. Values are:
-        //   VIEWSCORE_ADMINONLY     -2   admin can view
-        //   VIEWSCORE_REVIEWERONLY  -1   admin and review author can view
-        //   VIEWSCORE_PC             0   admin and PC/any reviewer can view
-        //   VIEWSCORE_AUTHOR         1   admin and PC/any reviewer and author can view
+        //   VIEWSCORE_ADMINONLY     admin can view
+        //   VIEWSCORE_REVIEWERONLY  ... and review author can view
+        //   VIEWSCORE_PC            ... and any PC/reviewer can view
+        //   VIEWSCORE_AUTHORDEC     ... and authors can view when decisions visible
+        //   VIEWSCORE_AUTHOR        ... and authors can view
         // So returning -3 means all scores are visible.
         // Deadlines are not considered.
         $rights = $this->rights($prow, $forceShow);
@@ -2662,6 +2694,10 @@ class Contact {
             return VIEWSCORE_REVIEWERONLY - 1;
         else if (!$this->can_view_review($prow, $rrow, $forceShow))
             return VIEWSCORE_MAX + 1;
+        else if ($rights->act_author_view
+                 && $prow->outcome
+                 && $this->can_view_decision($prow, $forceShow))
+            return VIEWSCORE_AUTHORDEC - 1;
         else if ($rights->act_author_view)
             return VIEWSCORE_AUTHOR - 1;
         else
@@ -2674,9 +2710,12 @@ class Contact {
             return VIEWSCORE_ADMINONLY - 1;
         else if ($this->is_reviewer())
             return VIEWSCORE_REVIEWERONLY - 1;
-        else if ($this->is_author() && $Conf->timeAuthorViewReviews())
-            return VIEWSCORE_AUTHOR - 1;
-        else
+        else if ($this->is_author() && $Conf->timeAuthorViewReviews()) {
+            if ($Conf->timeAuthorViewDecision())
+                return VIEWSCORE_AUTHORDEC - 1;
+            else
+                return VIEWSCORE_AUTHOR - 1;
+        } else
             return VIEWSCORE_MAX + 1;
     }
 
@@ -2695,7 +2734,7 @@ class Contact {
     }
 
     function can_view_tags(PaperInfo $prow = null, $forceShow = null) {
-        // see also PaperActions::alltags_api,
+        // see also PaperApi::alltags,
         // Contact::list_submitted_papers_with_viewable_tags
         global $Conf;
         if (!$prow)
@@ -2944,7 +2983,7 @@ class Contact {
 
         // add meeting tracker
         $tracker = null;
-        if (($this->isPC || @$this->is_tracker_kiosk)
+        if (($this->isPC || $this->tracker_kiosk_state)
             && $Conf->setting("tracker")
             && ($tracker = MeetingTracker::status($this))) {
             $dl->tracker = $tracker;
@@ -2955,7 +2994,7 @@ class Contact {
                 $dl->tracker_hidden = true;
             $dl->now = microtime(true);
         }
-        if (($this->isPC || @$this->is_tracker_kiosk)
+        if (($this->isPC || $this->tracker_kiosk_state)
             && @$Opt["trackerCometSite"])
             $dl->tracker_site = $Opt["trackerCometSite"]
                 . "?conference=" . urlencode(Navigation::site_absolute(true));
@@ -3160,5 +3199,4 @@ class Contact {
         } else
             return false;
     }
-
 }

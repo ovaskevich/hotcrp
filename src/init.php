@@ -58,8 +58,9 @@ define("VIEWSCORE_FALSE", -3);
 define("VIEWSCORE_ADMINONLY", -2);
 define("VIEWSCORE_REVIEWERONLY", -1);
 define("VIEWSCORE_PC", 0);
-define("VIEWSCORE_AUTHOR", 1);
-define("VIEWSCORE_MAX", 2);
+define("VIEWSCORE_AUTHORDEC", 1);
+define("VIEWSCORE_AUTHOR", 2);
+define("VIEWSCORE_MAX", 3);
 
 define("COMMENTTYPE_DRAFT", 1);
 define("COMMENTTYPE_BLIND", 2);
@@ -79,15 +80,16 @@ define("CAPTYPE_CHANGEEMAIL", 2);
 
 define("ALWAYS_OVERRIDE", 9999);
 
-global $OK, $Now, $CurrentProw;
+global $OK, $Now, $CurrentProw, $ConfSitePATH;
 $OK = 1;
 $Now = time();
 $CurrentProw = null;
+$ConfSitePATH = null;
 
 
-// set $ConfSitePATH (path to conference site), $ConfSiteBase
+// set $ConfSitePATH (path to conference site)
 function set_path_variables() {
-    global $ConfSitePATH, $ConfSiteBase;
+    global $ConfSitePATH;
     if (!@$ConfSitePATH) {
         $ConfSitePATH = substr(__FILE__, 0, strrpos(__FILE__, "/"));
         while ($ConfSitePATH !== "" && !file_exists("$ConfSitePATH/src/init.php"))
@@ -96,36 +98,53 @@ function set_path_variables() {
             $ConfSitePATH = "/var/www/html";
     }
     require_once("$ConfSitePATH/lib/navigation.php");
-    if (@$ConfSiteBase === null)
-        $ConfSiteBase = Navigation::siteurl();
 }
 set_path_variables();
 
 
 // Load code
-class SiteAutoloader {
-    static $map = ["AssignmentSet" => "src/assigners.php",
-                   "CapabilityManager" => "src/capability.php",
-                   "ColumnErrors" => "lib/column.php",
-                   "ContactSearch" => "src/papersearch.php",
-                   "CsvGenerator" => "lib/csv.php",
-                   "CsvParser" => "lib/csv.php",
-                   "FormulaPaperColumn" => "src/papercolumn.php",
-                   "LoginHelper" => "lib/login.php",
-                   "MimeText" => "lib/mailer.php",
-                   "NumericOrderPaperColumn" => "src/papercolumn.php",
-                   "ReviewAssigner" => "src/assigners.php",
-                   "ReviewField" => "src/review.php",
-                   "ReviewForm" => "src/review.php",
-                   "ReviewSearchMatcher" => "src/papersearch.php",
-                   "TagInfo" => "lib/tagger.php",
-                   "XlsxGenerator" => "lib/xlsx.php",
-                   "ZipDocument" => "lib/filer.php"];
+class SiteLoader {
+    static $map = [
+        "AssignmentSet" => "src/assigners.php",
+        "CapabilityManager" => "src/capability.php",
+        "ColumnErrors" => "lib/column.php",
+        "ContactSearch" => "src/papersearch.php",
+        "CsvGenerator" => "lib/csv.php",
+        "CsvParser" => "lib/csv.php",
+        "FormulaPaperColumn" => "src/papercolumn.php",
+        "JsonSerializable" => "lib/json.php",
+        "LoginHelper" => "lib/login.php",
+        "MimeText" => "lib/mailer.php",
+        "NumericOrderPaperColumn" => "src/papercolumn.php",
+        "ReviewAssigner" => "src/assigners.php",
+        "ReviewField" => "src/review.php",
+        "ReviewForm" => "src/review.php",
+        "ReviewSearchMatcher" => "src/papersearch.php",
+        "TagInfo" => "lib/tagger.php",
+        "XlsxGenerator" => "lib/xlsx.php",
+        "ZipDocument" => "lib/filer.php"
+    ];
+    const API_POST = 0;
+    const API_GET = 1;
+    const API_PAPER = 2;
+    static $api_map = [
+        "alltags" => ["PaperApi::alltags_api", self::API_GET],
+        "setdecision" => ["PaperApi::setdecision_api", self::API_PAPER],
+        "setlead" => ["PaperApi::setlead_api", self::API_PAPER],
+        "setmanager" => ["PaperApi::setmanager_api", self::API_PAPER],
+        "setpref" => ["PaperApi::setpref_api", self::API_PAPER],
+        "setshepherd" => ["PaperApi::setshepherd_api", self::API_PAPER],
+        "settags" => ["PaperApi::settags_api", self::API_PAPER],
+        "tagreport" => ["PaperApi::tagreport_api", self::API_GET],
+        "trackerstatus" => ["MeetingTracker::trackerstatus_api", self::API_GET] // hotcrp-comet entrypoint
+    ];
 }
 
 function __autoload($class_name) {
     global $ConfSitePATH;
-    $f = @SiteAutoloader::$map[$class_name];
+    $f = null;
+    if (isset(SiteLoader::$map[$class_name]))
+        $f = SiteLoader::$map[$class_name];
     if (!$f) {
         $l = strtolower($class_name);
         if (file_exists("$ConfSitePATH/src/$l.php"))

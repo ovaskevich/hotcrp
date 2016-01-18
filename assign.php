@@ -447,13 +447,6 @@ if (isset($_REQUEST["addpc"]) && $Me->allow_administer($prow) && check_post()) {
 }
 
 
-// paper actions
-if (isset($_REQUEST["settags"]) && check_post()) {
-    PaperActions::setTags($prow);
-    loadRows();
-}
-
-
 // paper table
 $paperTable = new PaperTable($prow, "assign");
 $paperTable->initialize(false, false);
@@ -573,7 +566,7 @@ if ($Me->can_administer($prow)) {
                 && ($p->reviewerPreference || $p->reviewerExpertise
                     || $p->topicInterestScore))
                 echo unparse_preference_span($p);
-            echo '</div></div>';
+            echo '</div>';
         }
 
         // then, number of reviews
@@ -591,7 +584,7 @@ if ($Me->can_administer($prow)) {
                     . hoturl("search", "q=pri:" . urlencode($pc->email))
                     . "\">$numPrimary primary</a>)";
         }
-        echo "</div><hr class=\"c\" /></div>\n";
+        echo "</div><hr class=\"c\" /></div></div>\n";
     }
     echo "</div>\n",
         "<div class='aa' style='margin-bottom:0'>",

@@ -914,7 +914,7 @@ if ($getaction == "acmcms" && SearchActions::any() && $Me->privChair) {
 // download status JSON for selected papers
 if ($getaction == "json" && SearchActions::any() && $Me->privChair) {
     $pj = array();
-    $ps = new PaperStatus(array("view_contact" => $Me, "forceShow" => true));
+    $ps = new PaperStatus($Me, ["forceShow" => true]);
     foreach (SearchActions::selection() as $pid)
         if (($j = $ps->load($pid)))
             $pj[] = $j;
@@ -940,7 +940,7 @@ if ($getaction == "jsonattach" && SearchActions::any() && $Me->privChair) {
     global $jsonattach_zip;
     $jsonattach_zip = new ZipDocument($Opt["downloadPrefix"] . "data.zip");
     $pj = array();
-    $ps = new PaperStatus(array("view_contact" => $Me, "forceShow" => true));
+    $ps = new PaperStatus($Me, ["forceShow" => true]);
     $ps->add_document_callback("jsonattach_document");
     foreach (SearchActions::selection() as $pid)
         if (($j = $ps->load($pid)))
@@ -1142,11 +1142,11 @@ function saveformulas() {
                 if ($exprViewScore <= $Me->permissive_view_score_bound())
                     $ok = Conf::msg_error("The expression “" . htmlspecialchars($expr) . "” refers to paper properties that you aren’t allowed to view. Please define a different expression.");
                 else if ($fdef->formulaId == "n") {
-                    $changes[] = "insert into Formula (name, heading, headingTitle, expression, authorView, createdBy, timeModified) values ('" . sqlq($name) . "', '', '', '" . sqlq($expr) . "', $exprViewScore, " . ($Me->privChair ? -$Me->contactId : $Me->contactId) . ", " . time() . ")";
+                    $changes[] = "insert into Formula (name, heading, headingTitle, expression, createdBy, timeModified) values ('" . sqlq($name) . "', '', '', '" . sqlq($expr) . "', " . ($Me->privChair ? -$Me->contactId : $Me->contactId) . ", " . time() . ")";
                     if (!$Conf->setting("formulas"))
                         $changes[] = "insert into Settings (name, value) values ('formulas', 1) on duplicate key update value=1";
                 } else
-                    $changes[] = "update Formula set name='" . sqlq($name) . "', expression='" . sqlq($expr) . "', authorView=$exprViewScore, timeModified=" . time() . " where formulaId=$fdef->formulaId";
+                    $changes[] = "update Formula set name='" . sqlq($name) . "', expression='" . sqlq($expr) . "', timeModified=" . time() . " where formulaId=$fdef->formulaId";
             }
         }
     }
@@ -1253,12 +1253,15 @@ $Conf->header("Search", "search", actionBar());
 $Conf->echoScript(); // need the JS right away
 $Search = new PaperSearch($Me, $_REQUEST);
 if (isset($_REQUEST["q"])) {
-    $pl = new PaperList($Search, ["sort" => true, "list" => true, "row_id_pattern" => "p#", "display" => defval($_REQUEST, "display")]);
+    $pl = new PaperList($Search, ["sort" => true, "list" => true, "row_id_pattern" => "p#", "display" => defval($_REQUEST, "display")], make_qreq());
     if (check_post())
         $pl->papersel = SearchActions::selection_map();
-    $pl_text = $pl->table_html($Search->limitName, array("class" => "pltable_full",
-                           "attributes" => array("data-fold-session" => 'pldisplay.$')));
+    $pl_text = $pl->table_html($Search->limitName, [
+            "class" => "pltable_full", "table_id" => "foldpl",
+            "attributes" => ["data-fold-session" => 'pldisplay.$']
+        ]);
     $pldisplay = $pl->display;
+    unset($_REQUEST["atab"], $_GET["atab"], $_POST["atab"]);
 } else
     $pl = null;
 
