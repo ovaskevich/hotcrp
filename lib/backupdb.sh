@@ -27,7 +27,7 @@ help () {
 }
 
 usage () {
-    echo "Usage: $PROG [-c CONFIGFILE] [-n CONFNAME] [--schema|--pc] [-z] [MYSQL-OPTIONS] [OUTPUT]" 1>&2
+    echo "Usage: $PROG [-c CONFIGFILE] [-n CONFNAME] [--schema|--pc] [--settings_only] [--no_paper_store] [-z] [MYSQL-OPTIONS] [OUTPUT]" 1>&2
     exit 1
 }
 
@@ -35,6 +35,7 @@ export FLAGS=
 structure=false
 pc=false
 settings_only=false
+no_paper_store=false
 gzip=false
 max_allowed_packet=1000M
 output=
@@ -45,6 +46,7 @@ while [ $# -gt 0 ]; do
     --structure|--schema) structure=true;;
     --pc) pc=true;;
     --settings_only) settings_only=true;;
+    --no_paper_store) no_paper_store=true;;
     -z|--g|--gz|--gzi|--gzip) gzip=true;;
     -o|--out|--outp|--outpu|--output)
         test "$#" -gt 1 -a -z "$output" || usage
@@ -101,6 +103,8 @@ database_dump () {
         eval "$MYSQLDUMP $myargs $FLAGS $dbname Settings TopicArea"
     elif $settings_only; then
         eval "$MYSQLDUMP $myargs $FLAGS $dbname Settings"
+    elif $no_paper_store; then
+        eval "$MYSQLDUMP $myargs $FLAGS $dbname ActionLog Capability CapabilityMap Chair ChairAssistant ContactAddress ContactInfo Formula MailLog PCMember Paper PaperComment PaperConflict PaperOption PaperReview PaperReviewArchive PaperReviewPreference PaperReviewRefused PaperTag PaperTopic PaperWatch ReviewRating ReviewRequest Settings TopicArea TopicInterest"
     else
         eval "$MYSQLDUMP $myargs $FLAGS $dbname"
     fi
