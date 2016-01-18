@@ -343,7 +343,7 @@ class PaperTable {
             '<div class="papev">', $this->entryData("title"), "</div></div>\n\n";
     }
 
-    static function pdfStamps($data) {
+    static function pdfStamps($data, $options) {
         global $Conf;
 
         $t = array();
@@ -353,6 +353,17 @@ class PaperTable {
         $sha1 = defval($data, "sha1");
         if ($sha1)
             $t[] = "<span class='nowrap hottooltip' data-hottooltip='SHA-1 checksum'>" . Ht::img("_.gif", "SHA-1", array("class" => "checksum12")) . " " . bin2hex($sha1) . "</span>";
+        // if paper has options
+        if ($options) {
+            // retrieve option with ApplyYourself ID
+            $ayLink = reset(array_filter($options, function ($o) {return $o->option->name == "ApplyYourself ID";}))->data;
+            // if ay ID option exists, create a link
+            // GS Note: option name "ApplyYourself ID" and link address are hard coded for now. 
+            if ($ayLink) {
+               $ayLinkTitle = "Link to application in ApplyYourself. Only works after logging into ApplyYourself in same browser, and selecting: Search Applicants. Otherwise, will lead permission error.";
+                $t[] = "<span class='nowrap' title='".$ayLinkTitle."'>" . Ht::img("_.gif", "ApplyYourself", array("class" => "expander", "title" => ".$ayLinkTitle.")) . " <a href='https://webcenter.applyyourself.com/AYApplicantSummary/ApplicantSummary.asp?SelectedIDs=" . $ayLink . "&d=" . strval(time()) . "'>ApplyYourself</a></span>";
+            }
+        }
         if (count($t) > 0)
             return "<span class='hint'>" . join(" <span class='barsep'>·</span> ", $t) . "</span>";
         else
@@ -372,7 +383,7 @@ class PaperTable {
             $dprefix = "";
             $dtype = $prow->finalPaperStorageId > 1 ? DTYPE_FINAL : DTYPE_SUBMISSION;
             if (($data = paperDocumentData($prow, $dtype))) {
-                if (($stamps = self::pdfStamps($data)))
+                if (($stamps = self::pdfStamps($data, $this->prow->options())))
                     $stamps = "<span class='sep'></span>" . $stamps;
                 $dname = $dtype == DTYPE_FINAL ? "Final version" : "Submission";
                 $pdfs[] = $dprefix . documentDownload($data, "dlimg", '<span class="pavfn">' . $dname . '</span>') . $stamps;
@@ -472,7 +483,7 @@ class PaperTable {
                 "<td class='nowrap'>", documentDownload($doc), "</td>";
             if ($doc->mimetype === "application/pdf" && $banal)
                 echo "<td><span class='sep'></span></td><td><a href='#' onclick='return docheckformat($documentType)'>Check format</a></td>";
-            if (($stamps = self::pdfStamps($doc)))
+            if (($stamps = self::pdfStamps($doc, $this->prow->options())))
                 echo "<td><span class='sep'></span></td><td>$stamps</td>";
             echo "</tr></table>\n";
         }
@@ -593,6 +604,7 @@ class PaperTable {
         }, $summary);
         
         $options = "<b>OPTIONS HERE</b>";
+        #GS place to generate table of options as result
         echo "<div class='pg pgtop'>",
             $this->papt("summary", "Summary"),
             "<div class='pavb summary'>", $summary, "</div></div>\n\n";
@@ -854,7 +866,9 @@ class PaperTable {
                 $ox = htmlspecialchars($oa->value);
             else if ($o->type === "text"
                      && $oa->data != "") {
-                $ox = htmlspecialchars($oa->data);
+                #GS allow for html characters
+                #$ox = htmlspecialchars($oa->data);
+                $ox = $oa->data;
                 if (@($o->display_space > 1))
                     $ox = nl2br($ox);
                 $ox = Ht::link_urls($ox);
@@ -1178,7 +1192,7 @@ class PaperTable {
                     "<td class='nowrap'>", documentDownload($doc, "dlimg", htmlspecialchars($doc->unique_filename)), "</td>",
                     "<td class='fx'><span class='sep'></span></td>",
                     "<td class='fx'><a id='remover_$oname' href='#remover_$oname' onclick='return doremovedocument(this)'>Delete</a></td>";
-                if (($stamps = self::pdfStamps($doc)))
+                if (($stamps = self::pdfStamps($doc, $this->prow->options())))
                     echo "<td class='fx'><span class='sep'></span></td><td class='fx'>$stamps</td>";
                 echo "</tr></table></div>\n";
             }
