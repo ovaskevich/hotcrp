@@ -2405,7 +2405,7 @@ class Conf {
 
         // $header_site
         $is_home = $id === "home";
-        $site_div = '<div id="header_site" class="'
+        $site_div = '<div id="header_site" class="header_site_logo '
             . ($is_home ? "header_site_home" : "header_site_page")
             . '"><h1><a class="qq" href="' . hoturl("index") . '">'
             . htmlspecialchars($Opt["shortName"]);

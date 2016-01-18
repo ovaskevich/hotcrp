@@ -45,6 +45,17 @@ html {
 	border-right: 1px solid #f33360;
 	border-bottom-right-radius: 4px;
 	background: #ffc9d6; /* #ed6182; */
+
+}
+.header_site_logo {
+    background-image: url(../images/logo.png) !important;
+    background-color: rgba(255, 201, 214, 0.2) !important;
+    background-repeat: no-repeat !important;
+    background-position: 5px 5px !important;
+    padding-left: 350px !important;
+    line-height: 50px !important;
+    display: inline-block;
+    text-decoration: none;
 }
 #header_site, #footer_crp a {
 	color: #f33360;
