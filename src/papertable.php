@@ -579,22 +579,28 @@ class PaperTable {
             $contentStart = $varEnd + BEGIN_IF_END_LEN;
             $contentEnd = strpos($summaryTemplate, END_IF, $varEnd);
             $conditionalEnd = $contentEnd + END_IF_LEN;
-            
+
             $shouldShow = $varOption
-                    && (($varOption->option->type == "text" && !empty($varOption->data))
-                            || ($varOption->option->type != "text" && ($varOption->data || $varOption->value)));
+                    && (($varOption->option->type == "text" && isset($varOption->data) && !empty($varOption->data))
+                            || ($varOption->option->type != "text" && (isset($varOption->data) || isset($varOption->value))));
             if ($shouldShow == $expectedValue) {
                 $summary .= substr($summaryTemplate, $contentStart, $contentEnd - $contentStart);
             }
         }
         $summary .= substr($summaryTemplate, $conditionalEnd);
-        
+
         // Now, replace all the variables.
         $summary = preg_replace_callback('/\$\{.+?\}/', function($matches) use (&$options) {
             $var = $matches[0];
             $var = substr($var, 2, strlen($var) - 3);
             $varOption = reset(array_filter($options, function ($o) use ($var) {return $o->option->name == $var;}));
-            $value = $varOption ? ($varOption->option->type == "text" ? $varOption->data : ($varOption->data ? $varOption->data : $varOption->value)) : "[???]";
+            $value = $varOption
+                ? ($varOption->option->type == "text"
+                    ? $varOption->data
+                    : ((isset($varOption->data) && $varOption->data)
+                        ? $varOption->data
+                        : $varOption->value))
+                : "[???]";
 
             if ($varOption && $varOption->option->type == "checkbox") {
                 $value = $value ? 'Yes' : 'No';
