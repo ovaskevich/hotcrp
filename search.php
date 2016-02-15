@@ -1098,8 +1098,17 @@ if (isset($_REQUEST["savedisplayoptions"]) && $Me->privChair) {
 
 
 // save formula
+function visible_formulas() {
+    return array_filter(FormulaPaperColumn::$list, function ($f) {
+        global $Me;
+        return $_REQUEST["t"] == "a"
+            ? $Me->can_view_formula_as_author($f)
+            : $Me->can_view_formula($f);
+    });
+}
+
 function formulas_with_new() {
-    $formulas = FormulaPaperColumn::$list;
+    $formulas = visible_formulas();
     $formulas["n"] = (object) array("formulaId" => "n", "name" => "",
                                     "expression" => "", "createdBy" => 0);
     return $formulas;
@@ -1430,9 +1439,10 @@ if ($pl) {
     }
 
     // Formulas group
-    if (count(FormulaPaperColumn::$list)) {
+    $formulas = visible_formulas();
+    if (count($formulas)) {
         displayOptionText("<strong>Formulas:</strong>", 4);
-        foreach (FormulaPaperColumn::$list as $formula)
+        foreach ($formulas as $formula)
             displayOptionCheckbox("formula" . $formula->formulaId, 4, htmlspecialchars($formula->name));
     }
 }
@@ -1769,8 +1779,8 @@ if ($pl && $pl->count > 0) {
                                 "onchange" => "fold('pl',!this.checked,'force');$('#forceShow').val(this.checked?1:0)")),
             "&nbsp;", Ht::label("Override conflicts", "showforce"), "</td>";
 
-    // Formulas link
-    if (count(FormulaPaperColumn::$list) || $Me->isPC)
+    // Edit formulas link
+    if ($Me->isPC && $_REQUEST["t"] != "a")
         echo "<td class='padlb'>", Ht::js_button("Edit formulas", "fold('searchform',0,3)"), "</td>";
 
     echo "<td class='padlb'>";
@@ -1811,7 +1821,7 @@ would display the sum of a paper&rsquo;s Overall merit scores.
             "<th></th><th class='f-c'>Name</th><th class='f-c'>Definition</th>",
             "</tr></thead><tbody>";
         $any = 0;
-        $fs = FormulaPaperColumn::$list;
+        $fs = visible_formulas();
         $fs["n"] = (object) array("formulaId" => "n", "name" => "", "expression" => "", "createdBy" => 0);
         foreach ($fs as $formulaId => $fdef) {
             $name = defval($_REQUEST, "name_$formulaId", $fdef->name);

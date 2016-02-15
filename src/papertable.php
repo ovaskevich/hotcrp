@@ -158,23 +158,22 @@ class PaperTable {
             $t .= '"><a class="q" href="' . hoturl("paper", array("p" => $prow->paperId, "ls" => null))
                 . '"><span class="taghl"><span class="pnum">' . $title . '</span>'
                 . ' &nbsp; ';
-            $highlight = null;
-            if ($paperTable && $paperTable->matchPreg)
-                $highlight = get($paperTable->matchPreg, "title");
-            if (!$highlight && ($format = $prow->paperFormat) === null)
-                $format = Conf::$gDefaultFormat;
-            if ($format && ($f = $Conf->format_info($format))
-                && ($regex = get($f, "simple_regex"))
-                && preg_match($regex, $prow->title))
-                $format = 0;
-            if ($format)
+
+            $highlight_text = null;
+            $title_matches = 0;
+            if ($paperTable && $paperTable->matchPreg
+                && ($highlight = get($paperTable->matchPreg, "title")))
+                $highlight_text = Text::highlight($prow->title, $highlight, $title_matches);
+
+            if (!$title_matches && ($format = $prow->title_format()))
                 $t .= '<span class="ptitle preformat" data-format="' . $format . '">';
             else
                 $t .= '<span class="ptitle">';
-            if ($highlight)
-                $t .= Text::highlight($prow->title, $highlight, $paperTable->entryMatches);
+            if ($highlight_text)
+                $t .= $highlight_text;
             else
                 $t .= htmlspecialchars($prow->title);
+
             $t .= '</span></span></a>';
             if ($viewable_tags)
                 $t .= $tagger->unparse_badges_html($viewable_tags);
@@ -358,7 +357,7 @@ class PaperTable {
             // retrieve option with ApplyYourself ID
             $ayLink = reset(array_filter($options, function ($o) {return $o->option->name == "ApplyYourself ID";}))->data;
             // if ay ID option exists, create a link
-            // GS Note: option name "ApplyYourself ID" and link address are hard coded for now. 
+            // GS Note: option name "ApplyYourself ID" and link address are hard coded for now.
             if ($ayLink) {
                $ayLinkTitle = "Link to application in ApplyYourself. Only works after logging into ApplyYourself in same browser, and selecting: Search Applicants. Otherwise, will lead permission error.";
                 $t[] = "<span class='nowrap' title='".$ayLinkTitle."'>" . Ht::img("_.gif", "ApplyYourself", array("class" => "expander", "title" => ".$ayLinkTitle.")) . " <a href='https://webcenter.applyyourself.com/AYApplicantSummary/ApplicantSummary.asp?SelectedIDs=" . $ayLink . "&d=" . strval(time()) . "'>ApplyYourself</a></span>";
@@ -382,8 +381,8 @@ class PaperTable {
 
             $dprefix = "";
             $dtype = $prow->finalPaperStorageId > 1 ? DTYPE_FINAL : DTYPE_SUBMISSION;
-            if (($data = paperDocumentData($prow, $dtype))) {
-                if (($stamps = self::pdfStamps($data, $this->prow->options())))
+            if (($data = $prow->document($dtype))) {
+                if (($stamps = self::pdfStamps($data)))
                     $stamps = "<span class='sep'></span>" . $stamps;
                 $dname = $dtype == DTYPE_FINAL ? "Final version" : "Submission";
                 $pdfs[] = $dprefix . documentDownload($data, "dlimg", '<span class="pavfn">' . $dname . '</span>') . $stamps;
@@ -478,7 +477,7 @@ class PaperTable {
         $doc = null;
         $inputid = ($optionType ? "opt" . $documentType : "paperUpload");
         if ($prow && $Me->can_view_pdf($prow) && $storageId > 1
-            && (($doc = paperDocumentData($prow, $documentType, $storageId)))) {
+            && (($doc = $prow->document($documentType, $storageId)))) {
             echo "<table id='current_$inputid'><tr>",
                 "<td class='nowrap'>", documentDownload($doc), "</td>";
             if ($doc->mimetype === "application/pdf" && $banal)
@@ -602,7 +601,7 @@ class PaperTable {
             }
             return $value;
         }, $summary);
-        
+
         $options = "<b>OPTIONS HERE</b>";
         #GS place to generate table of options as result
         echo "<div class='pg pgtop'>",
@@ -634,13 +633,12 @@ class PaperTable {
             '<div class="pavb abstract">', $data, "</div></div>\n\n";
     }
 
-    private static function echo_editable_authors_tr($tr, $n, $name, $email, $aff) {
-        echo '<tr', $tr, '>',
-            '<td class="rxcaption">', $n, ".</td>",
-            '<td class="lentry">', Ht::entry("auname$n", $name, array("size" => "35", "onchange" => "author_change(this)", "placeholder" => "Name")), "</td>",
-            '<td class="lentry">', Ht::entry("auemail$n", $email, array("size" => "30", "onchange" => "author_change(this)", "placeholder" => "Email")), "</td>",
-            '<td class="lentry">', Ht::entry("auaff$n", $aff, array("size" => "32", "onchange" => "author_change(this)", "placeholder" => "Affiliation")), "</td>",
-            '<td class="nw"><a href="#" class="qx row_up" onclick="return author_change.delta(this,-1)" tabindex="-1">&#x25b2;</a><a href="#" class="qx row_down" onclick="return author_change.delta(this,1)" tabindex="-1">&#x25bc;</a><a href="#" class="qx row_kill" onclick="return author_change.delta(this,Infinity)" tabindex="-1">x</a></td></tr>';
+    private static function editable_authors_tr($n, $name, $email, $aff) {
+        return '<tr><td class="rxcaption">' . $n . ".</td>"
+            . '<td class="lentry">' . Ht::entry("auname$n", $name, array("size" => "35", "onchange" => "author_change(this)", "placeholder" => "Name")) . "</td>"
+            . '<td class="lentry">' . Ht::entry("auemail$n", $email, array("size" => "30", "onchange" => "author_change(this)", "placeholder" => "Email")) . "</td>"
+            . '<td class="lentry">' . Ht::entry("auaff$n", $aff, array("size" => "32", "onchange" => "author_change(this)", "placeholder" => "Affiliation")) . "</td>"
+            . '<td class="nw"><a href="#" class="qx row_up" onclick="return author_change(this,-1)" tabindex="-1">&#x25b2;</a><a href="#" class="qx row_down" onclick="return author_change(this,1)" tabindex="-1">&#x25bc;</a><a href="#" class="qx row_kill" onclick="return author_change(this,Infinity)" tabindex="-1">x</a></td></tr>';
     }
 
     private function editable_authors() {
@@ -652,13 +650,13 @@ class PaperTable {
             echo " Submission is blind, so reviewers will not be able to see author information.";
         echo " Any author with an account on this site can edit the submission.</div>",
             '<div class="papev"><table id="auedittable" class="auedittable">',
-            '<tbody>';
-        self::echo_editable_authors_tr(' data-hotautemplate="true" style="display:none"', '$', "", "", "");
+            '<tbody data-last-row-blank="true" data-min-rows="5" data-row-template="',
+            htmlspecialchars(self::editable_authors_tr('$', "", "", "")), '">';
 
         $blankAu = array("", "", "", "");
         if ($this->useRequest) {
             for ($n = 1; @$_POST["auname$n"] || @$_POST["auemail$n"] || @$_POST["auaff$n"]; ++$n)
-                self::echo_editable_authors_tr("", $n, (string) @$_POST["auname$n"], (string) @$_POST["auemail$n"], (string) @$_POST["auaff$n"]);
+                echo self::editable_authors_tr($n, (string) @$_POST["auname$n"], (string) @$_POST["auemail$n"], (string) @$_POST["auaff$n"]);
         } else {
             $aulist = $this->prow ? $this->prow->author_list() : array();
             for ($n = 1; $n <= count($aulist); ++$n) {
@@ -667,11 +665,11 @@ class PaperTable {
                     $auname = $au->lastName . ", " . $au->firstName;
                 else
                     $auname = $au->name();
-                self::echo_editable_authors_tr("", $n, $auname, $au->email, $au->affiliation);
+                echo self::editable_authors_tr($n, $auname, $au->email, $au->affiliation);
             }
         }
         do {
-            self::echo_editable_authors_tr("", $n, "", "", "");
+            echo self::editable_authors_tr($n, "", "", "");
         } while (++$n <= 5);
         echo "</tbody></table></div></div>\n\n";
     }
@@ -868,8 +866,8 @@ class PaperTable {
                      && $oa->data != "") {
                 #GS allow for html characters
                 #$ox = htmlspecialchars($oa->data);
-                $ox = $oa->data;
-                if (@($o->display_space > 1))
+                $ox = $oa->data; # htmlspecialchars($oa->data);
+                if ($o->display_space > 1)
                     $ox = nl2br($ox);
                 $ox = Ht::link_urls($ox);
             } else if ($o->type === "attachments") {
@@ -883,7 +881,7 @@ class PaperTable {
                     /* make fake document */
                     $doc = (object) array("paperId" => $this->prow->paperId, "mimetype" => "application/pdf", "documentType" => $o->id);
                 else
-                    $doc = paperDocumentData($this->prow, $o->id, $oa->value);
+                    $doc = $this->prow->document($o->id, $oa->value);
                 if ($doc)
                     $ox = documentDownload($doc, "sdlimg", $on);
             }
@@ -1311,7 +1309,7 @@ class PaperTable {
             Ht::hidden("has_pcconf", 1),
             '<div class="pc_ctable">';
         foreach ($pcm as $id => $p) {
-            $label = Ht::label($p->name_html(), "pcc$id", array("class" => "taghl"));
+            $label = Ht::label($Me->name_html_for($p), "pcc$id", array("class" => "taghl"));
             if ($p->affiliation)
                 $label .= '<div class="pcconfaff">' . htmlspecialchars(UnicodeHelper::utf8_abbreviate($p->affiliation, 60)) . '</div>';
             $ct = defval($conflict, $id, $nonct);
@@ -1358,15 +1356,14 @@ class PaperTable {
         $tagger = new Tagger;
         foreach ($this->prow->pc_conflicts() as $id => $x) {
             $p = $pcm[$id];
-            $text = "<p class=\"odname\">" . $p->name_html() . "</p>";
+            $text = "<p class=\"odname\">" . $Me->name_html_for($p) . "</p>";
             if ($Me->isPC && ($classes = $tagger->viewable_color_classes($p->all_contact_tags())))
                 $text = "<div class=\"pscopen $classes taghl\">$text</div>";
             $pcconf[$p->sort_position] = $text;
         }
-
+        ksort($pcconf);
         if (!count($pcconf))
             $pcconf[] = "<p class=\"odname\">None</p>";
-        ksort($pcconf);
         $this->_papstripBegin();
         echo $this->papt("pcconflict", "PC conflicts", array("type" => "ps")),
             "<div class='psv psconf'>", join("", $pcconf), "</div></div>\n";
@@ -1392,8 +1389,8 @@ class PaperTable {
             '<div class="psv">';
         $colors = "";
         $p = null;
-        if ($value && ($p = @$pc[$value]))
-            $n = $p->name_html();
+        if ($value && isset($pc[$value]))
+            $n = $Me->name_html_for($value);
         else
             $n = $value ? "Unknown!" : "";
         $text = '<p class="fn odname">' . $n . '</p>';
@@ -2358,7 +2355,7 @@ class PaperTable {
             $pl = $search->session_list_object();
             $_REQUEST["paperId"] = $_REQUEST["p"] = $pl->ids[0];
             // check if the paper is in the current list
-            if (($curpl = SessionList::requested())
+            if (false && ($curpl = SessionList::requested())
                 && @$curpl->listno
                 && str_starts_with($curpl->listid, "p")
                 && !preg_match(',\Ap/[^/]*//,', $curpl->listid)
@@ -2370,7 +2367,7 @@ class PaperTable {
             } else {
                 // make new list
                 $pl->listno = SessionList::allocate($pl->listid);
-                SessionList::change($pl->listno, $pl, true);
+                SessionList::change($pl->listno, $pl);
             }
             unset($_REQUEST["ls"]);
             SessionList::set_requested($pl->listno);

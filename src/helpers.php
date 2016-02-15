@@ -74,7 +74,7 @@ function hoturl_defaults($options = array()) {
 }
 
 function hoturl_site_relative($page, $options = null) {
-    global $Me, $paperTable, $_hoturl_defaults;
+    global $Conf, $Me, $_hoturl_defaults;
     $t = $page . Navigation::php_suffix();
     // parse options, separate anchor; see also redirectSelf
     $anchor = "";
@@ -97,10 +97,10 @@ function hoturl_site_relative($page, $options = null) {
                 $options .= "&amp;" . $k . "=" . $v;
     // append forceShow to links to same paper if appropriate
     $is_paper_page = preg_match('/\A(?:paper|review|comment|assign)\z/', $page);
-    if ($is_paper_page && @$paperTable && $paperTable->prow
-        && preg_match($are . 'p=' . $paperTable->prow->paperId . $zre, $options)
-        && $Me->can_administer($paperTable->prow)
-        && $paperTable->prow->has_conflict($Me)
+    if ($is_paper_page && $Conf->paper
+        && preg_match($are . 'p=' . $Conf->paper->paperId . $zre, $options)
+        && $Me->can_administer($Conf->paper)
+        && $Conf->paper->has_conflict($Me)
         && !preg_match($are . 'forceShow=/', $options))
         $options .= "&amp;forceShow=1";
     // create slash-based URLs if appropriate
@@ -308,7 +308,7 @@ function reviewType($paperId, $row, $long = 0) {
         return "";
 }
 
-function documentDownload($doc, $dlimg_class = "dlimg", $text = null) {
+function documentDownload($doc, $dlimg_class = "dlimg", $text = null, $no_size = false) {
     global $Conf;
     $p = HotCRPDocument::url($doc);
     $finalsuffix = ($doc->documentType == DTYPE_FINAL ? "f" : "");
@@ -322,7 +322,7 @@ function documentDownload($doc, $dlimg_class = "dlimg", $text = null) {
         $x = "<a href=\"$p\" class=\"q\">" . Ht::img("generic${finalsuffix}${imgsize}.png", "[Download]", $dlimg_class);
     if ($text)
         $x .= $sp . $text;
-    if (isset($doc->size) && $doc->size > 0) {
+    if (isset($doc->size) && $doc->size > 0 && !$no_size) {
         $x .= "&nbsp;<span class=\"dlsize\">" . ($text ? "(" : "");
         if ($doc->size > 921)
             $x .= round($doc->size / 1024);
@@ -333,50 +333,12 @@ function documentDownload($doc, $dlimg_class = "dlimg", $text = null) {
     return $x . "</a>";
 }
 
-function paperDocumentData($prow, $documentType = DTYPE_SUBMISSION, $paperStorageId = 0) {
-    global $Conf, $Opt;
-    assert($paperStorageId || $documentType == DTYPE_SUBMISSION || $documentType == DTYPE_FINAL);
-    if ($documentType == DTYPE_FINAL && $prow->finalPaperStorageId <= 0)
-        $documentType = DTYPE_SUBMISSION;
-    if ($paperStorageId == 0 && $documentType == DTYPE_FINAL)
-        $paperStorageId = $prow->finalPaperStorageId;
-    else if ($paperStorageId == 0)
-        $paperStorageId = $prow->paperStorageId;
-    if ($paperStorageId <= 1)
-        return null;
-
-    // pre-load document object from paper
-    $doc = (object) array("paperId" => $prow->paperId,
-                          "mimetype" => defval($prow, "mimetype", ""),
-                          "size" => defval($prow, "size", 0),
-                          "timestamp" => defval($prow, "timestamp", 0),
-                          "sha1" => defval($prow, "sha1", ""));
-    if ($prow->finalPaperStorageId > 0) {
-        $doc->paperStorageId = $prow->finalPaperStorageId;
-        $doc->documentType = DTYPE_FINAL;
-    } else {
-        $doc->paperStorageId = $prow->paperStorageId;
-        $doc->documentType = DTYPE_SUBMISSION;
-    }
-
-    // load document object from database if pre-loaded version doesn't work
-    if ($paperStorageId > 0
-        && ($doc->documentType != $documentType
-            || $paperStorageId != $doc->paperStorageId)) {
-        $size = $Conf->sversion >= 74 ? "size" : "length(paper) as size";
-        $result = Dbl::qe("select paperStorageId, paperId, $size, mimetype, timestamp, sha1, filename, documentType from PaperStorage where paperStorageId=$paperStorageId");
-        $doc = edb_orow($result);
-    }
-
-    return $doc;
-}
-
 function paperDownload($prow, $final = false) {
     global $Conf, $Me;
     // don't let PC download papers in progress
     if ($prow->timeSubmitted <= 0 && !$Me->can_view_pdf($prow))
         return "";
-    $doc = paperDocumentData($prow, $final ? DTYPE_FINAL : DTYPE_SUBMISSION);
+    $doc = $prow->document($final ? DTYPE_FINAL : DTYPE_SUBMISSION);
     return $doc ? documentDownload($doc) : "";
 }
 
@@ -445,29 +407,23 @@ class SessionList {
     static function lookup($idx) {
         global $Conf, $Me;
         $lists = $Conf->session("l", array());
-        $l = @$lists[$idx];
+        $l = get($lists, $idx);
         if ($l && $l->cid == ($Me ? $Me->contactId : 0)) {
             $l = clone $l;
-            if (is_string(@$l->ids))
+            if (is_string($l->ids))
                 $l->ids = json_decode($l->ids);
             $l->listno = (int) $idx;
             return $l;
         } else
             return null;
     }
-    static function change($idx, $delta, $replace = false) {
-        global $Conf, $Me;
-        $lists = $Conf->session("l", array());
-        $l = @$lists[$idx];
-        if ($l && @$l->cid == ($Me ? $Me->contactId : 0) && !$replace)
-            $l = clone $l;
-        else
-            $l = (object) array();
-        foreach ($delta as $k => $v)
-            $l->$k = $v;
-        if (isset($l->ids) && !is_string($l->ids))
-            $l->ids = json_encode($l->ids);
-        $Conf->save_session_array("l", $idx, $l);
+    static function change($idx, $l) {
+        global $Conf;
+        $l = is_object($l) ? get_object_vars($l) : $l;
+        if (isset($l["ids"]) && !is_string($l["ids"]))
+            $l["ids"] = json_encode($l["ids"]);
+        $Conf->save_session_array("l", $idx, (object) $l);
+        return true;
     }
     static function allocate($listid) {
         global $Conf, $Me;
@@ -475,15 +431,14 @@ class SessionList {
         $cid = $Me ? $Me->contactId : 0;
         $oldest = $empty = 0;
         for ($i = 1; $i <= 8; ++$i)
-            if (($l = @$lists[$i])) {
-                if ($listid && @($l->listid == $listid) && $l->cid == $cid)
+            if (($l = get($lists, $i))) {
+                if (!isset($l->timestamp))
+                    error_log("missing timestamp " . json_encode($l));
+                if ($listid && $l->listid == $listid && $l->cid == $cid)
                     return $i;
-                else if (!$oldest || @($lists[$oldest]->timestamp < $l->timestamp))
+                else if (!$oldest || $l->timestamp < $lists[$oldest]->timestamp)
                     $oldest = $i;
-            } else if (@$_REQUEST["ls"] === (string) $i
-                       || @$_COOKIE["hotcrp_ls"] === (string) $i)
-                return $i;
-            else if (!$empty)
+            } else if (!$empty)
                 $empty = $i;
         return $empty ? : $oldest;
     }
@@ -530,14 +485,14 @@ class SessionList {
         global $Me;
         if (self::$requested_list === false) {
             // look up list ID
-            $listdesc = @$_REQUEST["ls"];
+            $listdesc = req("ls");
             if (isset($_COOKIE["hotcrp_ls"]))
                 $listdesc = $listdesc ? : $_COOKIE["hotcrp_ls"];
 
             $list = null;
             if (($listno = cvtint($listdesc, null))
                 && ($xlist = self::lookup($listno))
-                && (!@$xlist->cid || $xlist->cid == ($Me ? $Me->contactId : 0)))
+                && (!get($xlist, "cid") || $xlist->cid == ($Me ? $Me->contactId : 0)))
                 $list = $xlist;
 
             // look up list description
@@ -561,14 +516,14 @@ class SessionList {
         return self::$requested_list;
     }
     static public function active($listtype = null, $id = null) {
-        global $CurrentProw, $Me, $Now;
+        global $Conf, $Me, $Now;
 
         // check current-list cache
         if (!$listtype && self::$active_list)
             return self::$active_list;
         else if (!$listtype) {
             $listtype = "p";
-            $id = $CurrentProw ? $CurrentProw->paperId : null;
+            $id = $Conf->paper ? $Conf->paper->paperId : null;
         }
         if (!$id)
             return null;
@@ -578,7 +533,7 @@ class SessionList {
 
         // start with requested list
         $list = self::requested();
-        if ($list && !str_starts_with((string) @$list->listid, $listtype))
+        if ($list && !str_starts_with(get_s($list, "listid"), $listtype))
             $list = null;
 
         // look up ID in list; try new lists if not found
@@ -597,12 +552,11 @@ class SessionList {
             $list = null;
 
         // save list changes
-        if ($list && !@$list->listno) {
+        if ($list && !get($list, "listno"))
             $list->listno = self::allocate($list->listid);
-            self::change($list->listno, $list, true);
-        }
         if ($list) {
-            self::change($list->listno, ["timestamp" => $Now]);
+            $list->timestamp = $Now;
+            self::change($list->listno, $list);
             $list->id_position = $k;
         }
         self::$active_listid = $listid;

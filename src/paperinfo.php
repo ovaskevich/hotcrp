@@ -68,10 +68,10 @@ class PaperInfo_Author {
 
     public function __construct($line) {
         $a = explode("\t", $line);
-        $this->firstName = @$a[0];
-        $this->lastName = @$a[1];
-        $this->email = @$a[2];
-        $this->affiliation = @$a[3];
+        $this->firstName = count($a) > 0 ? $a[0] : null;
+        $this->lastName = count($a) > 1 ? $a[1] : null;
+        $this->email = count($a) > 2 ? $a[2] : null;
+        $this->affiliation = count($a) > 3 ? $a[3] : null;
     }
     public function name() {
         if ($this->firstName && $this->lastName)
@@ -103,6 +103,7 @@ class PaperInfo {
     public $timeWithdrawn;
     public $paperStorageId;
     public $managerContactId;
+    public $paperFormat;
 
     private $_contact_info = array();
     private $_contact_info_rights_version = 0;
@@ -162,7 +163,7 @@ class PaperInfo {
             $this->_contact_info = array();
             $this->_contact_info_rights_version = Contact::$rights_version;
         }
-        $ci = @$this->_contact_info[$contact];
+        $ci = get($this->_contact_info, $contact);
         if (!$ci)
             $ci = $this->_contact_info[$contact] =
                 PaperContactInfo::load($this->paperId, $contact, $rev_tokens);
@@ -190,6 +191,17 @@ class PaperInfo {
     public function pretty_text_title($width = 75) {
         $l = $this->pretty_text_title_indent($width);
         return prefix_word_wrap("Paper #{$this->paperId}: ", $this->title, $l);
+    }
+
+    public function title_format() {
+        $format = $this->paperFormat;
+        if ($format === null)
+            $format = Conf::$gDefaultFormat;
+        if ($format && ($f = Conf::format_info($format))
+            && ($simple_regex = get($f, "simple_regex"))
+            && preg_match($simple_regex, $this->title))
+            $format = 0;
+        return $format;
     }
 
     public function author_list() {
@@ -389,13 +401,13 @@ class PaperInfo {
     public function topic_interest_score($contact) {
         if (is_int($contact)) {
             $pcm = pcMembers();
-            $contact = @$pcm[$contact];
+            $contact = get($pcm, $contact);
         }
         $score = 0;
         if ($contact) {
             $interests = $contact->topic_interest_map();
             foreach ($this->topics() as $t)
-                $score += (int) @$interests[$t];
+                $score += (int) get($interests, $t);
         }
         return $score;
     }
@@ -480,22 +492,38 @@ class PaperInfo {
     public function option($id) {
         if (!property_exists($this, "option_array"))
             PaperOption::parse_paper_options($this);
-        return @$this->option_array[$id];
+        return get($this->option_array, $id);
+    }
+
+    public function document($dtype, $did = 0) {
+        assert($did || $dtype == DTYPE_SUBMISSION || $dtype == DTYPE_FINAL);
+        if ($dtype == DTYPE_SUBMISSION || $dtype == DTYPE_FINAL) {
+            if ($this->finalPaperStorageId <= 0)
+                $psi = [DTYPE_SUBMISSION, $this->paperStorageId];
+            else
+                $psi = [DTYPE_FINAL, $this->finalPaperStorageId];
+            if ($did == 0 || $did == $psi[1])
+                return (object) ["paperId" => $this->paperId,
+                                 "documentType" => $psi[0],
+                                 "paperStorageId" => $psi[1],
+                                 "mimetype" => get_s($this, "mimetype"),
+                                 "size" => get_i($this, "size"),
+                                 "timestamp" => get_i($this, "timestamp"),
+                                 "sha1" => get_s($this, "sha1")];
+        }
+        // load document object from database if pre-loaded version doesn't work
+        return Dbl::fetch_first_object("select paperId, documentType, paperStorageId, mimetype, size, timestamp, sha1, filename from PaperStorage where paperStorageId=?", $did);
     }
 
     public function num_reviews_submitted() {
-        if (!property_exists($this, "reviewCount")) {
-            $rows = edb_rows(Dbl::qe("select count(*) from PaperReview where paperId=$this->paperId and reviewSubmitted>0"));
-            $this->reviewCount = @$rows[0][0];
-        }
+        if (!property_exists($this, "reviewCount"))
+            $this->reviewCount = Dbl::fetch_ivalue("select count(*) from PaperReview where paperId=$this->paperId and reviewSubmitted>0");
         return (int) $this->reviewCount;
     }
 
     public function num_reviews_assigned() {
-        if (!property_exists($this, "startedReviewCount")) {
-            $rows = edb_rows(Dbl::qe("select count(*) from PaperReview where paperId=$this->paperId and (reviewSubmitted or reviewNeedsSubmit>0)"));
-            $this->startedReviewCount = @$rows[0][0];
-        }
+        if (!property_exists($this, "startedReviewCount"))
+            $this->startedReviewCount = Dbl::fetch_ivalue("select count(*) from PaperReview where paperId=$this->paperId and (reviewSubmitted or reviewNeedsSubmit>0)");
         return (int) $this->startedReviewCount;
     }
 
@@ -504,7 +532,7 @@ class PaperInfo {
             if (@$this->reviewCount !== null && $this->reviewCount === @$this->startedReviewCount)
                 $this->inProgressReviewCount = $this->reviewCount;
             else {
-                $rows = edb_rows(Dbl::qe("select count(*) from PaperReview where paperId=$this->paperId and (reviewSubmitted or reviewNeedsSubmit>0) and reviewModified>0"));
+                $rows = edb_rows(Dbl::qe("select count(*) from PaperReview where paperId=$this->paperId and reviewSubmitted is null and reviewModified>0"));
                 $this->inProgressReviewCount = @$rows[0][0];
             }
         }
