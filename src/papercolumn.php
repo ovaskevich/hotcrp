@@ -427,7 +427,7 @@ class SearchOptsPaperColumn extends PaperColumn {
     public function __construct() {
         parent::__construct("searchopts", Column::VIEW_ROW | Column::FOLDABLE);
     }
-    public function header($pl, $row, $ordinal) {
+    public function header($pl, $row) {
         return "Search Options";
     }
     public function content_empty($pl, $row) {

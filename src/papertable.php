@@ -332,7 +332,7 @@ class PaperTable {
             '<div class="papev">', $this->entryData("title"), "</div></div>\n\n";
     }
 
-    static function pdfStamps($data, $options) {
+    static function pdfStamps($data, $options = NULL) {
         global $Conf;
 
         $t = array();

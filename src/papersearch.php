@@ -1617,11 +1617,11 @@ class PaperSearch {
                     $qo[] = new OptionMatcher($o, "!=", 0, $oval);
                 else if ($oval === "no" || $oval === "'no'")
                     $qo[] = new OptionMatcher($o, "=", 0, $oval);
-                /* else if ($o->type == "text") { */
-                /*     if (!empty($oval)) { */
-                /*         $qo[] = array($o, " like '%' and Option_X.data like " . str_replace("+", " ", $oval)); */
-                /*     } */
-                else if ($o->type === "numeric") {
+                else if ($o->type == "text") {
+                    if (!empty($oval)) {
+                        $qo[] = new OptionMatcher($o, ' like ', str_replace("+", " ", $oval), $oval);
+                    }
+                } else if ($o->type === "numeric") {
                     if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m))
                         $qo[] = new OptionMatcher($o, $ocompar, $m[1], $oval);
                     else
@@ -2772,15 +2772,16 @@ class PaperSearch {
         } else if ($tt === "option") {
             // expanded from _clauseTermSetTable
             $q = array();
+            $optionNum = count($sqi->tables);
             $this->_clauseTermSetFlags($t, $sqi, $q);
-            $thistab = "Option_" . count($sqi->tables);
-            $sqi->add_table($thistab, array("left join", "(select paperId, max(value) v from PaperOption where optionId=" . $t->value->option->id . " group by paperId)"));
+            $thistab = "Option_" . $optionNum;
             $t->link = $thistab . "_x";
-            if ($t->value[0]->type == "text") {
-                $sqi->add_column($thistab . "_x", "$thistab.value");
-                $newValue = str_replace("Option_X.data like '", "LOWER(CONVERT(Option_$optionNum.data USING utf8)) like '", $t->value[1]);
-                $q[] = $sqi->columns[$t->link] . $newValue;
+            if ($t->value->option->type == 'text') {
+                $sqi->add_table($thistab, array("left join", "(select paperId, data d from PaperOption where optionId=" . $t->value->option->id . " group by paperId)"));
+                $sqi->add_column($thistab . "_x", "LOWER(CONVERT(coalesce($thistab.d,0) USING utf8))" . $t->value->table_matcher());
+                $q[] = $sqi->columns[$t->link];
             } else {
+                $sqi->add_table($thistab, array("left join", "(select paperId, max(value) v from PaperOption where optionId=" . $t->value->option->id . " group by paperId)"));
                 $sqi->add_column($thistab . "_x", "coalesce($thistab.v,0)" . $t->value->table_matcher());
                 $q[] = $sqi->columns[$t->link];
             }
