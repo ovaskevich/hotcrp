@@ -108,8 +108,10 @@ class Ht {
         $optionstyles = get($js, "optionstyles", null);
         $optgroup = "";
         foreach ($opt as $value => $info) {
-            if (is_array($info) && $info[0] === "optgroup")
+            if (is_array($info) && isset($info[0]) && $info[0] === "optgroup")
                 $info = (object) array("type" => "optgroup", "label" => get($info, 1));
+            else if (is_array($info))
+                $info = (object) $info;
             else if (is_scalar($info)) {
                 $info = (object) array("label" => $info);
                 if (is_array($disabled) && isset($disabled[$value]))
@@ -117,9 +119,11 @@ class Ht {
                 if ($optionstyles && isset($optionstyles[$value]))
                     $info->style = $optionstyles[$value];
             }
+            if (isset($info->value))
+                $value = $info->value;
 
             if ($info === null)
-                $x .= '<option disabled="disabled"></option>';
+                $x .= '<option label=" " disabled="disabled"></option>';
             else if (isset($info->type) && $info->type === "optgroup") {
                 $x .= $optgroup;
                 if ($info->label) {
@@ -388,6 +392,10 @@ class Ht {
                             '<a href="$1" rel="noreferrer">$1</a>$2', $html);
     }
 
+    static function check_stash($uniqueid) {
+        return get(self::$_stash_map, $uniqueid, false);
+    }
+
     static function mark_stash($uniqueid) {
         $marked = get(self::$_stash_map, $uniqueid);
         self::$_stash_map[$uniqueid] = true;
@@ -426,13 +434,6 @@ class Ht {
         return $stash;
     }
 
-
-    static function popup($idpart, $content, $form = null, $actions = null) {
-        if ($form && $actions)
-            $form .= "<div class=\"popup_actions\">" . $actions . "</div></form>";
-        self::stash_html("<div id=\"popup_$idpart\" class=\"popupc\">"
-                         . $content . ($form ? $form : "") . "</div>");
-    }
 
     static function xmsg($type, $content) {
         if (substr($type, 0, 1) === "x")

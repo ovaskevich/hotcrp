@@ -93,7 +93,6 @@ class FormulaGraph {
         global $Me;
         $data = [];
         $query_color_classes = [];
-        $tagger = new Tagger($Me);
 
         $fxf = $this->fx->compile_function($Me);
         $reviewf = null;
@@ -104,13 +103,13 @@ class FormulaGraph {
             if (!$Me->can_view_paper($prow))
                 continue;
             $revs = $reviewf ? $reviewf($prow, $Me) : [null];
-            $queries = @$this->papermap[$prow->paperId];
+            $queries = get($this->papermap, $prow->paperId);
             foreach ($queries as $q)
-                if (@$query_color_classes[$q] !== "") {
+                if (get($query_color_classes, $q) !== "") {
                     $c = "";
-                    if (@$prow->paperTags && $Me->can_view_tags($prow))
-                        $c = TagInfo::color_classes($tagger->viewable($prow->paperTags), 2);
-                    if ($c !== "" && (@$query_color_classes[$q] ? : $c) !== $c)
+                    if ($prow->paperTags)
+                        $c = TagInfo::color_classes($prow->viewable_tags($Me), 2);
+                    if ($c !== "" && (get($query_color_classes, $q) ? : $c) !== $c)
                         $c = "";
                     $query_color_classes[$q] = $c;
                 }
@@ -128,32 +127,31 @@ class FormulaGraph {
 
         foreach ($data as $q => &$d) {
             $d = (object) ["d" => $d];
-            $s = @$this->query_styles[$q];
+            $s = get($this->query_styles, $q);
             if ($s && $s !== "plain")
                 $d->className = $s;
-            else if ($s && @$query_color_classes[$style])
+            else if ($s && get($query_color_classes, $style))
                 $d->className = $query_color_classes[$style];
-            if (@$this->queries[$q])
+            if (get($this->queries, $q))
                 $d->label = $this->queries[$q];
         }
         unset($d);
         return $data;
     }
 
-    private function _prepare_reviewer_color(Tagger $tagger) {
+    private function _prepare_reviewer_color(Contact $user) {
         $this->reviewer_color = array();
         foreach (pcMembers() as $p)
-            $this->reviewer_color[$p->contactId] = TagInfo::color_classes($tagger->viewable($p->contactTags));
+            $this->reviewer_color[$p->contactId] = TagInfo::color_classes($p->viewable_tags($user));
     }
 
-    private function _paper_style(PaperInfo $prow, Tagger $tagger) {
+    private function _paper_style(PaperInfo $prow) {
         global $Me;
         $qnum = $this->papermap[$prow->paperId][0];
-        $s = @$this->query_styles[(int) $qnum];
+        $s = get($this->query_styles, (int) $qnum);
         if (!$s && $this->reviewer_color && $Me->can_view_reviewer_tags($prow))
             return self::REVIEWER_COLOR;
-        else if (!$s && @$prow->paperTags && $Me->can_view_tags($prow)
-                 && ($c = $tagger->viewable_color_classes($prow->paperTags)))
+        else if (!$s && $prow->paperTags && ($c = $prow->viewable_tags($Me)))
             return $c;
         else if ($s === "plain")
             return "";
@@ -164,9 +162,8 @@ class FormulaGraph {
     private function _scatter_data($result) {
         global $Me;
         $data = [];
-        $tagger = new Tagger($Me);
         if ($this->fx->result_format() === Fexpr::FREVIEWER && ($this->type & self::BOXPLOT))
-            $this->_prepare_reviewer_color($tagger);
+            $this->_prepare_reviewer_color($Me);
 
         $fxf = $this->fx->compile_function($Me);
         $fyf = $this->fy->compile_function($Me);
@@ -177,7 +174,7 @@ class FormulaGraph {
         while (($prow = PaperInfo::fetch($result, $Me))) {
             if (!$Me->can_view_paper($prow))
                 continue;
-            $s = $ps = $this->_paper_style($prow, $tagger);
+            $s = $ps = $this->_paper_style($prow);
             $d = [0, 0, 0];
             $revs = $reviewf ? $reviewf($prow, $Me) : [null];
             foreach ($revs as $rcid) {
@@ -189,7 +186,7 @@ class FormulaGraph {
                 if ($rcid && ($o = $prow->review_ordinal($rcid)))
                     $d[2] .= unparseReviewOrdinal($o);
                 if ($ps === self::REVIEWER_COLOR)
-                    $s = @$this->reviewer_color[$d[0]] ? : "";
+                    $s = get($this->reviewer_color, $d[0]) ? : "";
                 if ($this->fx_query) {
                     foreach ($this->papermap[$prow->paperId] as $q) {
                         $d[0] = $q;
@@ -205,19 +202,18 @@ class FormulaGraph {
     // combine data: [x, y, pids, style, [query]]
 
     public static function barchart_compare($a, $b) {
-        if ((int) @$a[4] != (int) @$b[4])
-            return (int) @$a[4] - (int) @$b[4];
+        if (get_i($a, 4) != get_i($b, 4))
+            return get_i($a, 4) - get_i($b, 4);
         if ($a[0] != $b[0])
             return $a[0] < $b[0] ? -1 : 1;
-        return @strcmp($a[3], $b[3]);
+        return strcmp($a[3], $b[3]);
     }
 
     private function _combine_data($result) {
         global $Me;
         $data = [];
-        $tagger = new Tagger($Me);
         if ($this->fx->result_format() === Fexpr::FREVIEWER)
-            $this->_prepare_reviewer_color($tagger);
+            $this->_prepare_reviewer_color($Me);
 
         $fxf = $this->fx->compile_function($Me);
         list($fytrack, $fycombine) = $this->fy->compile_combine_functions($Me);
@@ -229,13 +225,13 @@ class FormulaGraph {
             if (!$Me->can_view_paper($prow))
                 continue;
             $queries = $this->papermap[$prow->paperId];
-            $s = $ps = $this->_paper_style($prow, $tagger);
+            $s = $ps = $this->_paper_style($prow);
             $revs = $reviewf ? $reviewf($prow, $Me) : [null];
             foreach ($revs as $rcid) {
                 if (($x = $fxf($prow, $rcid, $Me)) === null)
                     continue;
                 if ($ps === self::REVIEWER_COLOR)
-                    $s = @$this->reviewer_color[$d[0]] ? : "";
+                    $s = get($this->reviewer_color, $d[0]) ? : "";
                 $d = [$x, $fytrack($prow, $rcid, $Me), $prow->paperId, $s];
                 if ($rcid && ($o = $prow->review_ordinal($rcid)))
                     $d[2] .= unparseReviewOrdinal($o);
@@ -251,10 +247,10 @@ class FormulaGraph {
         $ndata = [];
         for ($i = 0; $i != count($data); $i = $j) {
             $d = [$data[$i][0], [$data[$i][1]], [$data[$i][2]], $data[$i][3],
-                  @$data[$i][4]];
+                  get($data[$i], 4)];
             for ($j = $i + 1;
                  $j != count($data) && $data[$j][0] == $d[0]
-                 && @$data[$j][4] == $d[4]
+                 && get($data[$j], 4) == $d[4]
                  && (!$is_sum || $data[$j][3] == $d[3]);
                  ++$j) {
                 $d[1][] = $data[$j][1];
@@ -334,7 +330,7 @@ class FormulaGraph {
         $cids = array_filter(array_keys($cids), "is_numeric");
         $result = Dbl::qe("select contactId, firstName, lastName, email, roles, contactTags from ContactInfo where contactId ?a", $cids);
         $this->reviewers = [];
-        while ($result && ($c = $result->fetch_object("Contact")))
+        while ($result && ($c = Contact::fetch($result)))
             $this->reviewers[$c->contactId] = $c;
         Dbl::free($result);
         uasort($this->reviewers, "Contact::compare");
@@ -355,7 +351,7 @@ class FormulaGraph {
         $i = 0;
         $m = [];
         foreach ($Conf->defined_round_list() as $n => $rname)
-            if (@$rs[$n]) {
+            if (get($rs, $n)) {
                 $this->remapped_rounds[++$i] = $rname;
                 $m[$n] = $i;
             }
@@ -413,12 +409,11 @@ class FormulaGraph {
                     . $n . "," . json_encode($ol) . "," . json_encode($format->option_class_prefix) . ")";
         } else if ($format === Fexpr::FREVIEWER) {
             $x = [];
-            $tagger = new Tagger($Me);
             foreach ($this->reviewers as $r) {
                 $rd = ["text" => $Me->name_text_for($r),
                        "search" => "re:" . $r->email];
                 if ($Me->can_view_reviewer_tags()
-                    && ($colors = $tagger->viewable_color_classes($r->contactTags)))
+                    && ($colors = $r->viewable_color_classes($Me)))
                     $rd["color_classes"] = $colors;
                 $x[$r->sort_position] = $rd;
             }

@@ -312,13 +312,12 @@ function parseBulkFile($text, $filename) {
         }
         $cj->id = "new";
 
-        $ustatus = new UserStatus(array("send_email" => true));
+        $ustatus = new UserStatus(array("send_email" => true, "no_deprivilege_self" => true));
         if (($saved_user = save_user($cj, $ustatus, null, true)))
             $success[] = "<a href=\"" . hoturl("profile", "u=" . urlencode($saved_user->email)) . "\">"
                 . Text::user_html_nolink($saved_user) . "</a>";
-        else
-            foreach ($ustatus->error_messages() as $e)
-                $errors[] = "<span class='lineno'>" . $filename . $csv->lineno() . ":</span> " . $e;
+        foreach ($ustatus->error_messages() as $e)
+            $errors[] = "<span class='lineno'>" . $filename . $csv->lineno() . ":</span> " . $e;
     }
 
     if (count($unknown_topics))
@@ -705,7 +704,7 @@ if ((!$newProfile && $Acct->isPC) || $Me->privChair) {
 
 if ($newProfile || $Acct->contactId != $Me->contactId || $Me->privChair) {
     echo '<h3 class="profile">Roles</h3>', "\n",
-      "<table><tr><td class=\"nowrap\">\n";
+      "<table><tr><td class=\"nw\">\n";
     foreach (array("chair" => "PC chair",
                    "pc" => "PC member",
                    "no" => "Not on the PC") as $k => $v) {
@@ -714,7 +713,7 @@ if ($newProfile || $Acct->contactId != $Me->contactId || $Me->privChair) {
             "&nbsp;", Ht::label($v), "<br />\n";
     }
 
-    echo "</td><td><span class='sep'></span></td><td class='nowrap'>";
+    echo "</td><td><span class='sep'></span></td><td class='nw'>";
     echo Ht::checkbox_h("ass", 1, !!@($formcj->roles->sysadmin)), "&nbsp;</td>",
         "<td>", Ht::label("Sysadmin"), "<br/>",
         '<div class="hint">Sysadmins and PC chairs have full control over all site operations. Sysadmins need not be members of the PC. There’s always at least one administrator (sysadmin or chair).</div></td></tr></table>', "\n";
@@ -776,7 +775,7 @@ if ($newProfile || $Acct->isPC || $Me->privChair) {
 }
 
 
-echo "<div class='aa'><table class='pt_buttons'>\n";
+echo "<div class='aa c'><table class='pt_buttons'>\n";
 $buttons = array(Ht::submit("register", $newProfile ? "Create account" : "Save changes", array("class" => "bb")));
 if ($Me->privChair && !$newProfile && $Me->contactId != $Acct->contactId) {
     $tracks = databaseTracks($Acct->contactId);
@@ -857,9 +856,9 @@ if ($newProfile) {
         $bulkentry = $session_bulkentry[1];
         $Conf->save_session("profile_bulkentry", null);
     }
-    echo '<div class="f-contain"><div class="f-i">',
-        '<div class="f-e">', Ht::textarea("bulkentry", $bulkentry,
-                                          array("rows" => 1, "cols" => 80, "placeholder" => "Enter users one per line")),
+    echo '<div class="f-contain"><div class="f-i"><div class="f-e">',
+        Ht::textarea("bulkentry", $bulkentry,
+                     ["rows" => 1, "cols" => 80, "placeholder" => "Enter users one per line"]),
         '</div></div></div>';
 
     echo '<div class="g"><strong>OR</strong> &nbsp;',

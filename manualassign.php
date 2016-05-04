@@ -115,7 +115,7 @@ $Conf->header("Assignments &nbsp;&#x2215;&nbsp; <strong>Manual</strong>", "assig
 echo '<div class="psmode">',
     '<div class="papmode"><a href="', hoturl("autoassign"), '">Automatic</a></div>',
     '<div class="papmodex"><a href="', hoturl("manualassign"), '">Manual</a></div>',
-    '<div class="papmode"><a href="', hoturl("bulkassign"), '">Upload</a></div>',
+    '<div class="papmode"><a href="', hoturl("bulkassign"), '">Bulk update</a></div>',
     '</div><hr class="c" />';
 
 
@@ -125,7 +125,7 @@ Assignment methods:
 <ul><li><a href='", hoturl("autoassign"), "'>Automatic</a></li>
  <li><a href='", hoturl("manualassign"), "' class='q'><strong>Manual by PC member</strong></a></li>
  <li><a href='", hoturl("assign"), "'>Manual by paper</a></li>
- <li><a href='", hoturl("bulkassign"), "'>Upload</a></li>
+ <li><a href='", hoturl("bulkassign"), "'>Bulk update</a></li>
 </ul>
 <hr class='hr' />\n";
 if ($qreq->kind == "a")
@@ -266,11 +266,11 @@ if ($reviewer > 0) {
             $interest[$row[1] > 0 ? 1 : 0][$row[0]] = $row[1];
     if (count($interest[1]))
         $col[0][] = "<div class='f-c'>High interest topics</div><div class='f-e'>"
-            . PaperInfo::unparse_topics(array_keys($interest[1]), array_values($interest[1]), true)
+            . PaperInfo::unparse_topic_list_html(array_keys($interest[1]), array_values($interest[1]), true)
             . "</div>";
     if (count($interest[0]))
         $col[0][] = "<div class='f-c'>Low interest topics</div><div class='f-e'>"
-            . PaperInfo::unparse_topics(array_keys($interest[0]), array_values($interest[0]), true)
+            . PaperInfo::unparse_topic_list_html(array_keys($interest[0]), array_values($interest[0]), true)
             . "</div>";
 
     // Table

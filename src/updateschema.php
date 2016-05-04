@@ -59,7 +59,7 @@ function update_schema_create_options($Conf) {
         $opj->name = $row->optionName;
 
         $abbr = PaperOption::abbreviate($opj->name, $opj->id);
-        if (!@$byabbr[$abbr]) {
+        if (!get($byabbr, $abbr)) {
             $opj->abbr = $abbr;
             $byabbr[$abbr] = $opj;
         } else {
@@ -183,7 +183,7 @@ function update_schema_unaccented_name($Conf) {
 
 function update_schema_transfer_country($Conf) {
     $result = Dbl::ql($Conf->dblink, "select * from ContactInfo where `data` is not null and `data`!='{}'");
-    while ($result && ($c = $result->fetch_object("Contact"))) {
+    while ($result && ($c = Contact::fetch($result))) {
         if (($country = $c->data("country")))
             Dbl::ql($Conf->dblink, "update ContactInfo set country=? where contactId=?", $country, $c->contactId);
     }
@@ -205,6 +205,11 @@ function update_schema_review_word_counts($Conf) {
     } while (count($q) == 32);
 }
 
+function update_schema_bad_comment_timeDisplayed($Conf) {
+    $badids = Dbl::fetch_first_columns($Conf->dblink, "select a.commentId from PaperComment a join PaperComment b where a.paperId=b.paperId and a.commentId<b.commentId and a.timeDisplayed>b.timeDisplayed");
+    return !count($badids) || Dbl::ql($Conf->dblink, "update PaperComment set timeDisplayed=0 where commentId ?a", $badids);
+}
+
 function update_schema_drop_keys_if_exist($table, $key) {
     $indexes = Dbl::fetch_first_columns("select distinct index_name from information_schema.statistics where table_schema=database() and `table_name`='$table'");
     $drops = [];
@@ -221,7 +226,7 @@ function updateSchema($Conf) {
     global $Opt, $OK;
     // avoid error message abut timezone, set to $Opt
     // (which might be overridden by database values later)
-    if (function_exists("date_default_timezone_set") && @$Opt["timezone"])
+    if (function_exists("date_default_timezone_set") && isset($Opt["timezone"]) && $Opt["timezone"])
         date_default_timezone_set($Opt["timezone"]);
     while (($result = Dbl::ql("insert into Settings set name='__schema_lock', value=1 on duplicate key update value=1"))
            && $result->affected_rows == 0)
@@ -642,7 +647,7 @@ function updateSchema($Conf) {
     if ($Conf->sversion == 75) {
         foreach (array("capability_gc", "s3_scope", "s3_signing_key") as $k)
             if (isset($Conf->settings[$k])) {
-                $Conf->save_setting("__" . $k, $Conf->settings[$k], @$Conf->settingTexts[$k]);
+                $Conf->save_setting("__" . $k, $Conf->settings[$k], get($Conf->settingTexts, $k));
                 $Conf->save_setting($k, null);
             }
         $Conf->update_schema_version(76);
@@ -717,9 +722,9 @@ function updateSchema($Conf) {
         $Conf->update_schema_version(94);
     if ($Conf->sversion == 94
         && Dbl::ql("alter table PaperOption modify `data` varbinary(32768) DEFAULT NULL")) {
-        foreach (PaperOption::option_list($Conf) as $opt)
-            if ($opt->type === "text")
-                Dbl::ql("delete from PaperOption where optionId={$opt->id} and data=''");
+        foreach (PaperOption::nonfixed_option_list($Conf) as $xopt)
+            if ($xopt->type === "text")
+                Dbl::ql("delete from PaperOption where optionId={$xopt->id} and data=''");
         $Conf->update_schema_version(95);
     }
     if ($Conf->sversion == 95
@@ -928,6 +933,30 @@ set ordinal=(t.maxOrdinal+1) where commentId=$row[1]");
     if ($Conf->sversion == 126
         && Dbl::ql("update ContactInfo set disabled=1, password='' where email regexp '^anonymous[0-9]*\$'"))
         $Conf->update_schema_version(127);
+    if ($Conf->sversion == 127
+        && Dbl::ql("update PaperReview set reviewWordCount=null"))
+        $Conf->update_schema_version(128);
+    if ($Conf->sversion == 128
+        && update_schema_bad_comment_timeDisplayed($Conf))
+        $Conf->update_schema_version(129);
+    if ($Conf->sversion == 129
+        && Dbl::ql("update PaperComment set timeDisplayed=1 where timeDisplayed=0 and timeNotified>0"))
+        $Conf->update_schema_version(130);
+    if ($Conf->sversion == 130
+        && Dbl::ql("DROP TABLE IF EXISTS `PaperTagAnno`")
+        && Dbl::ql("CREATE TABLE `PaperTagAnno` (
+  `tag` varchar(40) NOT NULL,   # see TAG_MAXLEN in header.php
+  `annoId` int(11) NOT NULL,
+  `tagIndex` float NOT NULL DEFAULT '0',
+  `heading` varbinary(8192) DEFAULT NULL,
+  `annoFormat` tinyint(1) DEFAULT NULL,
+  `infoJson` varbinary(32768) DEFAULT NULL,
+  PRIMARY KEY (`tag`,`annoId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8"))
+        $Conf->update_schema_version(131);
+    if ($Conf->sversion == 131
+        && Dbl::ql("alter table PaperStorage modify `infoJson` varbinary(32768) DEFAULT NULL"))
+        $Conf->update_schema_version(132);
 
     Dbl::ql("delete from Settings where name='__schema_lock'");
 }

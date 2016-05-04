@@ -7,15 +7,27 @@ class MeetingTracker {
     static function lookup() {
         global $Conf, $Now;
         $tracker = $Conf->setting_json("tracker");
-        if ($tracker && $tracker->update_at >= $Now - 150)
+        if ($tracker && (!$tracker->trackerid || $tracker->update_at >= $Now - 150))
             return $tracker;
-        return null;
+        else {
+            $p = $tracker ? $tracker->position_at : 0;
+            return (object) ["trackerid" => false, "position_at" => $p];
+        }
+    }
+
+    static private function next_position_at() {
+        global $Conf;
+        $tracker = $Conf->setting_json("tracker");
+        return max(microtime(true), $tracker ? $tracker->position_at + 0.1 : 0);
     }
 
     static function clear() {
         global $Conf;
-        $Conf->save_setting("tracker", null);
-        self::contact_tracker_comet(null);
+        if ($Conf->setting("tracker")) {
+            $t = ["trackerid" => false, "position_at" => self::next_position_at()];
+            $Conf->save_setting("tracker", 0, (object) $t);
+            self::contact_tracker_comet();
+        }
         return null;
     }
 
@@ -31,35 +43,42 @@ class MeetingTracker {
                                   "url" => $list->url,
                                   "description" => $list->description,
                                   "start_at" => $Now,
-                                  "position_at" => $Now,
+                                  "position_at" => 0,
                                   "update_at" => $Now,
                                   "owner" => $Me->contactId,
                                   "sessionid" => session_id(),
                                   "position" => $position);
         $old_tracker = self::lookup();
-        if ($old_tracker
-            && $old_tracker->trackerid == $tracker->trackerid) {
+        if ($old_tracker->trackerid == $tracker->trackerid) {
             $tracker->start_at = $old_tracker->start_at;
             if ($old_tracker->listid == $tracker->listid
                 && $old_tracker->position == $tracker->position)
                 $tracker->position_at = $old_tracker->position_at;
-            else if ($old_tracker->position_at == $tracker->position_at)
-                $tracker->position_at = microtime(true);
         }
-        self::save($tracker);
-        self::contact_tracker_comet($tracker);
+        if (!$tracker->position_at)
+            $tracker->position_at = self::next_position_at();
+        $Conf->save_setting("tracker", 1, $tracker);
+        self::contact_tracker_comet();
         return $tracker;
     }
 
-    static function contact_tracker_comet($tracker, $pids = null) {
+    static function contact_tracker_comet($pids = null) {
         global $Opt, $Now;
+
+        $comet_dir = get($Opt, "trackerCometUpdateDirectory");
+        $comet_url = get($Opt, "trackerCometSite");
+        if (!$comet_dir && !$comet_url)
+            return;
+
+        // calculate status
         $conference = Navigation::site_absolute();
+        $tracker = self::lookup();
 
         // first drop notification json in trackerCometUpdateDirectory
-        if (($comet_dir = @$Opt["trackerCometUpdateDirectory"])) {
+        if ($comet_dir) {
             $j = array("ok" => true, "conference" => $conference,
                        "tracker_status" => self::tracker_status($tracker),
-                       "tracker_status_at" => microtime(true));
+                       "tracker_status_at" => $tracker->position_at);
             if ($pids)
                 $j["pulse"] = true;
             if (!str_ends_with($comet_dir, "/"))
@@ -80,7 +99,7 @@ class MeetingTracker {
         }
 
         // second contact trackerCometSite
-        if (!($comet_url = @$Opt["trackerCometSite"]))
+        if (!$comet_url)
             return;
 
         if (!preg_match(',\Ahttps?:,', $comet_url)) {
@@ -92,15 +111,17 @@ class MeetingTracker {
             else
                 $comet_url = $m[1] . $m[2] . $comet_url;
         }
+        if (!str_ends_with($comet_url, "/"))
+            $comet_url .= "/";
 
         $context = stream_context_create(array("http" =>
-                                               array("method" => "get",
+                                               array("method" => "GET",
                                                      "ignore_errors" => true,
                                                      "content" => "",
                                                      "timeout" => 1.0)));
-        $comet_url .= "?conference=" . urlencode($conference)
+        $comet_url .= "update?conference=" . urlencode($conference)
             . "&tracker_status=" . urlencode(self::tracker_status($tracker))
-            . "&tracker_status_at=" . microtime(true);
+            . "&tracker_status_at=" . $tracker->position_at;
         if ($pids)
             $comet_url .= "&pulse=1";
         $stream = @fopen($comet_url, "r", false, $context);
@@ -113,11 +134,6 @@ class MeetingTracker {
             || !($data = json_decode($data)))
             error_log($comet_url . ": read failure");
         fclose($stream);
-    }
-
-    static function save($mn) {
-        global $Conf;
-        $Conf->save_setting("tracker", 1, $mn);
     }
 
     static private function status_papers($status, $tracker, $acct) {
@@ -133,19 +149,22 @@ class MeetingTracker {
             $pcm = pcMembers();
         }
 
-        $result = $Conf->qe("select p.paperId, p.title, p.leadContactId, p.managerContactId, r.reviewType, conf.conflictType{$col}
+        $result = $Conf->qe("select p.paperId, p.title, p.paperFormat, p.leadContactId, p.managerContactId, r.reviewType, conf.conflictType{$col}
             from Paper p
             left join PaperReview r on (r.paperId=p.paperId and " . ($acct->contactId ? "r.contactId=$acct->contactId" : "false") . ")
             left join PaperConflict conf on (conf.paperId=p.paperId and " . ($acct->contactId ? "conf.contactId=$acct->contactId" : "false") . ")
             ${j}where p.paperId in (" . join(",", $pids) . ")");
 
         $papers = array();
-        while (($row = edb_orow($result))) {
+        while (($row = PaperInfo::fetch($result, $acct))) {
             $papers[$row->paperId] = $p = (object) array();
-            if (($acct->privChair || !$row->conflictType || !@$status->hide_conflicts)
+            if (($acct->privChair || !$row->conflictType
+                 || !get($status, "hide_conflicts"))
                 && $acct->tracker_kiosk_state != 1) {
                 $p->pid = (int) $row->paperId;
                 $p->title = $row->title;
+                if (($format = $row->title_format()))
+                    $p->format = $format;
             }
             if ($acct->contactId > 0
                 && $row->managerContactId == $acct->contactId)
@@ -160,7 +179,7 @@ class MeetingTracker {
             if ($pc_conflicts) {
                 $p->pc_conflicts = array();
                 foreach (explode(",", (string) $row->conflictIds) as $cid)
-                    if (($pc = @$pcm[$cid]))
+                    if (($pc = get($pcm, $cid)))
                         $p->pc_conflicts[$pc->sort_position] = (object) array("email" => $pc->email, "name" => Text::name_text($pc));
                 ksort($p->pc_conflicts);
                 $p->pc_conflicts = array_values($p->pc_conflicts);
@@ -173,24 +192,25 @@ class MeetingTracker {
             $status->papers[] = $papers[$pid];
     }
 
-    static function status($acct) {
+    static function info_for($acct) {
         global $Conf, $Opt, $Now;
         $tracker = self::lookup();
-        if (!$tracker || !$acct->can_view_tracker())
+        if (!$tracker->trackerid || !$acct->can_view_tracker())
             return false;
         if (($status = $Conf->session("tracker"))
             && $status->trackerid == $tracker->trackerid
             && $status->position == $tracker->position
-            && @($status->calculated_at >= $Now - 30)
+            && $status->calculated_at >= $Now - 30
             && !$acct->is_actas_user())
             return $status;
         $status = (object) array("trackerid" => $tracker->trackerid,
                                  "listid" => $tracker->listid,
                                  "position" => $tracker->position,
+                                 "start_at" => $tracker->start_at,
                                  "position_at" => $tracker->position_at,
                                  "url" => $tracker->url,
                                  "calculated_at" => $Now);
-        if (!!@$Opt["trackerHideConflicts"])
+        if (!!get($Opt, "trackerHideConflicts"))
             $status->hide_conflicts = true;
         if ($status->position !== false)
             self::status_papers($status, $tracker, $acct);
@@ -200,7 +220,7 @@ class MeetingTracker {
     }
 
     static function tracker_status($tracker) {
-        if ($tracker)
+        if ($tracker->trackerid)
             return $tracker->trackerid . "@" . $tracker->position_at;
         else
             return "off";
@@ -208,28 +228,37 @@ class MeetingTracker {
 
     static function trackerstatus_api($user = null, $qreq = null, $prow = null) {
         $tracker = self::lookup();
-        $a = array("ok" => true, "tracker_status" => self::tracker_status($tracker));
-        if ($tracker)
-            $a["tracker_status_at"] = $tracker->position_at;
-        json_exit($a);
+        json_exit(["ok" => true,
+                   "tracker_status" => self::tracker_status($tracker),
+                   "tracker_status_at" => $tracker->position_at]);
     }
 
-    static function track_api($user) {
+    static function track_api($qreq, $user) {
         if (!$user->privChair || !check_post())
             json_exit(array("ok" => false));
         // argument: IDENTIFIER LISTNUM [POSITION] -OR- stop
-        if ($_REQUEST["track"] === "stop")
+        if ($qreq->track === "stop") {
             self::clear();
-        else {
-            $args = preg_split('/\s+/', $_REQUEST["track"]);
-            if (count($args) >= 2
-                && ($xlist = SessionList::lookup($args[1]))
-                && str_starts_with($xlist->listid, "p/")) {
-                $position = null;
-                if (count($args) >= 3 && ctype_digit($args[2]))
-                    $position = array_search((int) $args[2], $xlist->ids);
-                self::update($xlist, $args[0], $position);
-            }
+            return;
+        }
+        // check tracker_start_at to ignore concurrent updates
+        if (($start_at = $qreq->tracker_start_at)
+            && ($tracker = self::lookup())) {
+            $time = $tracker->position_at;
+            if (isset($tracker->start_at))
+                $time = $tracker->start_at;
+            if ($time > $start_at)
+                return;
+        }
+        // actually track
+        $args = preg_split('/\s+/', $qreq->track);
+        if (count($args) >= 2
+            && ($xlist = SessionList::lookup($args[1]))
+            && str_starts_with($xlist->listid, "p/")) {
+            $position = null;
+            if (count($args) >= 3 && ctype_digit($args[2]))
+                $position = array_search((int) $args[2], $xlist->ids);
+            self::update($xlist, $args[0], $position);
         }
     }
 }

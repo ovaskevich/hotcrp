@@ -14,8 +14,17 @@ else if ($Opt["postfixMailer"] === true)
 else
     define("MAILER_EOL", $Opt["postfixMailer"]);
 
-class Mailer {
+class MailPreparation {
+    public $subject = "";
+    public $body = "";
+    public $preparation_owner = "";
+    public $to = array();
+    public $sendable = false;
+    public $headers = array();
+    public $errors = array();
+}
 
+class Mailer {
     const EXPAND_BODY = 0;
     const EXPAND_HEADER = 1;
     const EXPAND_EMAIL = 2;
@@ -32,7 +41,7 @@ class Mailer {
     protected $reason = null;
     protected $adminupdate = null;
     protected $notes = null;
-    protected $unique_expansion = false;
+    protected $preparation = null;
     public $capability = null;
 
     protected $expansionType = null;
@@ -161,7 +170,8 @@ class Mailer {
             return Navigation::php_suffix();
         if (preg_match('/\A%(CONTACT|NAME|EMAIL|FIRST|LAST)%\z/', $what, $m)) {
             if ($this->recipient) {
-                $this->unique_expansion = true;
+                if ($this->preparation)
+                    $this->preparation->preparation_owner = $this->recipient->email;
                 return $this->expand_user($this->recipient, $m[1]);
             } else if ($isbool)
                 return false;
@@ -406,6 +416,10 @@ class Mailer {
                 || !preg_match(';\A(?:_.*|example\.(?:com|net|org))\z;i', substr($email, $at + 1)));
     }
 
+    function create_preparation() {
+        return new MailPreparation;
+    }
+
     function make_preparation($template, $rest = array()) {
         global $Conf, $Opt;
 
@@ -418,13 +432,14 @@ class Mailer {
                 $template[$lcfield] = $rest[$lcfield];
 
         // expand the template
-        $this->unique_expansion = false;
+        $prep = $this->preparation = $this->create_preparation();
         $m = $this->expand($template);
-        $prep = (object) array();
+        $this->preparation = null;
+
         $subject = MimeText::encode_header("Subject: ", $m["subject"]);
         $prep->subject = substr($subject, 9);
+
         $prep->body = $m["body"];
-        $prep->unique_preparation = $this->unique_expansion;
 
         // look up recipient; use preferredEmail if set
         $recipient = $this->recipient;
@@ -451,18 +466,16 @@ class Mailer {
                 else {
                     $prep->errors[$lcfield] = $text;
                     if (!get($rest, "no_error_quit"))
-                        Conf::msg_error("$field destination “<tt>" . htmlspecialchars($text) . "</tt>” isn't a valid email list.");
+                        Conf::msg_error("$field destination “<samp>" . htmlspecialchars($text) . "</samp>” isn't a valid email list.");
                 }
             }
         $prep->headers["mime-version"] = "MIME-Version: 1.0" . MAILER_EOL;
         $prep->headers["content-type"] = "Content-Type: text/plain; charset=utf-8" . MAILER_EOL;
 
-        if (get($prep, "errors") && !get($rest, "no_error_quit"))
+        if ($prep->errors && !get($rest, "no_error_quit"))
             return false;
-        else {
-            $this->decorate_preparation($prep);
+        else
             return $prep;
-        }
     }
 
     static function preparation_differs($prep1, $prep2) {
@@ -470,8 +483,7 @@ class Mailer {
             || $prep1->body != $prep2->body
             || get($prep1->headers, "cc") != get($prep2->headers, "cc")
             || get($prep1->headers, "reply-to") != get($prep2->headers, "reply-to")
-            || $prep1->unique_preparation
-            || $prep2->unique_preparation;
+            || $prep1->preparation_owner != $prep2->preparation_owner;
     }
 
     static function merge_preparation_to($prep, $to) {
@@ -544,7 +556,7 @@ class Mailer {
         $a = array_keys($this->_unexpanded);
         natcasesort($a);
         for ($i = 0; $i < count($a); ++$i)
-            $a[$i] = "<tt>" . htmlspecialchars($a[$i]) . "</tt>";
+            $a[$i] = "<code>" . htmlspecialchars($a[$i]) . "</code>";
         if (count($a) == 1)
             return "Keyword-like string " . commajoin($a) . " was not recognized.";
         else

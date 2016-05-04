@@ -171,15 +171,26 @@ function option_class_prefix(fieldj) {
 
 function check_change(fid) {
     var fieldj = original[fid] || {}, j, sv;
-    if ($.trim($("#shortName_" + fid).val()) != fieldj.name
-        || $("#order_" + fid).val() != (fieldj.position || 0)
-        || $("#description_" + fid).val() != (fieldj.description || "")
-        || $("#authorView_" + fid).val() != (fieldj.visibility || "pc")
-        || $.trim($("#options_" + fid).val()) != $.trim(options_to_text(fieldj))
-        || ((j = $("#option_class_prefix_" + fid)) && j.length
-            && j.val() != option_class_prefix(fieldj))
-        || ($("#round_list_" + fid).val() || "") != (fieldj.round_list || []).join(" "))
+    function ch(why) {
         hiliter("reviewform_container");
+        return true;
+    }
+    if ($.trim($("#shortName_" + fid).val()) != fieldj.name)
+        return ch("shortName");
+    if ($("#order_" + fid).val() != (fieldj.position || 0))
+        return ch("order");
+    if (!text_eq($("#description_" + fid).val(), fieldj.description))
+        return ch("description");
+    if ($("#authorView_" + fid).val() != (fieldj.visibility || "pc"))
+        return ch("authorView");
+    if (!text_eq($.trim($("#options_" + fid).val()), $.trim(options_to_text(fieldj))))
+        return ch("options");
+    if ((j = $("#option_class_prefix_" + fid)) && j.length
+        && j.val() != option_class_prefix(fieldj))
+        return ch("option_class_prefix");
+    if (($("#round_list_" + fid).val() || "") != (fieldj.round_list || []).join(" "))
+        return ch("round_list");
+    return false;
 }
 
 function check_this_change() {
@@ -384,15 +395,18 @@ function append_field(fid, pos) {
     } else
         $f.find(".reviewrow_options").remove();
 
-    if (hotcrp_status.rev && (hotcrp_status.rev.rounds || []).length > 1) {
-        var rname = hotcrp_status.rev.rounds, v, j, text;
+    var rnames = [];
+    for (i in hotcrp_status.revs || {})
+        rnames.push(i);
+    if (hotcrp_status.rev && rnames.length > 1) {
+        var v, j, text;
         $j = $f.find(".reviewfield_round_list");
-        for (i = 0; i < (1 << rname.length) - 1;
-             i = next_lexicographic_permutation(i, rname.length)) {
+        for (i = 0; i < (1 << rnames.length) - 1;
+             i = next_lexicographic_permutation(i, rnames.length)) {
             text = [];
-            for (j = 0; j < rname.length; ++j)
+            for (j = 0; j < rnames.length; ++j)
                 if (i & (1 << j))
-                    text.push(rname[j]);
+                    text.push(rnames[j]);
             if (!text.length)
                 $j.append("<option value=\"\">All rounds</option>");
             else if (text.length == 1)
@@ -418,7 +432,7 @@ function append_field(fid, pos) {
     $f.find(".hottooltip").each(add_tooltip);
 }
 
-function rfs(fieldmapj, originalj, samplesj, errors, request) {
+function rfs(fieldmapj, originalj, samplesj, errf, request) {
     var i, fid, $j;
     fieldmap = fieldmapj;
     original = originalj;
@@ -440,10 +454,14 @@ function rfs(fieldmapj, originalj, samplesj, errors, request) {
     for (i in request || {}) {
         if (!$("#" + i).length)
             rfs.add(false, i.replace(/^.*_/, ""));
-        $("#" + i).val(request[i]);
-        hiliter("reviewform_container");
+        $j = $("#" + i);
+        if (!text_eq($j.val(), request[i])) {
+            $j.val(request[i]);
+            hiliter("reviewform_container");
+            foldup($j[0], null, {n: 2, f: false});
+        }
     }
-    for (i in errors || {}) {
+    for (i in errf || {}) {
         $j = $(".errloc_" + i);
         $j.addClass("error");
         foldup($j[0], null, {n: 2, f: false});

@@ -151,6 +151,10 @@ class ReviewField {
             || ($rrow && ($fid = $this->id) && $rrow->$fid);
     }
 
+    public function include_word_count() {
+        return !$this->has_options && $this->view_score >= VIEWSCORE_AUTHORDEC;
+    }
+
     public function analyze() {
         if ($this->has_options && !$this->analyzed) {
             $scores = array_keys($this->options);
@@ -345,6 +349,7 @@ class ReviewForm {
     static public $revtype_names = ["None", "External", "PC", "Secondary", "Primary"];
 
     // XXX all negative ratings should have negative numbers
+    // values are HTML
     static public $rating_types = array("n" => "average",
                                         1 => "very helpful",
                                         0 => "too short",
@@ -486,6 +491,12 @@ class ReviewForm {
         return $fmap;
     }
 
+    public function unparse_ratings_json() {
+        $rt = self::$rating_types;
+        $rt["order"] = array_keys(self::$rating_types);
+        return $rt;
+    }
+
     static public function reviewArchiveFields() {
         global $Conf;
         $rf = self::get();
@@ -502,9 +513,7 @@ class ReviewForm {
     }
 
     private static function format_description($rrow, $text) {
-        if (($format = $rrow ? $rrow->reviewFormat : null) === null)
-            $format = Conf::$gDefaultFormat;
-        if (($f = Conf::format_info($format))) {
+        if (($f = Conf::format_info($rrow ? $rrow->reviewFormat : null))) {
             if ($text && ($t = get($f, "description_text")))
                 return $t;
             $t = get($f, "description");
@@ -674,7 +683,8 @@ class ReviewForm {
         $wc = 0;
         foreach ($this->forder as $field => $f)
             if ($rrow->$field
-                && (!$f->round_mask || $f->is_round_visible($rrow)))
+                && (!$f->round_mask || $f->is_round_visible($rrow))
+                && $f->include_word_count())
                 $wc += count_words($rrow->$field);
         return $wc;
     }
@@ -708,7 +718,8 @@ class ReviewForm {
                         $fval .= "\n";
                     // Check for valid UTF-8; re-encode from Windows-1252 or Mac OS
                     $fval = convert_to_utf8($fval);
-                    $wc += count_words($fval);
+                    if ($f->include_word_count())
+                        $wc += count_words($fval);
                 }
                 if ($rrow && strcmp($rrow->$field, $fval) != 0
                     && strcmp(cleannl($rrow->$field), cleannl($fval)) != 0)
@@ -796,7 +807,7 @@ class ReviewForm {
             $reviewId = $rrow->reviewId;
             $contactId = $rrow->contactId;
         } else {
-            $result = Dbl::qe_raw("insert into PaperReview set paperId=$prow->paperId, contactId=$contact->contactId, reviewType=" . REVIEW_PC . ", requestedBy=$contact->contactId, " . join(", ", $q));
+            $result = Dbl::qe_raw("insert into PaperReview set paperId=$prow->paperId, contactId=$contact->contactId, reviewType=" . REVIEW_PC . ", requestedBy=$contact->contactId, reviewRound=" . $Conf->current_round() . ", " . join(", ", $q));
             $reviewId = $result ? $result->insert_id : null;
             $contactId = $contact->contactId;
         }
@@ -947,7 +958,8 @@ class ReviewForm {
     static private function check_review_author_seen($prow, $rrow, $contact,
                                                      $no_update = false) {
         global $Now;
-        if ($rrow && !@$rrow->reviewAuthorSeen && $contact->act_author_view($prow)
+        if ($rrow && !get($rrow, "reviewAuthorSeen")
+            && $contact->act_author_view($prow)
             && !$contact->is_actas_user()) {
             $rrow->reviewAuthorSeen = $Now;
             if (!$no_update) {
@@ -1378,67 +1390,32 @@ $blind\n";
         return $x;
     }
 
-    private function _showWebDisplayBody($prow, $rrows, $rrow, $reviewOrdinal, &$options) {
-        global $Conf, $Me;
-
-        // Do not show rating counts if rater identity is unambiguous.
-        // See also PaperSearch::_clauseTermSetRating.
-        $visibleRatings = false;
-        if (isset($rrow->numRatings) && $rrow->numRatings > 0) {
-            if (!isset($options["nsubraters"])) {
-                $options["nsubraters"] = 0;
-                $rateset = $Conf->setting("rev_ratings");
-                foreach ($rrows as $rr)
-                    if ($rr->reviewSubmitted
-                        && ($rateset == REV_RATINGS_PC
-                            ? $rr->reviewType > REVIEW_EXTERNAL
-                            : $rateset == REV_RATINGS_PC_EXTERNAL))
-                        $options["nsubraters"]++;
-            }
-            $visibleRatings = ($rrow->contactId != $Me->contactId
-                    || $Me->can_administer($prow) || $options["nsubraters"] > 2
-                    || $Conf->timePCViewAllReviews()
-                    || strpos($rrow->allRatings, ",") !== false);
+    public function set_can_view_ratings($prow, $rrows, $contact) {
+        global $Conf;
+        $my_rrow = null;
+        foreach ($rrows as $rrow)
+            if (!isset($rrow->allRatings) || $rrow->allRatings === "")
+                $rrow->canViewRatings = false;
+            else if ($rrow->contactId != $contact->contactId
+                     || $contact->can_administer($prow)
+                     || $Conf->timePCViewAllReviews()
+                     || strpos($rrow->allRatings, ",") !== false)
+                $rrow->canViewRatings = true;
+            else
+                $my_rrow = $rrow;
+        if ($my_rrow) {
+            // Do not show rating counts if rater identity is unambiguous.
+            // See also PaperSearch::_clauseTermSetRating.
+            $nsubraters = 0;
+            $rateset = $Conf->setting("rev_ratings");
+            foreach ($rrows as $rrow)
+                if ($rrow->reviewNeedsSubmit == 0
+                    && $rrow->contactId != $contact->contactId
+                    && ($rateset == REV_RATINGS_PC_EXTERNAL
+                        || ($rateset == REV_RATINGS_PC && $rrow->reviewType > REVIEW_EXTERNAL)))
+                    ++$nsubraters;
+            $my_rrow->canViewRatings = $nsubraters >= 2;
         }
-        if ($Me->can_view_review_ratings($prow, $rrow)
-            && ($Me->can_rate_review($prow, $rrow) || $visibleRatings)) {
-            $ratesep = "";
-            echo "<div class='rev_rating'>";
-            if ($visibleRatings) {
-                $rates = array();
-                foreach (explode(",", $rrow->allRatings) as $r)
-                    $rates[$r] = defval($rates, $r, 0) + 1;
-                echo "<span class='rev_rating_summary'>Ratings: ";
-                $ratearr = array();
-                foreach ($rates as $type => $count)
-                    if (isset(self::$rating_types[$type]))
-                        $ratearr[] = $count . " &ldquo;" . htmlspecialchars(self::$rating_types[$type]) . "&rdquo;";
-                echo join(", ", $ratearr), "</span>";
-                $ratesep = " <span class='barsep'>·</span> ";
-            }
-            if ($rrow->contactId != $Me->contactId) {
-                $ratinglink = hoturl_post("review", "r=$reviewOrdinal" . (isset($_REQUEST["reviewId"]) ? "" : "&amp;allr=1"));
-                echo $ratesep,
-                    Ht::form_div($ratinglink, array("id" => "ratingform_$reviewOrdinal", "divclass" => "inline")),
-                    "How helpful is this review? &nbsp;",
-                    Ht::select("rating", self::$rating_types, ($rrow->myRating === null ? "n" : $rrow->myRating)),
-                    " ", Ht::submit("Save", array("class" => "fx7")),
-                    "</div></form>",
-                    "<span id='ratingform_${reviewOrdinal}result'></span>";
-                if (!defval($options, "ratingsajax")) {
-                    $Conf->footerScript("addRatingAjax()");
-                    $options["ratingsajax"] = true;
-                }
-            }
-            echo " <span class='barsep'>·</span> <a href='", hoturl("help", "t=revrate"), "'>What is this?</a></div>";
-        }
-
-        if (defval($options, "editmessage"))
-            echo "<div class='hint'>", defval($options, "editmessage"), "</div>\n";
-
-        echo '<hr class="c" /></div><div class="revcard_body"></div></div>', "\n\n";
-
-        $Conf->echoScript("review_form.render_review(\$(\"#r$reviewOrdinal .revcard_body\"), " . json_encode($this->unparse_review_json($prow, $rrow, $Me)) . ");\n");
     }
 
     private function _review_buttons($prow, $rrow, $type, $reviewPostLink) {
@@ -1453,9 +1430,10 @@ $blind\n";
                                     array("class" => "b",
                                           "onclick" => "popup(this,'ref',0)"));
             // Also see $_REQUEST["refuse"] case in review.php.
-            $Conf->footerHtml("<div id='popup_ref' class='popupc'>
-  <p style='margin:0 0 0.3em'>Select “Decline review” to decline this review. Thank you for keeping us informed.</p>
-  " . Ht::form_div($reviewPostLink) . Ht::hidden("refuse", "refuse")
+            $Conf->footerHtml("<div id='popup_ref' class='popupc'>"
+    . Ht::form_div($reviewPostLink)
+    . Ht::hidden("refuse", "refuse")
+    . "<p style='margin:0 0 0.3em'>Select “Decline review” to decline this review. Thank you for keeping us informed.</p>"
     . Ht::textarea("reason", null,
                    array("id" => "refusereviewreason", "rows" => 3, "cols" => 40,
                          "placeholder" => "Optional explanation", "spellcheck" => "true"))
@@ -1505,32 +1483,34 @@ $blind\n";
         if (!$options)
             $options = array();
         $editmode = defval($options, "edit", false);
-        $forceShow = $Me->is_admin_force() ? "&amp;forceShow=1" : "";
 
         $reviewOrdinal = unparseReviewOrdinal($rrow);
+        self::check_review_author_seen($prow, $rrow, $Me);
+
+        if (!$editmode) {
+            $rj = $this->unparse_review_json($prow, $rrow, $Me);
+            if (get($options, "editmessage"))
+                $rj->message_html = $options["editmessage"];
+            $Conf->echoScript("review_form.add_review(" . json_encode($rj) . ");\n");
+            return;
+        }
+
+        // From here on, edit mode.
+        $forceShow = $Me->is_admin_force() ? "&amp;forceShow=1" : "";
         $reviewLinkArgs = "p=$prow->paperId" . ($rrow ? "&amp;r=$reviewOrdinal" : "") . "&amp;m=re" . $forceShow;
         $reviewPostLink = hoturl_post("review", $reviewLinkArgs);
         $reviewDownloadLink = hoturl("review", $reviewLinkArgs . "&amp;downloadForm=1" . $forceShow);
-        $admin = $Me->allow_administer($prow);
-        self::check_review_author_seen($prow, $rrow, $Me);
 
-        if ($editmode) {
-            echo Ht::form($reviewPostLink, array("class" => "revcard")),
-                '<div class="aahc">',
-                Ht::hidden_default_submit("default", "");
-            if ($rrow)
-                echo Ht::hidden("version", defval($rrow, "reviewEditVersion", 0) + 1);
-        }
+        echo Ht::form($reviewPostLink, array("class" => "revcard")),
+            '<div class="aahc">',
+            Ht::hidden_default_submit("default", "");
+        if ($rrow)
+            echo Ht::hidden("version", defval($rrow, "reviewEditVersion", 0) + 1);
         echo '<div class="revcard" id="r', $reviewOrdinal, '"><div class="revcard_head">';
 
         // Links
         if ($rrow) {
-            echo '<div class="floatright">';
-            if (!$editmode && $Me->can_review($prow, $rrow))
-                echo '<a href="' . hoturl("review", "r=$reviewOrdinal" . $forceShow) . '" class="xx">',
-                    Ht::img("edit.png", "[Edit]", "b"),
-                    "&nbsp;<u>Edit</u></a><br />";
-            echo '<a href="' . hoturl("review", "r=$reviewOrdinal&amp;text=1" . $forceShow) . '" class="xx">',
+            echo '<div class="floatright"><a href="' . hoturl("review", "r=$reviewOrdinal&amp;text=1" . $forceShow) . '" class="xx">',
                 Ht::img("txt.png", "[Text]", "b"),
                 "&nbsp;<u>Plain text</u></a>",
                 "</div>";
@@ -1538,8 +1518,7 @@ $blind\n";
 
         echo "<h3>";
         if ($rrow) {
-            echo '<a href="', hoturl("review", "r=$reviewOrdinal" . $forceShow), '" class="',
-                ($editmode ? 'q">Edit ' : 'u">'), "Review";
+            echo '<a href="', hoturl("review", "r=$reviewOrdinal" . $forceShow), '" class="q">Edit Review';
             if ($rrow->reviewSubmitted)
                 echo "&nbsp;#", $reviewOrdinal;
             echo "</a>";
@@ -1578,12 +1557,6 @@ $blind\n";
         if ($sep != $open)
             echo "</span>\n";
 
-        if (!$editmode) {
-            $this->_showWebDisplayBody($prow, $rrows, $rrow, $reviewOrdinal, $options);
-            return;
-        }
-
-        // From here on, edit mode.
         if (defval($options, "editmessage"))
             echo "<div class='hint'>", defval($options, "editmessage"), "</div>\n";
 
@@ -1607,6 +1580,7 @@ $blind\n";
         echo '<div class="revcard_body">';
 
         // administrator?
+        $admin = $Me->allow_administer($prow);
         if ($rrow && !$Me->is_my_review($rrow) && $admin)
             echo Ht::xmsg("info", "This isn’t your review, but as an administrator you can still make changes.");
 
@@ -1660,25 +1634,68 @@ $blind\n";
         Ht::stash_script('hiliter_children("form.revcard")', "form_revcard");
     }
 
-    function unparse_review_json($prow, $rrow, $contact) {
+    function unparse_review_json($prow, $rrow, $contact, $include_displayed_at = false) {
         global $Conf;
+        self::check_review_author_seen($prow, $rrow, $contact);
+        $rj = array("pid" => $prow->paperId, "rid" => $rrow->reviewId);
+        if ($rrow->reviewOrdinal)
+            $rj["ordinal"] = unparseReviewOrdinal($rrow->reviewOrdinal);
+        if ($contact->can_view_review_round($prow, $rrow, null)) {
+            $rj["rtype"] = (int) $rrow->reviewType;
+            if (($round = $Conf->round_name($rrow->reviewRound)))
+                $rj["round"] = $round;
+        }
+        if ($rrow->reviewBlind)
+            $rj["blind"] = true;
+        if ($rrow->reviewSubmitted)
+            $rj["submitted"] = true;
+        else if (!$rrow->reviewOrdinal)
+            $rj["draft"] = true;
+        if ($contact->can_review($prow, $rrow))
+            $rj["editable"] = true;
+
+        // identity and time
+        $showtoken = $contact->review_token_cid($prow, $rrow);
+        if ($contact->can_view_review_identity($prow, $rrow, null)
+            && (!$showtoken || !Contact::is_anonymous_email($rrow->email))) {
+            $rj["author"] = Text::user_html($rrow);
+            $rj["author_email"] = $rrow->email;
+        }
+        if ($showtoken)
+            $rj["author_token"] = encode_token((int) $rrow->reviewToken);
+        if ($rrow->reviewModified > 0 && $contact->can_view_review_time($prow, $rrow)) {
+            $rj["modified_at"] = (int) $rrow->reviewModified;
+            $rj["modified_at_text"] = $Conf->printableTime($rrow->reviewModified);
+        }
+        if ($include_displayed_at)
+            // XXX exposes information, should hide before export
+            $rj["displayed_at"] = (int) $rrow->timeDisplayed;
+
+        // ratings
+        if ($contact->can_view_review_ratings($prow, $rrow)) {
+            if ($rrow->canViewRatings)
+                $rj["ratings"] = json_decode("[" . $rrow->allRatings . "]");
+            if ($contact->can_rate_review($prow, $rrow))
+                $rj["user_rating"] = $rrow->myRating === null ? null : (int) $rrow->myRating;
+        }
+
+        // review text
+        // (field UIDs always are uppercase so can't conflict)
         $revViewScore = $contact->view_score_bound($prow, $rrow);
-        $r = array();
         foreach ($this->forder as $fid => $f)
             if ($f->view_score > $revViewScore
                 && (!$f->round_mask || $f->is_round_visible($rrow))) {
                 if ($f->has_options)
-                    $r[$f->uid] = $f->unparse_value($rrow->$fid);
+                    $rj[$f->uid] = $f->unparse_value($rrow->$fid);
                 else
-                    $r[$f->uid] = $rrow->$fid;
+                    $rj[$f->uid] = $rrow->$fid;
             }
-        if (($round = $Conf->round_name($rrow->reviewRound)))
-            $r["round"] = $round;
         if (($fmt = $rrow->reviewFormat) === null)
             $fmt = Conf::$gDefaultFormat;
         if ($fmt)
-            $r["format"] = $fmt;
-        return $r;
+            $rj["format"] = $fmt;
+
+        return (object) $rj;
     }
 
 

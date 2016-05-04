@@ -74,6 +74,7 @@ define("COMMENTTYPE_VISIBILITY", 0xFFF0000);
 define("TAG_REGEX_NOTWIDDLE", '[a-zA-Z!@*_:.][-a-zA-Z0-9!@*_:.\/]*');
 define("TAG_REGEX", '~?~?' . TAG_REGEX_NOTWIDDLE);
 define("TAG_MAXLEN", 40);
+define("TAG_INDEXBOUND", 2147483646);
 
 define("CAPTYPE_RESETPASSWORD", 1);
 define("CAPTYPE_CHANGEEMAIL", 2);
@@ -89,7 +90,7 @@ $ConfSitePATH = null;
 // set $ConfSitePATH (path to conference site)
 function set_path_variables() {
     global $ConfSitePATH;
-    if (!@$ConfSitePATH) {
+    if (!isset($ConfSitePATH)) {
         $ConfSitePATH = substr(__FILE__, 0, strrpos(__FILE__, "/"));
         while ($ConfSitePATH !== "" && !file_exists("$ConfSitePATH/src/init.php"))
             $ConfSitePATH = substr($ConfSitePATH, 0, strrpos($ConfSitePATH, "/"));
@@ -108,11 +109,13 @@ class SiteLoader {
         "CapabilityManager" => "src/capability.php",
         "ColumnErrors" => "lib/column.php",
         "ContactSearch" => "src/papersearch.php",
+        "CountMatcher" => "src/papersearch.php",
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
         "FormulaPaperColumn" => "src/papercolumn.php",
         "JsonSerializable" => "lib/json.php",
         "LoginHelper" => "lib/login.php",
+        "MailPreparation" => "lib/mailer.php",
         "MimeText" => "lib/mailer.php",
         "NumericOrderPaperColumn" => "src/papercolumn.php",
         "ReviewAssigner" => "src/assigners.php",
@@ -127,6 +130,7 @@ class SiteLoader {
     const API_POST = 0;
     const API_GET = 1;
     const API_PAPER = 2;
+    const API_GET_PAPER = 3 /* == API_GET | API_PAPER */;
     static $api_map = [
         "alltags" => ["PaperApi::alltags_api", self::API_GET],
         "setdecision" => ["PaperApi::setdecision_api", self::API_PAPER],
@@ -134,10 +138,26 @@ class SiteLoader {
         "setmanager" => ["PaperApi::setmanager_api", self::API_PAPER],
         "setpref" => ["PaperApi::setpref_api", self::API_PAPER],
         "setshepherd" => ["PaperApi::setshepherd_api", self::API_PAPER],
-        "settags" => ["PaperApi::settags_api", self::API_PAPER],
+        "settaganno" => ["PaperApi::settaganno_api", self::API_POST],
+        "settags" => ["PaperApi::settags_api", self::API_POST],
+        "taganno" => ["PaperApi::taganno_api", self::API_GET],
         "tagreport" => ["PaperApi::tagreport_api", self::API_GET],
-        "trackerstatus" => ["MeetingTracker::trackerstatus_api", self::API_GET] // hotcrp-comet entrypoint
+        "trackerstatus" => ["MeetingTracker::trackerstatus_api", self::API_GET], // hotcrp-comet entrypoint
+        "votereport" => ["PaperApi::votereport_api", self::API_GET_PAPER],
     ];
+    static public function call_api($fn, $user, $qreq, $prow) {
+        // XXX precondition: $user->can_view_paper($prow) || !$prow
+        if (isset(SiteLoader::$api_map[$fn])) {
+            $uf = SiteLoader::$api_map[$fn];
+            if (!($uf[1] & SiteLoader::API_GET) && !check_post($qreq))
+                json_exit(["ok" => false, "error" => "Missing credentials."]);
+            if (($uf[1] & SiteLoader::API_PAPER) && !$prow)
+                json_exit(["ok" => false, "error" => "No such paper."]);
+            call_user_func($uf[0], $user, $qreq, $prow);
+            return true;
+        }
+        return false;
+    }
 }
 
 function __autoload($class_name) {
@@ -145,15 +165,10 @@ function __autoload($class_name) {
     $f = null;
     if (isset(SiteLoader::$map[$class_name]))
         $f = SiteLoader::$map[$class_name];
-    if (!$f) {
-        $l = strtolower($class_name);
-        if (file_exists("$ConfSitePATH/src/$l.php"))
-            $f = "src/$l.php";
-        else if (file_exists("$ConfSitePATH/lib/$l.php"))
-            $f = "lib/$l.php";
-    }
-    if ($f)
-        require_once("$ConfSitePATH/$f");
+    if (!$f)
+        $f = strtolower($class_name) . ".php";
+    foreach (expand_includes($f, ["autoload" => true]) as $fx)
+        require_once($fx);
 }
 
 require_once("$ConfSitePATH/lib/base.php");
@@ -170,56 +185,72 @@ setlocale(LC_CTYPE, "C");
 
 
 // Set up conference options (also used in mailer.php)
-function expand_includes($sitedir, $files, $expansions = array()) {
-    global $Opt;
-    if (is_string($files))
+function expand_includes($files, $expansions = array()) {
+    global $Opt, $ConfSitePATH;
+    if (!is_array($files))
         $files = array($files);
-    $confname = @$Opt["confid"] ? : @$Opt["dbName"];
+    $confname = get($Opt, "confid") ? : get($Opt, "dbName");
+    $expansions["confid"] = $expansions["confname"] = $confname;
+    $expansions["siteclass"] = get($Opt, "siteclass");
+
+    if (isset($expansions["autoload"]) && strpos($files[0], "/") === false)
+        $includepath = [$ConfSitePATH . "/src/", $ConfSitePATH . "/lib/"];
+    else
+        $includepath = [$ConfSitePATH . "/"];
+    if (isset($Opt["includepath"]) && is_array($Opt["includepath"])) {
+        foreach ($Opt["includepath"] as $i)
+            if ($i)
+                $includepath[] = str_ends_with($i, "/") ? $i : $i . "/";
+    }
+
     $results = array();
-    $cwd = null;
     foreach ($files as $f) {
-        if (strpos($f, '$') !== false) {
-            $f = preg_replace(',\$\{conf(?:id|name)\}|\$conf(?:id|name)\b,', $confname, $f);
+        if (strpos((string) $f, '$') !== false) {
             foreach ($expansions as $k => $v)
                 if ($v !== false && $v !== null)
                     $f = preg_replace(',\$\{' . $k . '\}|\$' . $k . '\b,', $v, $f);
                 else if (preg_match(',\$\{' . $k . '\}|\$' . $k . '\b,', $f)) {
-                    $f = false;
+                    $f = "";
                     break;
                 }
         }
-        if ($f === false)
-            /* skip */;
-        else if (preg_match(',[\[\]\*\?],', $f)) {
-            if ($cwd === null) {
-                $cwd = getcwd();
-                chdir($sitedir);
-            }
-            foreach (glob($f, GLOB_BRACE) as $x)
-                $results[] = $x;
-        } else
-            $results[] = $f;
+        if ((string) $f === "")
+            continue;
+        $matches = [];
+        $globby = preg_match(',[\[\]\*\?\{\}],', $f);
+        foreach ($f[0] === "/" ? array("") : $includepath as $idir) {
+            $e = $idir . $f;
+            if ($globby)
+                $matches = glob($f, GLOB_BRACE);
+            else if (is_readable($e))
+                $matches = [$e];
+            if (!empty($matches))
+                break;
+        }
+        $results = array_merge($results, $matches);
+        if (empty($matches) && !$globby)
+            $results[] = $f[0] === "/" ? $f : $includepath[0] . $f;
     }
-    foreach ($results as &$f)
-        $f = ($f[0] == "/" ? $f : "$sitedir/$f");
-    if ($cwd)
-        chdir($cwd);
     return $results;
 }
 
-function read_included_options($sitedir, $files) {
+function read_included_options(&$files) {
     global $Opt;
-    foreach (expand_includes($sitedir, $files) as $f)
-        if (!@include $f)
-            $Opt["missing"][] = $f;
+    if (is_string($files))
+        $files = [$files];
+    for ($i = 0; $i != count($files); ++$i) {
+        foreach (expand_includes($files[$i]) as $f)
+            if (!@include $f)
+                $Opt["missing"][] = $f;
+    }
 }
 
 global $Opt, $OptOverride;
-if (!@$Opt)
+if (!$Opt)
     $Opt = array();
-if (!@$OptOverride)
+if (!$OptOverride)
     $OptOverride = array();
-if (!@$Opt["loaded"]) {
+if (!get($Opt, "loaded")) {
     if (defined("HOTCRP_OPTIONS")) {
         if ((@include HOTCRP_OPTIONS) !== false)
             $Opt["loaded"] = true;
@@ -227,27 +258,27 @@ if (!@$Opt["loaded"]) {
                || (@include "$ConfSitePATH/conf/options.inc") !== false
                || (@include "$ConfSitePATH/Code/options.inc") !== false)
         $Opt["loaded"] = true;
-    if (@$Opt["multiconference"])
+    if (get($Opt, "multiconference"))
         Multiconference::init();
-    if (@$Opt["include"])
-        read_included_options($ConfSitePATH, $Opt["include"]);
+    if (get($Opt, "include"))
+        read_included_options($Opt["include"]);
 }
-if (!@$Opt["loaded"] || @$Opt["missing"])
+if (!get($Opt, "loaded") || get($Opt, "missing"))
     Multiconference::fail_bad_options();
-if (@$Opt["dbLogQueries"])
-    Dbl::log_queries(@$Opt["dbLogQueries"]);
+if (get($Opt, "dbLogQueries"))
+    Dbl::log_queries($Opt["dbLogQueries"]);
 
 
 // Allow lots of memory
 function set_memory_limit() {
     global $Opt;
-    if (!@$Opt["memoryLimit"]) {
+    if (!get($Opt, "memoryLimit")) {
         $suf = array("" => 1, "k" => 1<<10, "m" => 1<<20, "g" => 1<<30);
         if (preg_match(',\A(\d+)\s*([kmg]?)\z,', strtolower(ini_get("memory_limit")), $m)
             && $m[1] * $suf[$m[2]] < (128<<20))
             $Opt["memoryLimit"] = "128M";
     }
-    if (@$Opt["memoryLimit"])
+    if (get($Opt, "memoryLimit"))
         ini_set("memory_limit", $Opt["memoryLimit"]);
 }
 set_memory_limit();

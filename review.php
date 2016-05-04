@@ -16,7 +16,7 @@ if (isset($_REQUEST["email"]) && isset($_REQUEST["password"])
     $after = "";
     foreach (array("paperId" => "p", "pap" => "p", "reviewId" => "r", "commentId" => "c") as $k => $v)
         if (isset($_REQUEST[$k]) && !isset($_REQUEST[$v]))
-            $_REQUEST[$v] = $_REQUEST[$k];
+            $_REQUEST[$v] = $_GET[$v] = $_POST[$v] = $_REQUEST[$k];
     foreach (array("p", "r", "c", "accept", "refuse", "decline") as $opt)
         if (isset($_REQUEST[$opt]))
             $after .= ($after === "" ? "" : "&") . $opt . "=" . urlencode($_REQUEST[$opt]);
@@ -51,7 +51,7 @@ function loadRows() {
     $Conf->paper = $prow = PaperTable::paperRow($whyNot);
     if (!$prow)
         errorMsgExit(whyNotText($whyNot, "view"));
-    $paperTable = new PaperTable($prow);
+    $paperTable = new PaperTable($prow, make_qreq());
     $paperTable->resolveReview(true);
 
     if ($paperTable->editrrow && $paperTable->editrrow->contactId == $Me->contactId)
@@ -70,14 +70,14 @@ if (isset($_REQUEST["post"]) && $_REQUEST["post"] && !count($_POST))
     $Conf->post_missing_msg();
 else if (isset($_REQUEST["post"]) && isset($_REQUEST["default"])) {
     if (fileUploaded($_FILES["uploadedFile"]))
-        $_REQUEST["uploadForm"] = 1;
+        $_REQUEST["uploadForm"] = $_GET["uploadForm"] = $_POST["uploadForm"] = 1;
     else
-        $_REQUEST["update"] = 1;
+        $_REQUEST["update"] = $_GET["update"] = $_POST["update"] = 1;
 } else if (isset($_REQUEST["submitreview"]))
-    $_REQUEST["update"] = $_REQUEST["ready"] = 1;
+    $_REQUEST["update"] = $_REQUEST["ready"] = $_POST["update"] = $_POST["ready"] = 1;
 else if (isset($_REQUEST["savedraft"])) {
-    $_REQUEST["update"] = 1;
-    unset($_REQUEST["ready"]);
+    $_REQUEST["update"] = $_POST["update"] = 1;
+    unset($_REQUEST["ready"], $_POST["ready"]);
 }
 
 
@@ -114,15 +114,7 @@ if (isset($_REQUEST["unsubmitreview"]) && $paperTable->editrrow
     && $paperTable->editrrow->reviewSubmitted && $Me->can_administer($prow)
     && check_post()) {
     Dbl::qe_raw("lock tables PaperReview write");
-    $needsSubmit = 1;
-    if ($paperTable->editrrow->reviewType == REVIEW_SECONDARY) {
-        $result = Dbl::qe_raw("select count(reviewSubmitted), count(reviewId) from PaperReview where paperId=$prow->paperId and requestedBy=" . $paperTable->editrrow->contactId . " and reviewType<" . REVIEW_SECONDARY);
-        if (($row = edb_row($result)) && $row[0])
-            $needsSubmit = 0;
-        else if ($row && $row[1])
-            $needsSubmit = -1;
-    }
-    $result = Dbl::qe("update PaperReview set reviewSubmitted=null, reviewNeedsSubmit=$needsSubmit where reviewId=" . $paperTable->editrrow->reviewId);
+    $result = Contact::unsubmit_review_row($paperTable->editrrow);
     Dbl::qe_raw("unlock tables");
     if ($result) {
         $Me->log_activity("$editRrowLogname unsubmitted", $prow);
@@ -132,7 +124,7 @@ if (isset($_REQUEST["unsubmitreview"]) && $paperTable->editrrow
     loadRows();
 } else if (isset($_REQUEST["update"]) && $paperTable->editrrow
            && $paperTable->editrrow->reviewSubmitted)
-    $_REQUEST["ready"] = 1;
+    $_REQUEST["ready"] = $_POST["ready"] = 1;
 
 
 // review rating action
@@ -152,9 +144,9 @@ if (isset($_REQUEST["rating"]) && $paperTable->rrow && check_post()) {
         else
             $Conf->ajaxExit(array("ok" => 0, "result" => "There was an error while recording your feedback."));
     if (isset($_REQUEST["allr"])) {
-        $_REQUEST["paperId"] = $paperTable->rrow->paperId;
-        unset($_REQUEST["reviewId"]);
-        unset($_REQUEST["r"]);
+        $_REQUEST["paperId"] = $_GET["paperId"] = $_POST["paperId"] = $paperTable->rrow->paperId;
+        unset($_REQUEST["reviewId"], $_GET["reviewId"], $_POST["reviewId"]);
+        unset($_REQUEST["r"], $_GET["r"], $_POST["r"]);
     }
     loadRows();
 }
@@ -189,16 +181,13 @@ if (isset($_REQUEST["deletereview"]) && check_post()
                 $Conf->update_rev_tokens_setting(true);
 
             // perhaps a delegatee needs to redelegate
-            if ($paperTable->editrrow->reviewType < REVIEW_SECONDARY && $paperTable->editrrow->requestedBy > 0) {
-                $result = Dbl::qe_raw("select count(reviewSubmitted), count(reviewId) from PaperReview where paperId=" . $paperTable->editrrow->paperId . " and requestedBy=" . $paperTable->editrrow->requestedBy . " and reviewType<" . REVIEW_SECONDARY);
-                if (!($row = edb_row($result)) || $row[0] == 0)
-                    Dbl::qe_raw("update PaperReview set reviewNeedsSubmit=" . ($row && $row[1] ? -1 : 1) . " where reviewType=" . REVIEW_SECONDARY . " and paperId=" . $paperTable->editrrow->paperId . " and contactId=" . $paperTable->editrrow->requestedBy . " and reviewSubmitted is null");
-            }
+            if ($paperTable->editrrow->reviewType < REVIEW_SECONDARY && $paperTable->editrrow->requestedBy > 0)
+                Contact::update_review_delegation($paperTable->editrrow->paperId, $paperTable->editrrow->requestedBy, -1);
 
-            unset($_REQUEST["reviewId"]);
-            unset($_REQUEST["r"]);
-            $_REQUEST["paperId"] = $paperTable->editrrow->paperId;
-            go(hoturl("paper", array("p" => $_REQUEST["paperId"], "ls" => @$_REQUEST["ls"])));
+            unset($_REQUEST["reviewId"], $_GET["reviewId"], $_POST["reviewId"]);
+            unset($_REQUEST["r"], $_GET["r"], $_POST["r"]);
+            $_REQUEST["paperId"] = $_GET["paperId"] = $paperTable->editrrow->paperId;
+            go(hoturl("paper", array("p" => $_GET["paperId"], "ls" => @$_REQUEST["ls"])));
         }
         redirectSelf();         // normally does not return
         loadRows();
@@ -254,7 +243,6 @@ function downloadForm($editable) {
     if (count($rrows) == 1 && $rrows[0]->reviewSubmitted)
         $filename .= unparseReviewOrdinal($rrows[0]->reviewOrdinal);
     downloadText($text, $filename, !$editable);
-    exit;
 }
 if (isset($_REQUEST["downloadForm"]))
     downloadForm(true);
@@ -282,11 +270,8 @@ function refuseReview() {
         return;
 
     // now the requester must potentially complete their review
-    if ($rrow->reviewType < REVIEW_SECONDARY && $rrow->requestedBy > 0) {
-        $result = Dbl::qe_raw("select count(reviewSubmitted), count(reviewId) from PaperReview where paperId=$rrow->paperId and requestedBy=$rrow->requestedBy and reviewType<" . REVIEW_SECONDARY);
-        if (!($row = edb_row($result)) || $row[0] == 0)
-            Dbl::qe_raw("update PaperReview set reviewNeedsSubmit=" . ($row && $row[1] ? -1 : 1) . " where reviewType=" . REVIEW_SECONDARY . " and paperId=$rrow->paperId and contactId=$rrow->requestedBy and reviewSubmitted is null");
-    }
+    if ($rrow->reviewType < REVIEW_SECONDARY && $rrow->requestedBy > 0)
+        Contact::update_review_delegation($rrow->paperId, $rrow->requestedBy, -1);
 
     Dbl::qe_raw("unlock tables");
 
@@ -388,11 +373,11 @@ if (!$viewAny && !$editAny
         || !$Me->can_view_review($prow, $paperTable->rrow, null)))
     $paperTable->paptabEndWithReviewMessage();
 else {
-    if ($paperTable->mode === "re")
+    if ($paperTable->mode === "re") {
         $paperTable->paptabEndWithEditableReview();
-    else
-        $paperTable->paptabEndWithReviews();
-    $paperTable->paptabComments();
+        $paperTable->paptabComments();
+    } else
+        $paperTable->paptabEndWithReviewsAndComments();
 }
 
 $Conf->footer();

@@ -224,7 +224,7 @@ class Dbl {
                     reset($arg);
                     $arg = ($nextch === "a" ? "=" : "!=") . current($arg);
                 } else
-                    $arg = ($nextch === "a" ? " IN (" : " NOT IN (") . join(",", $arg) . ")";
+                    $arg = ($nextch === "a" ? " IN (" : " NOT IN (") . join(", ", $arg) . ")";
                 ++$nextpos;
             } else if ($nextch === "s") {
                 $arg = $dblink->real_escape_string($arg);
@@ -353,6 +353,18 @@ class Dbl {
         return self::do_query(func_get_args(), self::F_APPLY | self::F_ERROR);
     }
 
+    static function multi_q(/* [$dblink,] $qstr, ... */) {
+        return self::do_multi_query(func_get_args(), self::F_MULTI);
+    }
+
+    static function multi_q_raw(/* [$dblink,] $qstr */) {
+        return self::do_multi_query(func_get_args(), self::F_MULTI | self::F_RAW);
+    }
+
+    static function multi_q_apply(/* [$dblink,] $qstr, [$argv] */) {
+        return self::do_multi_query(func_get_args(), self::F_MULTI | self::F_APPLY);
+    }
+
     static function multi_qe(/* [$dblink,] $qstr, ... */) {
         return self::do_multi_query(func_get_args(), self::F_MULTI | self::F_ERROR);
     }
@@ -392,6 +404,24 @@ class Dbl {
         return $x ? (int) $x[0] : null;
     }
 
+    static function fetch_rows(/* $result | [$dblink,] $query, ... */) {
+        $result = self::do_make_result(func_get_args());
+        $x = [];
+        while (($row = ($result ? $result->fetch_row() : null)))
+            $x[] = $row;
+        $result && $result->close();
+        return $x;
+    }
+
+    static function fetch_objects(/* $result | [$dblink,] $query, ... */) {
+        $result = self::do_make_result(func_get_args());
+        $x = [];
+        while (($row = ($result ? $result->fetch_object() : null)))
+            $x[] = $row;
+        $result && $result->close();
+        return $x;
+    }
+
     static function fetch_first_row(/* $result | [$dblink,] $query, ... */) {
         $result = self::do_make_result(func_get_args());
         $x = $result ? $result->fetch_row() : null;
@@ -429,7 +459,7 @@ class Dbl {
         $x = array();
         while ($result && ($row = $result->fetch_row())) {
             assert(count($row) == 2);
-            $x[(int) $row[0]] = ($row[1] === null ? $row[1] : (int) $row[1]);
+            $x[(int) $row[0]] = ($row[1] === null ? null : (int) $row[1]);
         }
         $result && $result->close();
         return $x;
@@ -547,7 +577,7 @@ function sql_in_numeric_set($set) {
     else if (count($set) == 1)
         return "=" . $set[0];
     else
-        return " in (" . join(",", $set) . ")";
+        return " in (" . join(", ", $set) . ")";
 }
 
 function sql_not_in_numeric_set($set) {

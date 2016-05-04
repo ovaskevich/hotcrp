@@ -37,10 +37,8 @@ class PaperApi {
             if (!$pc || ($pc->isPC && $pc->can_accept_review_assignment($prow))) {
                 $user->assign_paper_pc($prow, $type, $pc);
                 $j = ["ok" => true, "result" => $pc ? $user->name_html_for($pc) : "None"];
-                if ($user->can_view_reviewer_tags($prow)) {
-                    $tagger = new Tagger($user);
-                    $j["color_classes"] = $pc ? $tagger->viewable_color_classes($pc->contactTags) : "";
-                }
+                if ($user->can_view_reviewer_tags($prow))
+                    $j["color_classes"] = $pc ? $pc->viewable_color_classes($user) : "";
                 json_exit($j);
             } else
                 json_exit(["ok" => false, "error" => Text::user_html($pc) . " can’t be the $type for paper #{$prow->paperId}."]);
@@ -61,9 +59,9 @@ class PaperApi {
     }
 
     static function tagreport($user, $prow) {
-        if (!$user->can_view_tags($prow))
-            return (object) ["ok" => false];
-        $ret = (object) ["ok" => true, "warnings" => [], "messages" => []];
+        $ret = (object) ["ok" => $user->can_view_tags($prow), "warnings" => [], "messages" => []];
+        if (!$ret->ok)
+            return $ret;
         if (($vt = TagInfo::vote_tags())) {
             $myprefix = $user->contactId . "~";
             $qv = $myvotes = array();
@@ -109,34 +107,158 @@ class PaperApi {
         global $Conf;
         if ($qreq->cancelsettags)
             json_exit(["ok" => true]);
+        if ($prow && !$user->can_view_paper($prow))
+            json_exit(["ok" => false, "error" => "No such paper."]);
 
         // save tags using assigner
-        $x = array("paper,tag");
-        if (isset($qreq->tags)) {
-            $x[] = "$prow->paperId,all#clear";
-            foreach (TagInfo::split($qreq->tags) as $t)
-                $x[] = "$prow->paperId," . CsvGenerator::quote($t);
+        $x = array("paper,action,tag");
+        if ($prow) {
+            if (isset($qreq->tags)) {
+                $x[] = "$prow->paperId,tag,all#clear";
+                foreach (TagInfo::split($qreq->tags) as $t)
+                    $x[] = "$prow->paperId,tag," . CsvGenerator::quote($t);
+            }
+            foreach (TagInfo::split((string) $qreq->addtags) as $t)
+                $x[] = "$prow->paperId,tag," . CsvGenerator::quote($t);
+            foreach (TagInfo::split((string) $qreq->deltags) as $t)
+                $x[] = "$prow->paperId,tag," . CsvGenerator::quote($t . "#clear");
+        } else if (isset($qreq->tagassignment)) {
+            $pids = [];
+            $pid = -1;
+            foreach (preg_split('/[\s,]+/', $qreq->tagassignment) as $w)
+                if ($w !== "" && ctype_digit($w))
+                    $pid = intval($w);
+                else if ($w !== "" && $pid > 0) {
+                    $x[] = "$pid,tag," . CsvGenerator::quote($w);
+                    $pids[$pid] = true;
+                }
         }
-        foreach (TagInfo::split((string) $qreq->addtags) as $t)
-            $x[] = "$prow->paperId," . CsvGenerator::quote($t);
-        foreach (TagInfo::split((string) $qreq->deltags) as $t)
-            $x[] = "$prow->paperId," . CsvGenerator::quote($t . "#clear");
         $assigner = new AssignmentSet($user, $user->is_admin_force());
         $assigner->parse(join("\n", $x));
-        $error = join("<br>", $assigner->errors_html());
+        $error = join("<br />", $assigner->errors_html());
         $ok = $assigner->execute();
 
         // exit
-        $prow->load_tags();
-        if ($ok) {
+        if ($ok && $prow) {
+            $prow->load_tags();
             $treport = self::tagreport($user, $prow);
             if ($treport->warnings)
                 $Conf->warnMsg(join("<br>", $treport->warnings));
-            $taginfo = $prow->tag_info_json($user);
-            $taginfo->ok = true;
+            $taginfo = (object) ["ok" => true, "pid" => $prow->paperId];
+            $prow->add_tag_info_json($taginfo, $user);
             json_exit($taginfo, true);
+        } else if ($ok) {
+            $p = [];
+            $result = Dbl::qe_raw($Conf->paperQuery($user, ["paperId" => array_keys($pids), "tags" => true]));
+            while (($prow = PaperInfo::fetch($result, $user))) {
+                $p[$prow->paperId] = (object) [];
+                $prow->add_tag_info_json($p[$prow->paperId], $user);
+            }
+            json_exit(["ok" => true, "p" => $p]);
         } else
             json_exit(["ok" => false, "error" => $error], true);
+    }
+
+    static function taganno_api($user, $qreq, $prow) {
+        global $Conf;
+        $tagger = new Tagger($user);
+        if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE)))
+            json_exit(["ok" => false, "error" => $tagger->error_html]);
+        $j = ["ok" => true, "tag" => $tag, "editable" => $user->can_change_tag_anno($tag),
+              "anno" => []];
+        $dt = TagInfo::make_defined_tag($tag);
+        foreach ($dt->order_anno_list() as $oa)
+            if ($oa->annoId !== null)
+                $j["anno"][] = TagInfo::unparse_anno_json($oa);
+        json_exit($j);
+    }
+
+    static function settaganno_api($user, $qreq, $prow) {
+        global $Conf;
+        $tagger = new Tagger($user);
+        if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE)))
+            json_exit(["ok" => false, "error" => $tagger->error_html]);
+        if (!$user->can_change_tag_anno($tag))
+            json_exit(["ok" => false, "error" => "Permission error."]);
+        if (!isset($qreq->anno) || ($reqanno = json_decode($qreq->anno)) === false
+            || (!is_object($reqanno) && !is_array($reqanno)))
+            json_exit(["ok" => false, "error" => "Bad request."]);
+        $q = $qv = $errors = $errf = $inserts = [];
+        $next_annoid = Dbl::fetch_value("select greatest(coalesce(max(annoId),0),0)+1 from PaperTagAnno where tag=?", $tag);
+        // parse updates
+        foreach (is_object($reqanno) ? [$reqanno] : $reqanno as $anno) {
+            if (!isset($anno->annoid)
+                || (!is_int($anno->annoid) && !preg_match('/^n/', $anno->annoid)))
+                json_exit(["ok" => false, "error" => "Bad request."]);
+            if (isset($anno->deleted) && $anno->deleted) {
+                if (is_int($anno->annoid)) {
+                    $q[] = "delete from PaperTagAnno where tag=? and annoId=?";
+                    array_push($qv, $tag, $anno->annoid);
+                }
+                continue;
+            }
+            if (is_int($anno->annoid))
+                $annoid = $anno->annoid;
+            else {
+                $annoid = $next_annoid;
+                ++$next_annoid;
+                $q[] = "insert into PaperTagAnno (tag,annoId) values (?,?)";
+                array_push($qv, $tag, $annoid);
+            }
+            if (isset($anno->heading)) {
+                $q[] = "update PaperTagAnno set heading=? where tag=? and annoId=?";
+                array_push($qv, $anno->heading, $tag, $annoid);
+            }
+            if (isset($anno->tagval)) {
+                $tagval = trim($anno->tagval);
+                if ($tagval === "")
+                    $tagval = "0";
+                if (is_numeric($tagval)) {
+                    $q[] = "update PaperTagAnno set tagIndex=? where tag=? and annoId=?";
+                    array_push($qv, floatval($tagval), $tag, $annoid);
+                } else {
+                    $errf["tagval_{$anno->annoid}"] = true;
+                    $errors[] = "Tag value should be a number.";
+                }
+            }
+        }
+        // return error if any
+        if (!empty($errors))
+            json_exit(["ok" => false, "error" => join("<br />", $errors), "errf" => $errf]);
+        // apply changes
+        if (!empty($q)) {
+            $mresult = Dbl::multi_qe_apply(join(";", $q), $qv);
+            while (($result = $mresult->next()))
+                Dbl::free($result);
+        }
+        // return results
+        self::taganno_api($user, $qreq, $prow);
+    }
+
+    static function votereport_api($user, $qreq, $prow) {
+        $tagger = new Tagger($user);
+        if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE)))
+            json_exit(["ok" => false, "error" => $tagger->error_html]);
+        if (!$user->can_view_peruser_tags($prow, $tag))
+            json_exit(["ok" => false, "error" => "Permission error."]);
+        $votemap = [];
+        preg_match_all('/ (\d+)~' . preg_quote($tag) . '#(\S+)/i', $prow->all_tags_text(), $m);
+        $is_approval = TagInfo::is_approval($tag);
+        $min_vote = $is_approval ? 0 : 0.001;
+        for ($i = 0; $i != count($m[0]); ++$i)
+            if ($m[2][$i] >= $min_vote)
+                $votemap[$m[1][$i]] = $m[2][$i];
+        $user->ksort_cid_array($votemap);
+        $result = [];
+        foreach ($votemap as $k => $v)
+            if ($is_approval)
+                $result[] = $user->reviewer_html_for($k);
+            else
+                $result[] = $user->reviewer_html_for($k) . " ($v)";
+        if (empty($result))
+            json_exit(["ok" => true, "result" => ""]);
+        else
+            json_exit(["ok" => true, "result" => '<span class="nw">' . join(',</span> <span class="nw">', $result) . '</span>']);
     }
 
     static function alltags_api($user, $qreq, $prow) {
@@ -151,7 +273,7 @@ class PaperApi {
             $need_paper = true;
             if ($Conf->has_any_manager() && !$Conf->setting("tag_seeall"))
                 $conflict_where = "(p.managerContactId=0 or p.managerContactId=$user->contactId or pc.conflictType is null)";
-        } else if ($Conf->check_track_sensitivity("view")) {
+        } else if ($Conf->check_track_sensitivity(Track::VIEW)) {
             $where[] = "t.paperId ?a";
             $args[] = $user->list_submitted_papers_with_viewable_tags();
         } else {

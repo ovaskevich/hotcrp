@@ -67,45 +67,54 @@ if (!$Me->isPC && !$Me->tracker_kiosk_state)
     $Me->escape();
 
 // header and script
-$no_discussion = '<h2>No discussion<\/h2>';
+$no_discussion = '<div><h2>No discussion<\/h2>'; // <div> is CSS-styled
 if ($Me->privChair)
     $no_discussion .= '<p>To start a discussion, <a href=\\"' . hoturl("search") . '\\">search<\/a> for a list, go to a paper in that list, and use the “&#9759;” button.<\/p>';
-Ht::stash_script('var buzzer_status = "open", buzzer_muted = false, showpapers = ' . json_encode($show_papers) . ';
+$no_discussion .= '</div>';
+Ht::stash_script('var buzzer_status = "open", buzzer_muted = false, showpapers = ' . json_encode($show_papers) . ', tracker_has_format;
 function trackertable_paper_row(hc, idx, paper) {
-    hc.push("<tr class=\"trackertable" + idx + "\">", "<\/tr>");
+    var pcconf;
+    if (paper.pc_conflicts) {
+        pcconf = [];
+        for (var i = 0; i < paper.pc_conflicts.length; ++i)
+            pcconf.push(text_to_html(paper.pc_conflicts[i].name));
+        pcconf = "<em class=\"plx\">PC conflicts:</em> " +
+            (pcconf.length ? "<span class=\"nb\">" + pcconf.join(",</span> <span class=\"nb\">") + "</span>" : "None");
+    }
+
+    hc.push("<tr class=\"trackertable" + idx + (showpapers && pcconf ? " t" : " t b") + "\">", "<\/tr>");
     hc.push("<td class=\"trackertable trackerdesc\">", "<\/td>");
     hc.push_pop(idx == 0 ? "Currently:" : (idx == 1 ? "Next:" : "Then:"));
     hc.push("<td class=\"trackertable trackerpid\">", "<\/td>");
     hc.push_pop(paper.pid && showpapers ? "#" + paper.pid : "");
     hc.push("<td class=\"trackertable trackertitle\">", "<\/td>");
-    hc.push_pop(paper.title && showpapers ? text_to_html(paper.title) : "");
-    hc.push("<td class=\"trackertable trackerconflicts\">", "<\/td>");
-    if (paper.pc_conflicts) {
-        for (var i = 0; i < paper.pc_conflicts.length; ++i)
-            hc.push((i ? ", " : "") + "<scan class=\"nw\">" + text_to_html(paper.pc_conflicts[i].name) + "<\/span>");
-        if (!paper.pc_conflicts.length)
-            hc.push("None");
-    }
-    hc.pop();
+    if (!showpapers)
+        hc.push_pop(pcconf ? pcconf : "");
+    else if (paper.title && paper.format) {
+        hc.push_pop("<span class=\"ptitle need-format\" data-format=\"" + paper.format + "\">" + text_to_html(paper.title) + "<\/span>");
+        tracker_has_format = true;
+    } else if (paper.title)
+        hc.push_pop(text_to_html(paper.title));
+    else
+        hc.push_pop("<i>No title</i>");
     if (idx == 0)
         hc.push("<td id=\"trackerelapsed\"><\/td>");
     hc.pop();
+    if (showpapers && pcconf) {
+        hc.push("<tr class=\"trackertable" + idx + " b\">", "<\/tr>");
+        hc.push("<td colspan=\"2\"><\/td>");
+        hc.push("<td class=\"trackertable trackerpcconf\">" + pcconf + "<\/td>");
+        hc.push("<td><\/td>");
+        hc.pop();
+    }
 }
 function trackertable() {
     var dl = hotcrp_status, hc = new HtmlCollector;
+    tracker_has_format = false;
     if (!dl.tracker || !dl.tracker.papers)
         hc.push("' . $no_discussion . '");
     else {
         hc.push("<table>", "<\/table>");
-
-        hc.push("<thead><tr>", "<\/tr><\/thead>");
-        var any_conflicts = false, i;
-        for (i = 0; i < dl.tracker.papers.length; ++i)
-            any_conflicts = any_conflicts || dl.tracker.papers[i].pc_conflicts;
-        hc.push("<th colspan=\"3\"><\/th>");
-        if (any_conflicts)
-            hc.push("<th class=\"pl\">PC conflicts<\/th>");
-        hc.pop();
 
         hc.push("<tbody>", "<\/tbody>");
         for (var i = 0; i < dl.tracker.papers.length; ++i)
@@ -114,9 +123,11 @@ function trackertable() {
     jQuery("#trackertable").html(hc.render());
     if (dl.tracker && dl.tracker.position != null)
         hotcrp_deadlines.tracker_show_elapsed();
+    if (tracker_has_format)
+        render_text.on_page();
     if (buzzer_status != "open" && (dl.tracker_status || "off") != "off"
         && buzzer_status != dl.tracker_status && !buzzer_muted) {
-        var sound = jQuery("#buzzer")[0];
+        var sound = jQuery("#buzzersound")[0];
         sound.pause();
         sound.currentTime = 0;
         sound.play();
@@ -138,10 +149,10 @@ jQuery(window).on("hotcrp_deadlines", function (evt, dl) {
     evt.preventDefault();
     jQuery(trackertable);
 })');
-$Conf->header("Discussion status", "buzzerpage", false);
+$Conf->header("Discussion status", "buzzer", false);
 
 echo '<div id="trackertable" style="margin-top:1em"></div>';
-echo "<audio id=\"buzzer\"><source src=\"", Ht::$img_base, "buzzer.mp3\"></audio>";
+echo "<audio id=\"buzzersound\"><source src=\"", Ht::$img_base, "buzzer.mp3\"></audio>";
 
 echo Ht::form(hoturl_post("buzzer"));
 echo '<table style="margin-top:3em"><tr>';

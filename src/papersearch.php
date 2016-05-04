@@ -61,7 +61,7 @@ class SearchTerm {
             foreach ($term->float as $k => $v)
                 if ($k === "sort" && isset($this->float["sort"]))
                     array_splice($this->float["sort"], count($this->float["sort"]), 0, $v);
-                else if (is_array(@$this->float[$k]) && is_array($v))
+                else if (is_array(get($this->float, $k)) && is_array($v))
                     $this->float[$k] = array_replace_recursive($this->float[$k], $v);
                 else if ($k !== "opinfo" || !isset($this->float[$k]))
                     $this->float[$k] = $v;
@@ -98,7 +98,7 @@ class SearchTerm {
         } else if ($qv->type === "revadj") {
             $qr = clone $qv->value[0];
             $qr->float = $this->float;
-            $qr->value["revadjnegate"] = !@$qr->value["revadjnegate"];
+            $qr->value["revadjnegate"] = !get($qr->value, "revadjnegate");
             return $qr;
         }
         return $this;
@@ -174,7 +174,7 @@ class SearchTerm {
     }
     private function _finish_then() {
         $ishighlight = $this->type !== "then";
-        $opinfo = strtolower(@$this->get_float("opinfo", ""));
+        $opinfo = strtolower($this->get_float("opinfo", ""));
         $newvalues = $newhvalues = $newhmasks = $newhtypes = array();
         $this->type = "then";
 
@@ -206,12 +206,13 @@ class SearchTerm {
         }
 
         // set default headings
-        foreach ($newvalues as $qv)
-            if (($substr = $qv->get_float("substr")) !== null
-                && $qv->get_float("heading") === null) {
-                $substr = preg_replace(',\A\(\s*(.*)\s*\)\z,', '$1', $substr);
-                $qv->set_float("heading", $substr);
-            }
+        if (count($newvalues) > 1)
+            foreach ($newvalues as $qv)
+                if (($substr = $qv->get_float("substr")) !== null
+                    && $qv->get_float("heading") === null) {
+                    $substr = preg_replace(',\A\(\s*(.*)\s*\)\z,', '$1', $substr);
+                    $qv->set_float("heading", trim($substr));
+                }
 
         $this->set("nthen", count($newvalues));
         $this->set("highlights", $newhmasks);
@@ -444,9 +445,20 @@ class ReviewSearchMatcher extends ContactCountMatcher {
 class RevprefSearchMatcher extends ContactCountMatcher {
     public $preference_match = null;
     public $expertise_match = null;
+    public $is_any = false;
 
     function __construct($countexpr, $contacts) {
         parent::__construct($countexpr, $contacts);
+    }
+    function preference_expertise_match() {
+        if ($this->is_any)
+            return "(preference!=0 or expertise is not null)";
+        $where = [];
+        if ($this->preference_match)
+            $where[] = "preference" . $this->preference_match->countexpr();
+        if ($this->expertise_match)
+            $where[] = "expertise" . $this->expertise_match->countexpr();
+        return join(" and ", $where);
     }
 }
 
@@ -599,7 +611,7 @@ class ContactSearch {
             }
             $result = Dbl::qe_raw("select firstName, lastName, unaccentedName, email, contactId, roles from ContactInfo where " . join(" or ", $q));
             $cs = array();
-            while ($result && ($row = $result->fetch_object("Contact")))
+            while ($result && ($row = Contact::fetch($result)))
                 $cs[$row->contactId] = $row;
         }
 
@@ -640,9 +652,9 @@ class ContactSearch {
             $this->contacts = array();
             $pcm = pcMembers();
             foreach ($this->ids as $cid)
-                if ($this->cset && ($p = @$this->cset[$cid]))
+                if ($this->cset && ($p = get($this->cset, $cid)))
                     $this->contacts[] = $p;
-                else if (($p = @$pcm[$cid]))
+                else if (($p = get($pcm, $cid)))
                     $this->contacts[] = $p;
                 else if ($Me->contactId == $cid)
                     $this->contacts[] = $Me;
@@ -652,8 +664,33 @@ class ContactSearch {
         return $this->contacts;
     }
     public function contact($i) {
-        $this->contacts();
-        return @$this->contacts[$i];
+        return get($this->contacts(), $i);
+    }
+}
+
+class OptionMatcher {
+    public $option;
+    public $compar;
+    public $value;
+    public $kind;
+    public $value_word;
+
+    public function __construct($option, $compar, $value, $value_word, $kind = 0) {
+        assert(!is_array($value) || $compar === "=" || $compar === "!=");
+        $this->option = $option;
+        $this->compar = $compar;
+        $this->value = $value;
+        $this->value_word = $value_word;
+        $this->kind = $kind;
+    }
+    public function table_matcher() {
+        if ($this->kind)
+            return ">0";
+        else if (is_array($this->value))
+            return ($this->compar === "=" ? " in (" : " not in (")
+                . join(",", $this->value) . ")";
+        else
+            return $this->compar . $this->value;
     }
 }
 
@@ -701,14 +738,16 @@ class PaperSearch {
     private $_reviewAdjustError = false;
     private $_ssRecursion = array();
     private $_allow_deleted = false;
+    private $_reviewWordCounts = false;
     public $thenmap = null;
-    public $headingmap = null;
+    public $groupmap = null;
+    public $is_order_anno = false;
     public $highlightmap = null;
     public $viewmap;
     public $sorters;
     private $_highlight_tags = null;
 
-    private $_matches = null;
+    private $_matches = null; // list of ints
 
     static private $_sort_keywords = null;
 
@@ -771,8 +810,8 @@ class PaperSearch {
         "pcconflict" => "pcconflict", "pcconf" => "pcconflict",
         "status" => "status", "has" => "has", "is" => "is",
         "rating" => "rate", "rate" => "rate",
-        "revpref" => "revpref", "pref" => "revpref",
-        "repref" => "revpref",
+        "revpref" => "pref", "pref" => "pref", "repref" => "pref",
+        "revprefexp" => "prefexp", "prefexp" => "prefexp", "prefexpertise" => "prefexp",
         "ss" => "ss", "search" => "ss",
         "formula" => "formula", "f" => "formula",
         "HEADING" => "HEADING", "heading" => "HEADING",
@@ -795,10 +834,10 @@ class PaperSearch {
         "ext" => 1, "cext" => 1, "iext" => 1, "pext" => 1);
 
 
-    function __construct($me, $opt) {
+    function __construct($me, $options, $reviewer = false) {
         global $Conf;
-        if (is_string($opt))
-            $opt = array("q" => $opt);
+        if (is_string($options))
+            $options = array("q" => $options);
 
         // contact facts
         $this->contact = $me;
@@ -807,7 +846,7 @@ class PaperSearch {
         $this->cid = $me->contactId;
 
         // paper selection
-        $ptype = defval($opt, "t", "");
+        $ptype = get_s($options, "t");
         if ($ptype === 0)
             $ptype = "";
         if ($this->privChair && !$ptype && $Conf->timeUpdatePaper())
@@ -852,7 +891,7 @@ class PaperSearch {
         // default, then it must be the only default or query construction
         // will break.
         $this->fields = array();
-        $qtype = defval($opt, "qt", "n");
+        $qtype = defval($options, "qt", "n");
         if ($qtype === "n" || $qtype === "ti")
             $this->fields["ti"] = 1;
         if ($qtype === "n" || $qtype === "ab")
@@ -868,11 +907,11 @@ class PaperSearch {
         $this->qt = ($qtype === "n" ? "" : $qtype);
 
         // the query itself
-        $this->q = trim(defval($opt, "q", ""));
+        $this->q = trim(get_s($options, "q"));
 
         // URL base
-        if (isset($opt["urlbase"]))
-            $this->urlbase = $opt["urlbase"];
+        if (isset($options["urlbase"]))
+            $this->urlbase = $options["urlbase"];
         else {
             $this->urlbase = hoturl_site_relative_raw("search", "t=" . urlencode($this->limitName));
             if ($qtype !== "n")
@@ -881,10 +920,14 @@ class PaperSearch {
         if (strpos($this->urlbase, "&amp;") !== false)
             trigger_error(caller_landmark() . " PaperSearch::urlbase should be a raw URL", E_USER_NOTICE);
 
-        $this->_reviewer = defval($opt, "reviewer", false);
+        $this->_reviewer = $reviewer;
+        if ($this->_reviewer === false)
+            $this->_reviewer = get($options, "reviewer", false);
         $this->_reviewer_fixed = !!$this->_reviewer;
+        if ($this->_reviewer && $reviewer === false)
+            error_log("PaperSearch::\$reviewer set: " . json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)));
 
-        $this->_allow_deleted = defval($opt, "allow_deleted", false);
+        $this->_allow_deleted = defval($options, "allow_deleted", false);
     }
 
     // begin changing contactId to cid
@@ -1077,7 +1120,7 @@ class PaperSearch {
             } else if (preg_match('/\A(pri|primary|sec|secondary|ext|external)' . $tailre, $qword, $m)) {
                 $rt = ReviewSearchMatcher::parse_review_type($m[1]);
                 $qword = $m[2];
-            } else if (preg_match('/\A(complete|done|incomplete|inprogress)' . $tailre, $qword, $m)) {
+            } else if (preg_match('/\A(complete|done|incomplete|in-?progress)' . $tailre, $qword, $m)) {
                 if ($m[1] === "complete" || $m[1] === "done")
                     $completeness |= ReviewSearchMatcher::COMPLETE;
                 else if ($m[1] === "incomplete")
@@ -1085,8 +1128,8 @@ class PaperSearch {
                 else
                     $completeness |= ReviewSearchMatcher::INPROGRESS;
                 $qword = $m[2];
-            } else if (preg_match('/\Awords((?:[=!<>]=?|≠|≤|≥)\d+)(?:\z|:)(.*)\z/', $qword, $m)) {
-                $wordcount = CountMatcher::canonicalize($m[1]);
+            } else if (preg_match('/\A(?:au)?words((?:[=!<>]=?|≠|≤|≥)\d+)(?:\z|:)(.*)\z/', $qword, $m)) {
+                $wordcount = new CountMatcher($m[1]);
                 $qword = $m[2];
             } else if (preg_match('/\A([A-Za-z0-9]+)' . $tailre, $qword, $m)
                        && (($round = $Conf->round_number($m[1], false))
@@ -1311,7 +1354,7 @@ class PaperSearch {
                 else {
                     $score = $m[3];
                     if ($f->option_letter) {
-                        if (!@$Opt["smartScoreCompare"] || $noswitch) {
+                        if (!get($Opt, "smartScoreCompare") || $noswitch) {
                             // switch meaning of inequality
                             if ($m[2][0] === "<")
                                 $m[2] = ">" . substr($m[2], 1);
@@ -1375,7 +1418,7 @@ class PaperSearch {
         return true;
     }
 
-    private function _search_revpref($word, &$qt, $quoted) {
+    private function _search_revpref($word, &$qt, $quoted, $isexp) {
         $contacts = null;
         if (preg_match('/\A(.*?[^:=<>!])([:=!<>]=?|≠|≤|≥)(.*)\z/s', $word, $m)
             && !ctype_digit($m[1])) {
@@ -1383,8 +1426,10 @@ class PaperSearch {
             $word = ($m[2] === ":" ? $m[3] : $m[2] . $m[3]);
         }
 
-        if (!preg_match(',\A(\d*)\s*([=!<>]=?|≠|≤|≥|)\s*(-?\d*)\s*([xyz]?)\z,i', $word, $m)
-            || ($m[1] === "" && $m[3] === "" && $m[4] === "")) {
+        if (strcasecmp($word, "any") == 0 || strcasecmp($word, "none") == 0)
+            $m = [null, "1", "=", "any", strcasecmp($word, "any") == 0];
+        else if (!preg_match(',\A(\d*)\s*([=!<>]=?|≠|≤|≥|)\s*(-?\d*)\s*([xyz]?)\z,i', $word, $m)
+                 || ($m[1] === "" && $m[3] === "" && $m[4] === "")) {
             $qt[] = new SearchTerm("f");
             return;
         }
@@ -1399,21 +1444,29 @@ class PaperSearch {
         // PC members can only search their own preferences.
         // Admins can search papers they administer.
         $value = new RevprefSearchMatcher((int) $m[1] ? ">=" . $m[1] : "=0", $contacts);
-        if ($m[3] !== "")
+        if ($m[3] === "any")
+            $value->is_any = true;
+        else if ($m[3] !== "")
             $value->preference_match = new CountMatcher($m[2] . $m[3]);
-        if ($m[4] !== "")
+        if ($m[3] !== "any" && $m[4] !== "")
             $value->expertise_match = new CountMatcher($m[2] . (121 - ord(strtolower($m[4]))));
+        $qz = [];
         if ($this->privChair)
-            $qt[] = new SearchTerm("revpref", 0, $value);
+            $qz[] = new SearchTerm("revpref", 0, $value);
         else {
             if ($this->contact->is_manager())
-                $qt[] = new SearchTerm("revpref", self::F_MANAGER, $value);
+                $qz[] = new SearchTerm("revpref", self::F_MANAGER, $value);
             if ($value->test_contact($this->cid)) {
                 $xvalue = clone $value;
                 $xvalue->set_contacts($this->cid);
-                $qt[] = new SearchTerm("revpref", 0, $xvalue);
+                $qz[] = new SearchTerm("revpref", 0, $xvalue);
             }
         }
+        if (!count($qz))
+            $qz[] = new SearchTerm("f");
+        if (strcasecmp($word, "none") == 0)
+            $qz = array(SearchTerm::make_not(SearchTerm::make_op("or", $qz)));
+        $qt = array_merge($qt, $qz);
     }
 
     private function _search_formula($word, &$qt, $quoted) {
@@ -1442,7 +1495,7 @@ class PaperSearch {
             if (count($ret) == 0)
                 $this->warn("“" . htmlspecialchars($c) . "” doesn’t match a PC email.");
             $tagword = substr($tagword, $twiddle);
-        } else if ($twiddle === 0 && @$tagword[1] !== "~")
+        } else if ($twiddle === 0 && ($tagword === "" || $tagword[1] !== "~"))
             $ret[0] = $this->cid;
 
         $tagger = new Tagger($this->contact);
@@ -1579,32 +1632,32 @@ class PaperSearch {
                         $warn[] = "“" . htmlspecialchars($oval) . "” doesn’t match any " . htmlspecialchars($oname) . " values.";
                     else if (count($xval) == 1) {
                         reset($xval);
-                        $qo[] = array($o, $ocompar, key($xval), $oval);
+                        $qo[] = new OptionMatcher($o, $ocompar, key($xval), $oval);
                     } else if ($ocompar !== "=" && $ocompar !== "!=")
                         $warn[] = "Submission option “" . htmlspecialchars("$oname:$oval") . "” matches multiple values, can’t use " . htmlspecialchars($ocompar) . ".";
                     else
-                        $qo[] = array($o, $ocompar === "=" ? "in" : "not in", array_keys($xval), $oval);
+                        $qo[] = new OptionMatcher($o, $ocompar, array_keys($xval), $oval);
                     continue;
                 }
 
                 if ($oval === "" || $oval === "yes")
-                    $qo[] = array($o, "!=", 0, $oval);
+                    $qo[] = new OptionMatcher($o, "!=", 0, $oval);
                 else if ($oval === "no")
-                    $qo[] = array($o, "=", 0);
+                    $qo[] = new OptionMatcher($o, "=", 0, $oval);
                 else if ($o->type === "numeric") {
                     if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m))
-                        $qo[] = array($o, $ocompar, $m[1]);
+                        $qo[] = new OptionMatcher($o, $ocompar, $m[1], $oval);
                     else
                         $warn[] = "Submission option “" . htmlspecialchars($o->name) . "” takes integer values.";
                 } else if ($o->type === "attachments") {
                     if ($oval === "any")
-                        $qo[] = array($o, "!=", 0, $oval);
+                        $qo[] = new OptionMatcher($o, "!=", 0, $oval);
                     else if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m)) {
                         if (CountMatcher::compare(0, $ocompar, $m[1]))
-                            $qo[] = array($o, "=", 0);
-                        $qo[] = array($o, ">0", "special", "attachment-count", $ocompar, $m[1]);
+                            $qo[] = new OptionMatcher($o, "=", 0, $oval);
+                        $qo[] = new OptionMatcher($o, $ocompar, $m[1], $oval, "attachment-count");
                     } else
-                        $qo[] = array($o, ">0", "special", "attachment-name", $oval);
+                        $qo[] = new OptionMatcher($o, "~=", $oval, $oval, "attachment-name", $oval);
                 } else
                     continue;
             }
@@ -1612,7 +1665,7 @@ class PaperSearch {
             foreach (PaperOption::option_list() as $oid => $o)
                 if ($o->has_selector()) {
                     foreach (Text::simple_search($oname, $o->selector) as $xval => $text)
-                        $qo[] = array($o, $ocompar, $xval);
+                        $qo[] = new OptionMatcher($o, $ocompar, $xval, "~val~");
                 }
 
         return (object) array("os" => $qo, "warn" => $warn, "negate" => $oname === "none");
@@ -1633,13 +1686,7 @@ class PaperSearch {
         // add expressions
         $qz = array();
         foreach ($os->os as $oq)
-            if ($oq[2] === "special") {
-                $qz[] = new SearchTerm("option", self::F_XVIEW, $oq);
-            } else {
-                $cmp = ctype_alpha($oq[1][0]) ? " $oq[1] " : $oq[1];
-                $value = is_array($oq[2]) ? "(" . join(",", $oq[2]) . ")" : $oq[2];
-                $qz[] = new SearchTerm("option", self::F_XVIEW, array($oq[0], $cmp . $value));
-            }
+            $qz[] = new SearchTerm("option", self::F_XVIEW, $oq);
         if ($os->negate)
             $qz = array(SearchTerm::make_not(SearchTerm::make_op("or", $qz)));
         $qt = array_merge($qt, $qz);
@@ -1649,7 +1696,7 @@ class PaperSearch {
     private function _search_has($word, &$qt, $quoted) {
         global $Conf;
         $lword = strtolower($word);
-        $lword = @self::$_keywords[$lword] ? : $lword;
+        $lword = get(self::$_keywords, $lword) ? : $lword;
         if ($lword === "paper" || $lword === "sub" || $lword === "submission")
             $qt[] = new SearchTerm("pf", 0, array("paperStorageId", "!=0"));
         else if ($lword === "final" || $lword === "finalcopy")
@@ -1678,7 +1725,7 @@ class PaperSearch {
                 if ($i)
                     $x[] = "“{$rname}response”";
             }
-            foreach (PaperOption::option_list() as $o)
+            foreach (PaperOption::option_json_list() as $o)
                 array_push($x, "“" . htmlspecialchars($o->abbr) . "”");
             $this->warn("Unknown “has:” search. I understand " . commajoin($x) . ".");
             $qt[] = new SearchTerm("f");
@@ -1856,7 +1903,7 @@ class PaperSearch {
         if (($colon = strpos($word, ":")) > 0) {
             $x = substr($word, 0, $colon);
             if (strpos($x, '"') === false) {
-                $keyword = @self::$_keywords[$x] ? : $x;
+                $keyword = get(self::$_keywords, $x) ? : $x;
                 $word = substr($word, $colon + 1);
                 if ($word === false)
                     $word = "";
@@ -1873,7 +1920,7 @@ class PaperSearch {
         $quoted = ($word[0] === '"');
         $negated = false;
         if ($quoted)
-            $word = str_replace(array('"', '*'), array('', '\*'), $word);
+            $word = str_replace('*', '\*', preg_replace('/(?:\A"|"\z)/', '', $word));
         if ($keyword === "notag") {
             $keyword = "tag";
             $negated = true;
@@ -1890,12 +1937,14 @@ class PaperSearch {
             $this->_searchField($word, "co", $qt);
         if ($keyword ? $keyword === "re" : isset($this->fields["re"]))
             $this->_search_reviewer($qword, "re", $qt);
-        else if ($keyword && @self::$_canonical_review_keywords[$keyword])
+        else if ($keyword && get(self::$_canonical_review_keywords, $keyword))
             $this->_search_reviewer($qword, $keyword, $qt);
         if (preg_match('/\A(?:(?:draft-?)?\w*resp(?:onse)|\w*resp(?:onse)?(-?draft)?|cmt|aucmt|anycmt)\z/', $keyword))
             $this->_search_comment($word, $keyword, $qt, $quoted);
-        if ($keyword === "revpref" && $this->amPC)
-            $this->_search_revpref($word, $qt, $quoted);
+        if ($keyword === "pref" && $this->amPC)
+            $this->_search_revpref($word, $qt, $quoted, false);
+        if ($keyword === "prefexp" && $this->amPC)
+            $this->_search_revpref($word, $qt, $quoted, true);
         foreach (array("lead", "shepherd", "manager") as $ctype)
             if ($keyword === $ctype) {
                 $x = $this->_one_pc_matcher($word, $quoted);
@@ -1977,9 +2026,8 @@ class PaperSearch {
             $qt[] = ($qe ? : new SearchTerm("f"));
         }
         if ($keyword === "HEADING") {
-            if (($heading = simplify_whitespace($word)) !== "")
-                $this->headingmap = array();
-            $qt[] = SearchTerm::make_float(array("heading" => $heading));
+            $heading = simplify_whitespace($word);
+            $qt[] = SearchTerm::make_float(["heading" => $heading]);
         }
         if ($keyword === "show" || $keyword === "hide" || $keyword === "edit"
             || $keyword === "sort" || $keyword === "showsort"
@@ -2033,17 +2081,23 @@ class PaperSearch {
                 $str = $m[2] . $str;
         }
 
+        // elide colon
+        if ($word === "HEADING") {
+            $str = $word . ":" . ltrim($str);
+            return self::pop_word($str);
+        }
+
         // check for keyword
         $keyword = false;
         if (($colon = strpos($word, ":")) > 0) {
             $x = substr($word, 0, $colon);
             if (strpos($x, '"') === false)
-                $keyword = @self::$_keywords[$x] ? : $x;
+                $keyword = get(self::$_keywords, $x) ? : $x;
         }
 
         // allow a space after a keyword
         if ($keyword && strlen($word) <= $colon + 1 && preg_match($wordre, $str, $m)) {
-            $word .= $m[0];
+            $word .= ltrim($m[0]);
             $str = substr($str, strlen($m[0]));
         }
 
@@ -2132,7 +2186,7 @@ class PaperSearch {
                     $curqe = $this->_searchQueryWord($word, true);
                     // Don't include 'show:' in headings.
                     if (($colon = strpos($word, ":")) === false
-                        || !@self::$_noheading_keywords[substr($word, 0, $colon)])
+                        || !get(self::$_noheading_keywords, substr($word, 0, $colon)))
                         $curqe->set_float("substr", substr($prevstr, 0, strlen($prevstr) - strlen($nextstr)));
                 }
             } else if ($opstr === ")") {
@@ -2578,8 +2632,6 @@ class PaperSearch {
                 $where[] = $rsm->contact_match_sql("r.contactId");
             if ($rsm->fieldsql)
                 $where[] = $rsm->fieldsql;
-            if ($rsm->wordcountexpr && $Conf->sversion >= 99)
-                $where[] = "reviewWordCount" . $rsm->wordcountexpr;
             $wheretext = "";
             if (count($where))
                 $wheretext = " where " . join(" and ", $where);
@@ -2614,10 +2666,8 @@ class PaperSearch {
             $where = array();
             if ($rsm->has_contacts())
                 $where[] = $rsm->contact_match_sql("contactId");
-            if ($rsm->preference_match)
-                $where[] = "preference" . $rsm->preference_match->countexpr();
-            if ($rsm->expertise_match)
-                $where[] = "expertise" . $rsm->expertise_match->countexpr();
+            if (($match = $rsm->preference_expertise_match()))
+                $where[] = $match;
             $q = "select paperId, count(PaperReviewPreference.preference) as count"
                 . " from PaperReviewPreference";
             if (count($where))
@@ -2648,7 +2698,7 @@ class PaperSearch {
                 $where[] = "(commentType&" . COMMENTTYPE_DRAFT . ")!=0";
             if ($t->flags & self::F_AUTHORCOMMENT)
                 $where[] = "commentType>=" . COMMENTTYPE_AUTHOR;
-            if (@$t->commentRound !== null)
+            if (isset($t->commentRound))
                 $where[] = "commentRound=" . $t->commentRound;
             if ($extrawhere)
                 $where[] = $extrawhere;
@@ -2702,7 +2752,7 @@ class PaperSearch {
             else {
                 $rtype = $t->flags & (self::F_ALLOWCOMMENT | self::F_ALLOWRESPONSE | self::F_AUTHORCOMMENT | self::F_ALLOWDRAFT | self::F_REQUIREDRAFT);
                 $thistab = "Numcomments_" . $rtype;
-                if (@$t->commentRound !== null)
+                if (isset($t->commentRound))
                     $thistab .= "_" . $t->commentRound;
             }
             $f[] = $this->_clauseTermSetComments($thistab, $t->value->contact_match_sql("contactId"), $t, $sqi);
@@ -2750,8 +2800,8 @@ class PaperSearch {
             $q = array();
             $this->_clauseTermSetFlags($t, $sqi, $q);
             $thistab = "Option_" . count($sqi->tables);
-            $sqi->add_table($thistab, array("left join", "(select paperId, max(value) v from PaperOption where optionId=" . $t->value[0]->id . " group by paperId)"));
-            $sqi->add_column($thistab . "_x", "coalesce($thistab.v,0)" . $t->value[1]);
+            $sqi->add_table($thistab, array("left join", "(select paperId, max(value) v from PaperOption where optionId=" . $t->value->option->id . " group by paperId)"));
+            $sqi->add_column($thistab . "_x", "coalesce($thistab.v,0)" . $t->value->table_matcher());
             $t->link = $thistab . "_x";
             $q[] = $sqi->columns[$t->link];
             $f[] = "(" . join(" and ", $q) . ")";
@@ -2795,6 +2845,17 @@ class PaperSearch {
     // Check the results of the query, reducing the possibly conservative
     // overestimate produced by the database to a precise result.
 
+    private function _clauseTermCheckWordCount($t, $row, $rrow) {
+        if ($this->_reviewWordCounts === false)
+            $this->_reviewWordCounts = Dbl::fetch_iimap("select reviewId, reviewWordCount from PaperReview");
+        if (!isset($this->_reviewWordCounts[$rrow->reviewId])) {
+            $cid2rid = $row->all_review_ids();
+            foreach ($row->all_review_word_counts($row) as $cid => $rwc)
+                $this->_reviewWordCounts[$cid2rid[$cid]] = $rwc;
+        }
+        return $t->value->wordcountexpr->test($this->_reviewWordCounts[$rrow->reviewId]);
+    }
+
     private function _clauseTermCheckFlags($t, $row) {
         $flags = $t->flags;
         if (($flags & self::F_MANAGER)
@@ -2824,7 +2885,7 @@ class PaperSearch {
                 && !$this->contact->can_view_decision($row, true))
                 return false;
             if ($t->type === "option"
-                && !$this->contact->can_view_paper_option($row, $t->value[0], true))
+                && !$this->contact->can_view_paper_option($row, $t->value->option, true))
                 return false;
             if ($t->type === "re" && ($fieldname = $t->link)
                 && !isset($row->$fieldname)) {
@@ -2834,14 +2895,22 @@ class PaperSearch {
                 foreach (explode(",", defval($row, $fieldname . "_info", "")) as $info)
                     if ($info !== "") {
                         list($rrow->reviewId, $rrow->contactId, $rrow->reviewType, $rrow->reviewSubmitted, $rrow->reviewNeedsSubmit, $rrow->requestedBy, $rrow->reviewToken, $rrow->reviewBlind) = explode(" ", $info);
-                        if (($count_only
-                             ? $this->contact->can_count_review($row, $rrow, true)
-                             : $this->contact->can_view_review($row, $rrow, true))
-                            && (!$t->value->has_contacts()
-                                || $this->contact->can_view_review_identity($row, $rrow, true))
-                            && (!isset($t->value->view_score)
-                                || $t->value->view_score > $this->contact->view_score_bound($row, $rrow)))
-                            ++$row->$fieldname;
+                        if ($count_only
+                            ? !$this->contact->can_view_review_assignment($row, $rrow, true)
+                            : !$this->contact->can_view_review($row, $rrow, true))
+                            continue;
+                        if ($t->value->has_contacts()
+                            ? !$this->contact->can_view_review_identity($row, $rrow, true)
+                            : /* don't count delegated reviews unless contacts given */
+                              $rrow->reviewSubmitted <= 0 && $rrow->reviewNeedsSubmit <= 0)
+                            continue;
+                        if (isset($t->value->view_score)
+                            && $t->value->view_score <= $this->contact->view_score_bound($row, $rrow))
+                            continue;
+                        if ($t->value->wordcountexpr
+                            && !$this->_clauseTermCheckWordCount($t, $row, $rrow))
+                            continue;
+                        ++$row->$fieldname;
                     }
             }
             if (($t->type === "cmt" || $t->type === "cmttag")
@@ -2944,12 +3013,13 @@ class PaperSearch {
             $fieldname = $t->link;
             if ($row->$fieldname == 0)
                 return false;
-            if (@$t->value[2] === "special") {
-                $ov = $row->option($t->value[0]->id);
-                if ($t->value[3] === "attachment-count")
-                    return CountMatcher::compare(count($ov->values), $t->value[4], $t->value[5]);
-                else if ($t->value[3] === "attachment-name") {
-                    $reg = self::analyze_field_preg($t->value[4]);
+            $om = $t->value;
+            if ($om->kind) {
+                $ov = $row->option($om->option->id);
+                if ($om->kind === "attachment-count" && $ov)
+                    return CountMatcher::compare(count($ov->values), $om->compar, $om->value);
+                else if ($om->kind === "attachment-name" && $ov) {
+                    $reg = self::analyze_field_preg($om->value);
                     foreach ($ov->documents($row) as $doc)
                         if (self::match_field_preg($reg, $doc->filename, false))
                             return true;
@@ -2994,7 +3064,7 @@ class PaperSearch {
         } else if ($qe->type === "pn") {
             foreach ($qe->value[0] as $p)
                 if (array_search($p, $this->_matches) === false)
-                    $this->_matches[] = $p;
+                    $this->_matches[] = (int) $p;
         }
     }
 
@@ -3012,6 +3082,47 @@ class PaperSearch {
             $s = ListSorter::make_field(new NumericOrderPaperColumn(array_flip($pn)));
             $s->thenmap = $thenmap;
             $this->sorters[] = $s;
+        }
+    }
+
+    private function _check_sort_order_anno($sorters) {
+        $thetag = null;
+        $tagger = new Tagger($this->contact);
+        foreach ($sorters as $sorter) {
+            if (!preg_match('/\A(?:#|tag:\s*|tagval:\s*)(\S+)\z/', $sorter, $m)
+                || !($tag = $tagger->check($m[1]))
+                || ($thetag !== null && $tag !== $thetag))
+                return false;
+            $thetag = $tag;
+        }
+        return $thetag;
+    }
+
+    private function _assign_order_anno_group($g, $order_anno_tag, $anno_index) {
+        if (($e = $order_anno_tag->order_anno_entry($anno_index)))
+            $this->groupmap[$g] = $e;
+        else if (!isset($this->groupmap[$g]))
+            $this->groupmap[$g] = (object) ["tag" => $order_anno_tag->tag, "heading" => "", "annoFormat" => 0];
+    }
+
+    private function _assign_order_anno($order_anno_tag, $tag_order) {
+        $this->thenmap = [];
+        $this->_assign_order_anno_group(0, $order_anno_tag, -1);
+        $this->groupmap[0]->heading = "none";
+        $cur_then = $aidx = $tidx = 0;
+        $alist = $order_anno_tag->order_anno_list();
+        usort($tag_order, "TagInfo::id_index_compar");
+        while ($aidx < count($alist) || $tidx < count($tag_order)) {
+            if ($tidx == count($tag_order)
+                || ($aidx < count($alist) && $alist[$aidx]->tagIndex <= $tag_order[$tidx][1])) {
+                if ($cur_then != 0 || $tidx != 0 || $aidx != 0)
+                    ++$cur_then;
+                $this->_assign_order_anno_group($cur_then, $order_anno_tag, $aidx);
+                ++$aidx;
+            } else {
+                $this->thenmap[$tag_order[$tidx][0]] = $cur_then;
+                ++$tidx;
+            }
         }
     }
 
@@ -3128,12 +3239,23 @@ class PaperSearch {
             $sqi->add_column("myReviewSubmitted", "MyReview.reviewSubmitted");
         }
 
+        // check for annotated order
+        $order_anno_tag = null;
+        if ($qe->type !== "then"
+            && ($sort = $qe->get_float("sort"))
+            && ($tag = self::_check_sort_order_anno($sort))) {
+            $dt = TagInfo::make_defined_tag($tag);
+            if (count($dt->order_anno_list()))
+                $order_anno_tag = $dt;
+        }
+
         // add permissions tables if we will filter the results
         $need_filter = (($this->needflags & self::F_XVIEW)
                         || $Conf->has_tracks()
                         || $qe->type === "then"
                         || $qe->get_float("heading")
-                        || $limit === "rable");
+                        || $limit === "rable"
+                        || $order_anno_tag);
         if ($need_filter) {
             $sqi->add_rights_columns();
             if ($Conf->submission_blindness() == Conf::BLIND_OPTIONAL)
@@ -3142,18 +3264,19 @@ class PaperSearch {
 
         // XXX some of this should be shared with paperQuery
         if (($need_filter && $Conf->has_track_tags())
-            || @$this->_query_options["tags"]) {
-            $sqi->add_table("PaperTags", array("left join", "(select paperId, group_concat(' ', tag, '#', tagIndex separator '') as paperTags from PaperTag group by paperId)"));
-            $sqi->add_column("paperTags", "PaperTags.paperTags");
-        }
-        if (@$this->_query_options["scores"] || @$this->_query_options["reviewTypes"] || @$this->_query_options["reviewContactIds"]) {
+            || get($this->_query_options, "tags")
+            || $order_anno_tag)
+            $sqi->add_column("paperTags", "(select group_concat(' ', tag, '#', tagIndex separator '') from PaperTag where PaperTag.paperId=Paper.paperId)");
+        if (get($this->_query_options, "scores")
+            || get($this->_query_options, "reviewTypes")
+            || get($this->_query_options, "reviewContactIds")) {
             $j = "group_concat(contactId order by reviewId) reviewContactIds";
             $sqi->add_column("reviewContactIds", "R_submitted.reviewContactIds");
-            if (@$this->_query_options["reviewTypes"]) {
+            if (get($this->_query_options, "reviewTypes")) {
                 $j .= ", group_concat(reviewType order by reviewId) reviewTypes";
                 $sqi->add_column("reviewTypes", "R_submitted.reviewTypes");
             }
-            foreach (@$this->_query_options["scores"] ? : array() as $f) {
+            foreach (get($this->_query_options, "scores") ? : array() as $f) {
                 $j .= ", group_concat($f order by reviewId) {$f}Scores";
                 $sqi->add_column("{$f}Scores", "R_submitted.{$f}Scores");
             }
@@ -3187,14 +3310,14 @@ class PaperSearch {
             return ($this->_matches = false);
         $this->_matches = array();
 
-        // correct query, create thenmap, headingmap, highlightmap
+        // correct query, create thenmap, groupmap, highlightmap
         $need_then = $qe->type === "then";
         $this->thenmap = null;
         if ($need_then && $qe->nthen > 1)
             $this->thenmap = array();
         $this->highlightmap = array();
         if ($need_filter) {
-            $delete = array();
+            $tag_order = [];
             while (($row = PaperInfo::fetch($result, $this->cid))) {
                 if (!$this->contact->can_view_paper($row)
                     || ($limit === "rable"
@@ -3209,7 +3332,7 @@ class PaperSearch {
                     $x = !!$this->_clauseTermCheck($qe, $row);
                 if ($x === false)
                     continue;
-                $this->_matches[] = (int) $row->paperId;
+                $this->_matches[] = $row->paperId;
                 if ($this->thenmap !== null)
                     $this->thenmap[$row->paperId] = $x;
                 if ($need_then)
@@ -3219,6 +3342,12 @@ class PaperSearch {
                             $this->highlightmap[$row->paperId] = $qe->highlight_types[$j - $qe->nthen] . "highlight";
                             break;
                         }
+                if ($order_anno_tag) {
+                    if ($row->has_viewable_tag($order_anno_tag->tag, $this->contact))
+                        $tag_order[] = [$row->paperId, $row->tag_value($order_anno_tag->tag)];
+                    else
+                        $tag_order[] = [$row->paperId, TAG_INDEXBOUND];
+                }
             }
         } else
             while (($row = $result->fetch_object()))
@@ -3236,12 +3365,18 @@ class PaperSearch {
         if ($qe->type === "then")
             for ($i = 0; $i < $qe->nthen; ++$i)
                 $this->_add_sorters($qe->value[$i], $this->thenmap ? $i : null);
-        $this->headingmap = array();
+        $this->groupmap = [];
         if ($qe->type === "then") {
-            for ($i = 0; $i < $qe->nthen; ++$i)
-                $this->headingmap[$i] = $qe->value[$i]->get_float("heading");
+            for ($i = 0; $i < $qe->nthen; ++$i) {
+                $h = $qe->value[$i]->get_float("heading");
+                $this->groupmap[$i] = (object) ["heading" => $h, "annoFormat" => 0];
+            }
         } else if (($h = $qe->get_float("heading")))
-            $this->headingmap[0] = $h;
+            $this->groupmap[0] = (object) ["heading" => $h, "annoFormat" => 0];
+        else if ($order_anno_tag) {
+            $this->_assign_order_anno($order_anno_tag, $tag_order);
+            $this->is_order_anno = $order_anno_tag->tag;
+        }
 
         // extract regular expressions and set _reviewer if the query is
         // about exactly one reviewer, and warn about contradictions
@@ -3343,7 +3478,7 @@ class PaperSearch {
     }
 
     function has_sort() {
-        return @$this->sorters;
+        return $this->sorters;
     }
 
     function paperList() {
@@ -3583,7 +3718,7 @@ class PaperSearch {
                 if ($i)
                     $res[] = "has:draft{$rname}response";
             }
-        foreach (PaperOption::option_list() as $o)
+        foreach (PaperOption::user_option_list($this->contact) as $o)
             if ($this->contact->can_view_some_paper_option($o))
                 array_push($res, "has:{$o->abbr}", "opt:{$o->abbr}");
         if ($this->contact->is_reviewer() && $Conf->has_rounds()
@@ -3612,7 +3747,7 @@ class PaperSearch {
                     && $c->prepare($pl, PaperColumn::PREP_COMPLETION))
                     $cats[$cat] = true;
             foreach (PaperColumn::$factories as $f) {
-                foreach ($f[1]->completion_instances() as $c)
+                foreach ($f[1]->completion_instances($this->contact) as $c)
                     if (($cat = $c->completion_name())
                         && $c->prepare($pl, PaperColumn::PREP_COMPLETION))
                         $cats[$cat] = true;

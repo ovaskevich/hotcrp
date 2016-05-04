@@ -8,7 +8,7 @@ require_once("src/papertable.php");
 require_once("src/reviewtable.php");
 if ($Me->is_empty())
     $Me->escape();
-$_REQUEST["forceShow"] = 1;
+$Me->set_forceShow(true);
 $Error = array();
 // ensure site contact exists before locking tables
 Contact::site_contact();
@@ -50,7 +50,6 @@ function rrow_by_reviewid($rid) {
 }
 
 
-// forceShow
 loadRows();
 
 
@@ -264,11 +263,11 @@ function requestReview($email) {
     $Requester = $Me;
     if ($Conf->setting("extrev_chairreq")) {
         $result = Dbl::qe("select firstName, lastName, u.email, u.contactId from ReviewRequest rr join ContactInfo u on (u.contactId=rr.requestedBy) where paperId=$prow->paperId and rr.email=?", $Them->email);
-        if ($result && ($recorded_requester = $result->fetch_object("Contact")))
+        if ($result && ($recorded_requester = Contact::fetch($result)))
             $Requester = $recorded_requester;
     }
 
-    Dbl::qe_raw("lock tables PaperReview write, PaperReviewRefused write, ContactInfo read, PaperConflict read, ActionLog write");
+    Dbl::qe_raw("lock tables PaperReview write, PaperReviewRefused write, ReviewRequest write, ContactInfo read, PaperConflict read, ActionLog write");
     // NB caller unlocks tables on error
 
     // check for outstanding review request
@@ -279,13 +278,9 @@ function requestReview($email) {
     // store the review request
     $Me->assign_review($prow->paperId, $Them->contactId, REVIEW_EXTERNAL,
                        ["mark_notify" => true, "requester_contact" => $Requester,
-                        "round_number" => $round]);
+                        "requested_email" => $Them->email, "round_number" => $round]);
 
     Dbl::qx_raw("unlock tables");
-
-    // delete proposed request, mark secondary as delegated
-    Dbl::qe("delete from ReviewRequest where paperId=$prow->paperId and ReviewRequest.email=?", $Them->email);
-    Dbl::qe_raw("update PaperReview set reviewNeedsSubmit=-1 where paperId=$prow->paperId and reviewType=" . REVIEW_SECONDARY . " and contactId=$Requester->contactId and reviewSubmitted is null and reviewNeedsSubmit=1");
 
     // send confirmation email
     HotCRPMailer::send_to($Them, "@requestreview", $prow,
@@ -402,7 +397,7 @@ if (isset($_REQUEST["add"]) && check_post()) {
              && $Me->allow_administer($prow)) {
         if (!createAnonymousReview())
             Dbl::qx_raw("unlock tables");
-        unset($_REQUEST["reason"]);
+        unset($_REQUEST["reason"], $_GET["reason"], $_POST["reason"]);
         loadRows();
     } else if (trim($_REQUEST["email"]) === "")
         Conf::msg_error("An email address is required to request a review.");
@@ -412,10 +407,8 @@ if (isset($_REQUEST["add"]) && check_post()) {
         else
             $ok = requestReview($_REQUEST["email"]);
         if ($ok) {
-            unset($_REQUEST["email"]);
-            unset($_REQUEST["name"]);
-            unset($_REQUEST["round"]);
-            unset($_REQUEST["reason"]);
+            foreach (["email", "name", "round", "reason"] as $k)
+                unset($_REQUEST[$k], $_GET[$k], $_POST[$k]);
             redirectSelf();
         } else
             Dbl::qx_raw("unlock tables");
@@ -446,8 +439,8 @@ if (isset($_REQUEST["deny"]) && $Me->allow_administer($prow) && check_post()
     } else
         Conf::msg_error("No one has proposed that " . htmlspecialchars($email) . " review this paper.");
     Dbl::qx_raw("unlock tables");
-    unset($_REQUEST['email']);
-    unset($_REQUEST['name']);
+    unset($_REQUEST["email"], $_GET["email"], $_POST["email"]);
+    unset($_REQUEST["name"], $_GET["name"], $_POST["name"]);
 }
 
 
@@ -465,7 +458,7 @@ if (isset($_REQUEST["addpc"]) && $Me->allow_administer($prow) && check_post()) {
 
 
 // paper table
-$paperTable = new PaperTable($prow, "assign");
+$paperTable = new PaperTable($prow, make_qreq(), "assign");
 $paperTable->initialize(false, false);
 
 confHeader();
@@ -501,14 +494,12 @@ if ($Me->can_administer($prow)) {
         coalesce(preference, 0) as reviewerPreference,
         expertise as reviewerExpertise,
         coalesce(allReviews,'') as allReviews,
-        coalesce(PaperTopics.topicInterestScore,0) as topicInterestScore,
         coalesce(PRR.paperId,0) as refused
         from ContactInfo
         left join PaperConflict on (PaperConflict.contactId=ContactInfo.contactId and PaperConflict.paperId=$prow->paperId)
         left join PaperReview on (PaperReview.contactId=ContactInfo.contactId and PaperReview.paperId=$prow->paperId)
         left join PaperReviewPreference on (PaperReviewPreference.contactId=ContactInfo.contactId and PaperReviewPreference.paperId=$prow->paperId)
         left join (select PaperReview.contactId, group_concat(reviewType separator '') as allReviews from PaperReview join Paper on (Paper.paperId=PaperReview.paperId and timeWithdrawn<=0) group by PaperReview.contactId) as AllReviews on (AllReviews.contactId=ContactInfo.contactId)
-        left join (select contactId, sum(" . $Conf->query_topic_interest_score() . ") as topicInterestScore from PaperTopic join TopicInterest using (topicId) where paperId=$prow->paperId group by contactId) as PaperTopics on (PaperTopics.contactId=ContactInfo.contactId)
         left join PaperReviewRefused PRR on (PRR.paperId=$prow->paperId and PRR.contactId=ContactInfo.contactId)
         where (ContactInfo.roles&" . Contact::ROLE_PC . ")!=0
         group by ContactInfo.contactId");
@@ -552,8 +543,8 @@ if ($Me->can_administer($prow)) {
             continue;
 
         // first, name and assignment
-        $color = $tagger->viewable_color_classes($pc->all_contact_tags());
-        echo '<div class="ctelt"><div class="pc_ctelt' . ($color ? " $color" : "") . '">';
+        $color = $pc->viewable_color_classes($Me);
+        echo '<div class="ctelt"><div class="ctelti' . ($color ? " $color" : "") . '">';
         if ($p->conflictType >= CONFLICT_AUTHOR) {
             echo '<div class="pctbass">', review_type_icon(-2),
                 Ht::img("_.gif", ">", array("class" => "next", "style" => "visibility:hidden")), '&nbsp;</div>',
@@ -572,17 +563,17 @@ if ($Me->can_administer($prow)) {
                 . '<div id="foldass' . $p->contactId . '" class="foldc" style="position:relative">'
                 . '<a id="folderass' . $p->contactId . '" href="#" onclick="return assigntable.open(' . $p->contactId . ')">'
                 . review_type_icon($revtype, false, $title)
-                . Ht::img("_.gif", ">", array("class" => "next")) . '</a>'
-                . '</a>&nbsp;'
+                . Ht::img("_.gif", ">", array("class" => "next")) . '</a>&nbsp;'
                 . Ht::hidden("pcs$p->contactId", $p->conflictType == 0 ? $p->reviewType : -1, array("id" => "pcs$p->contactId"))
                 . '</div></div>';
 
             echo '<div id="ass' . $p->contactId . '" class="pctbname pctbname' . $revtype . '">'
                 . '<span class="taghl nw">' . $Me->name_html_for($pc) . '</span>';
-            if ($p->conflictType == 0
-                && ($p->reviewerPreference || $p->reviewerExpertise
-                    || $p->topicInterestScore))
-                echo unparse_preference_span($p);
+            if ($p->conflictType == 0) {
+                $p->topicInterestScore = $prow->topic_interest_score($pc);
+                if ($p->reviewerPreference || $p->reviewerExpertise || $p->topicInterestScore)
+                    echo unparse_preference_span($p);
+            }
             echo '</div>';
         }
 

@@ -7,17 +7,41 @@ require_once("src/initweb.php");
 require_once("src/papersearch.php");
 if ($Me->is_empty())
     $Me->escape();
-$getaction = "";
-if (isset($_REQUEST["get"]))
-    $getaction = $_REQUEST["get"];
-else if (isset($_REQUEST["getgo"]) && isset($_REQUEST["getaction"]))
-    $getaction = $_REQUEST["getaction"];
 
-// choose a sensible default action (if someone presses enter on a form element)
-if (isset($_REQUEST["default"]) && defval($_REQUEST, "defaultact"))
-    $_REQUEST[$_REQUEST["defaultact"]] = true;
-else if (isset($_REQUEST["default"]))
-    $_REQUEST["download"] = true;
+global $Qreq;
+if (!$Qreq)
+    $Qreq = make_qreq();
+
+if (isset($Qreq->default) && $Qreq->defaultact)
+    $Qreq->fn = $Qreq->defaultact;
+// backwards compat
+if (!isset($Qreq->fn) || !in_array($Qreq->fn, ["get", "load", "tag", "assign", "decide", "sendmail"])) {
+    if (isset($Qreq->get) && $Qreq->ajax && ($fdef = PaperColumn::lookup($Qreq->get)) && $fdef->foldable) {
+        $Qreq->fn = "load";
+        $Qreq->field = $Qreq->get;
+    } else if (isset($Qreq->get)) {
+        $Qreq->fn = "get";
+        $Qreq->getfn = $Qreq->get;
+    } else if (isset($Qreq->getgo) && isset($Qreq->getaction)) {
+        $Qreq->fn = "get";
+        $Qreq->getfn = $Qreq->getaction;
+    } else if (isset($Qreq->tagact) || $Qreq->fn === "tagact") {
+        $Qreq->fn = "tag";
+        $Qreq->tagfn = $Qreq->tagtype;
+    } else if (isset($Qreq->setassign) || $Qreq->fn === "setassign") {
+        $Qreq->fn = "assign";
+        $Qreq->assignfn = $Qreq->marktype;
+    } else if (isset($Qreq->setdecision) || $Qreq->fn === "setdecision")
+        $Qreq->fn = "decide";
+    else if (isset($Qreq->sendmail))
+        $Qreq->fn = "sendmail";
+    else {
+        SearchAction::load();
+        if (!SearchAction::has_function($Qreq->fn))
+            unset($Qreq->fn);
+    }
+}
+
 
 // paper group
 $tOpt = PaperSearch::search_types($Me);
@@ -26,979 +50,55 @@ if (count($tOpt) == 0) {
     Conf::msg_error("You are not allowed to search for papers.");
     exit;
 }
-if (isset($_REQUEST["t"]) && !isset($tOpt[$_REQUEST["t"]])) {
+if (isset($Qreq->t) && !isset($tOpt[$Qreq->t])) {
     Conf::msg_error("You aren’t allowed to search that paper collection.");
-    unset($_REQUEST["t"]);
+    unset($Qreq->t, $_GET["t"], $_POST["t"], $_REQUEST["t"]);
 }
-if (!isset($_REQUEST["t"]))
-    $_REQUEST["t"] = key($tOpt);
+if (!isset($Qreq->t))
+    $Qreq->t = $_GET["t"] = $_POST["t"] = $_REQUEST["t"] = key($tOpt);
 
 // search canonicalization
-if (isset($_REQUEST["q"]))
-    $_REQUEST["q"] = trim($_REQUEST["q"]);
-if (isset($_REQUEST["q"]) && trim($_REQUEST["q"]) == "(All)")
-    $_REQUEST["q"] = "";
-if ((isset($_REQUEST["qa"]) || isset($_REQUEST["qo"]) || isset($_REQUEST["qx"]))
-    && !isset($_REQUEST["q"])) {
-    $_REQUEST["qa"] = defval($_REQUEST, "qa", "");
-    $_REQUEST["q"] = PaperSearch::canonical_query($_REQUEST["qa"], defval($_REQUEST, "qo"), defval($_REQUEST, "qx"));
-} else {
-    unset($_REQUEST["qa"]);
-    unset($_REQUEST["qo"]);
-    unset($_REQUEST["qx"]);
-}
+if (isset($Qreq->q))
+    $Qreq->q = trim($Qreq->q);
+if (isset($Qreq->q) && $Qreq->q == "(All)")
+    $Qreq->q = "";
+if ((isset($Qreq->qa) || isset($Qreq->qo) || isset($Qreq->qx)) && !isset($Qreq->q))
+    $Qreq->q = PaperSearch::canonical_query((string) $Qreq->qa, $Qreq->qo, $Qreq->qx);
+else
+    unset($Qreq->qa, $Qreq->qo, $Qreq->qx, $_GET["qa"], $_GET["qo"], $_GET["qx"], $_POST["qa"], $_POST["qo"], $_POST["qx"], $_REQUEST["qa"], $_REQUEST["qo"], $_REQUEST["qx"]);
+if (isset($Qreq->q))
+    $_REQUEST["q"] = $_GET["q"] = $Qreq->q;
 
 
 // paper selection
-if (!SearchActions::any()) {
-    SearchActions::parse_requested_selection($Me);
-    SearchActions::clear_requested_selection();
+global $SSel;
+if (!$SSel) { /* we might be included by reviewprefs.php */
+    $SSel = SearchSelection::make($Qreq, $Me);
+    SearchSelection::clear_request();
 }
 
-function cleanAjaxResponse(&$response, $type) {
-    foreach (SearchActions::selection() as $pid)
-        if (!isset($response[$type . $pid]))
-            $response[$type . $pid] = "";
-}
-
-
-// download selected papers
-if (($getaction == "paper" || $getaction == "final"
-     || substr($getaction, 0, 4) == "opt-")
-    && SearchActions::any()
-    && ($dt = HotCRPDocument::parse_dtype($getaction)) !== null) {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection())));
-    $downloads = array();
-    while (($row = PaperInfo::fetch($result, $Me))) {
-        if (($whyNot = $Me->perm_view_paper($row, true)))
-            Conf::msg_error(whyNotText($whyNot, "view"));
-        else
-            $downloads[] = $row->paperId;
-    }
-
-    session_write_close();      // to allow concurrent clicks
-    if ($Conf->downloadPaper($downloads, true, $dt))
-        exit;
-}
-
-
-function topic_ids_to_text($tids, $tmap, $tomap) {
-    $tx = array();
-    foreach (explode(",", $tids) as $tid)
-        if (($tname = @$tmap[$tid]))
-            $tx[$tomap[$tid]] = $tname;
-    ksort($tx);
-    return join(", ", $tx);
-}
-
-
-// download selected abstracts
-if ($getaction == "abstract" && SearchActions::any() && defval($_REQUEST, "ajax")) {
-    $Search = new PaperSearch($Me, $_REQUEST);
-    $pl = new PaperList($Search);
-    $response = $pl->ajaxColumn("abstract");
-    $response["ok"] = (count($response) > 0);
-    $Conf->ajaxExit($response);
-} else if ($getaction == "abstract" && SearchActions::any()) {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "topics" => 1)));
-    $texts = array();
-    list($tmap, $tomap) = array($Conf->topic_map(), $Conf->topic_order_map());
-    while ($prow = PaperInfo::fetch($result, $Me)) {
-        if (($whyNot = $Me->perm_view_paper($prow)))
-            Conf::msg_error(whyNotText($whyNot, "view"));
-        else {
-            $text = "===========================================================================\n";
-            $n = "Paper #" . $prow->paperId . ": ";
-            $l = max(14, (int) ((75.5 - strlen($prow->title) - strlen($n)) / 2) + strlen($n));
-            $text .= prefix_word_wrap($n, $prow->title, $l);
-            $text .= "---------------------------------------------------------------------------\n";
-            $l = strlen($text);
-            if ($Me->can_view_authors($prow, $_REQUEST["t"] == "a"))
-                $text .= prefix_word_wrap("Authors: ", $prow->pretty_text_author_list(), 14);
-            if ($prow->topicIds != "") {
-                $tt = topic_ids_to_text($prow->topicIds, $tmap, $tomap);
-                $text .= prefix_word_wrap("Topics: ", $tt, 14);
-            }
-            if ($l != strlen($text))
-                $text .= "---------------------------------------------------------------------------\n";
-            $text .= rtrim($prow->abstract) . "\n\n";
-            defappend($texts[$prow->paperId], $text);
-            $rfSuffix = (count($texts) == 1 ? $prow->paperId : "s");
-        }
-    }
-
-    if (count($texts)) {
-        downloadText(join("", SearchActions::reorder($texts)), "abstract$rfSuffix");
-        exit;
-    }
-}
-
-
-// other field-based Ajax downloads: tags, collaborators, ...
-if ($getaction && ($fdef = PaperColumn::lookup($getaction))
-    && $fdef->foldable && defval($_REQUEST, "ajax")) {
-    if ($getaction == "authors") {
-        $full = defval($_REQUEST, "aufull", 0);
+// Ajax field loading: abstract, tags, collaborators, ...
+if ($Qreq->fn == "load" && $Qreq->field
+    && ($fdef = PaperColumn::lookup($Qreq->field))
+    && $fdef->foldable) {
+    if ($Qreq->field == "authors") {
+        $full = (int) $Qreq->aufull;
         displayOptionsSet("pldisplay", "aufull", $full);
     }
-    $Search = new PaperSearch($Me, $_REQUEST);
+    $Search = new PaperSearch($Me, $Qreq);
     $pl = new PaperList($Search);
-    $response = $pl->ajaxColumn($getaction);
+    $response = $pl->ajaxColumn($Qreq->field);
     $response["ok"] = (count($response) > 0);
     $Conf->ajaxExit($response);
-}
-
-
-function whyNotToText($e) {
-    $e = preg_replace('|\(?<a.*?</a>\)?\s*\z|i', "", $e);
-    return preg_replace('|<.*?>|', "", $e);
-}
-
-function downloadReviews(&$texts, &$errors) {
-    global $getaction, $Opt, $Conf;
-
-    $texts = SearchActions::reorder($texts);
-    if (count($texts) == 0) {
-        if (count($errors) == 0)
-            Conf::msg_error("No papers selected.");
-        else
-            Conf::msg_error(join("<br />\n", array_keys($errors)) . "<br />Nothing to download.");
-        return;
-    }
-
-    $getforms = ($getaction == "revform" || $getaction == "revformz");
-    $gettext = ($getaction == "rev" || $getaction == "revform");
-
-    $warnings = array();
-    $nerrors = 0;
-    foreach ($errors as $ee => $iserror) {
-        $warnings[] = whyNotToText($ee);
-        if ($iserror)
-            $nerrors++;
-    }
-    if ($nerrors)
-        array_unshift($warnings, "Some " . ($getforms ? "review forms" : "reviews") . " are missing:");
-
-    if ($getforms && (count($texts) == 1 || !$gettext))
-        $rfname = "review";
-    else
-        $rfname = "reviews";
-    if (count($texts) == 1 && $gettext)
-        $rfname .= key($texts);
-
-    if ($getforms)
-        $header = ReviewForm::textFormHeader(count($texts) > 1 && $gettext);
-    else
-        $header = "";
-
-    if ($gettext) {
-        $text = $header;
-        if (count($warnings) && $getforms) {
-            foreach ($warnings as $w)
-                $text .= prefix_word_wrap("==-== ", whyNotToText($w), "==-== ");
-            $text .= "\n";
-        } else if (count($warnings))
-            $text .= join("\n", $warnings) . "\n\n";
-        $text .= join("", $texts);
-        downloadText($text, $rfname);
-        exit;
-    } else {
-        $zip = new ZipDocument($Opt["downloadPrefix"] . "reviews.zip");
-        $zip->warnings = $warnings;
-        foreach ($texts as $pid => $text)
-            $zip->add($header . $text, $Opt["downloadPrefix"] . $rfname . $pid . ".txt");
-        $result = $zip->download();
-        if (!$result->error)
-            exit;
-    }
-}
-
-
-// download review form for selected papers
-// (or blank form if no papers selected)
-if (($getaction == "revform" || $getaction == "revformz")
-    && !SearchActions::any()) {
-    $rf = ReviewForm::get();
-    $text = $rf->textFormHeader("blank") . $rf->textForm(null, null, $Me, null) . "\n";
-    downloadText($text, "review");
-    exit;
-} else if ($getaction == "revform" || $getaction == "revformz") {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "myReviewsOpt" => 1)));
-
-    $texts = array();
-    $errors = array();
-    $rf = ReviewForm::get();
-    while (($row = PaperInfo::fetch($result, $Me))) {
-        $whyNot = $Me->perm_review($row, null);
-        if ($whyNot && !isset($whyNot["deadline"])
-            && !isset($whyNot["reviewNotAssigned"]))
-            $errors[whyNotText($whyNot, "review")] = true;
-        else {
-            if ($whyNot) {
-                $t = whyNotText($whyNot, "review");
-                $errors[$t] = false;
-                if (!isset($whyNot["deadline"]))
-                    defappend($texts[$row->paperId], prefix_word_wrap("==-== ", strtoupper(whyNotToText($t)) . "\n\n", "==-== "));
-            }
-            defappend($texts[$row->paperId], $rf->textForm($row, $row, $Me, null) . "\n");
-        }
-    }
-
-    downloadReviews($texts, $errors);
-}
-
-
-// download all reviews for selected papers
-if (($getaction == "rev" || $getaction == "revz") && SearchActions::any()) {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "allReviews" => 1, "reviewerName" => 1)));
-
-    $texts = array();
-    $errors = array();
-    if ($Me->privChair)
-        $_REQUEST["forceShow"] = 1;
-    $rf = ReviewForm::get();
-    while (($row = PaperInfo::fetch($result, $Me))) {
-        if (($whyNot = $Me->perm_view_review($row, null, null)))
-            $errors[whyNotText($whyNot, "view review")] = true;
-        else if ($row->reviewSubmitted)
-            defappend($texts[$row->paperId], $rf->pretty_text($row, $row, $Me) . "\n");
-    }
-
-    $crows = $Conf->comment_rows($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "allComments" => 1, "reviewerName" => 1)), $Me);
-    foreach ($crows as $row)
-        if ($Me->can_view_comment($row, $row, null)) {
-            $crow = new CommentInfo($row, $row);
-            defappend($texts[$row->paperId], $crow->unparse_text($Me) . "\n");
-        }
-
-    downloadReviews($texts, $errors);
-}
-
-
-// set tags for selected papers
-function tagaction() {
-    global $Conf, $Me, $Error;
-
-    $errors = array();
-    $papers = SearchActions::selection();
-
-    $act = $_REQUEST["tagtype"];
-    $tagreq = trim(str_replace(",", " ", (string) $_REQUEST["tag"]));
-    $tags = preg_split(';\s+;', $tagreq);
-
-    if ($act == "da") {
-        $otags = $tags;
-        foreach ($otags as $t)
-            $tags[] = "all~" . preg_replace(',\A.*~([^~]+)\z', '$1', $t);
-        $act = "d";
-    } else if ($act == "sor")
-        shuffle($papers);
-
-    $x = array("action,paper,tag\n");
-    if ($act == "s" || $act == "so" || $act == "sos" || $act == "sor")
-        foreach ($tags as $t)
-            $x[] = "cleartag,all," . TagInfo::base($t) . "\n";
-    if ($act == "s" || $act == "a")
-        $action = "tag";
-    else if ($act == "d")
-        $action = "cleartag";
-    else if ($act == "so" || $act == "sor" || $act == "ao")
-        $action = "nexttag";
-    else if ($act == "sos" || $act == "aos")
-        $action = "seqnexttag";
-    else
-        $action = null;
-
-    $assignset = new AssignmentSet($Me, $Me->privChair);
-    if (count($papers) && $action) {
-        foreach ($papers as $p) {
-            foreach ($tags as $t)
-                $x[] = "$action,$p,$t\n";
-        }
-        $assignset->parse(join("", $x));
-    } else if (count($papers) && $act == "cr" && $Me->privChair) {
-        $source_tag = trim(defval($_REQUEST, "tagcr_source", ""));
-        if ($source_tag == "")
-            $source_tag = (substr($tagreq, 0, 2) == "~~" ? substr($tagreq, 2) : $tagreq);
-        $tagger = new Tagger;
-        if ($tagger->check($tagreq, Tagger::NOPRIVATE | Tagger::NOVALUE)
-            && $tagger->check($source_tag, Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE)) {
-            $r = new PaperRank($source_tag, $tagreq, $papers,
-                               defval($_REQUEST, "tagcr_gapless"),
-                               "Search", "search");
-            $r->run(defval($_REQUEST, "tagcr_method"));
-            $r->apply($assignset);
-            $assignset->finish();
-            if ($_REQUEST["q"] === "")
-                $_REQUEST["q"] = "order:$tagreq";
-        } else
-            $assignset->error($tagger->error_html);
-    }
-    if (($errors = join("<br>", $assignset->errors_html()))) {
-        if ($assignset->has_assigners()) {
-            $Conf->warnMsg("Some tag assignments were ignored:<br>$errors");
-            $assignset->clear_errors();
-        } else
-            Conf::msg_error($errors);
-    }
-    $success = $assignset->execute();
-
-    if (!$Conf->headerPrinted && defval($_REQUEST, "ajax"))
-        $Conf->ajaxExit(array("ok" => $success));
-    else if (!$Conf->headerPrinted && $success) {
-        if (!$errors)
-            $Conf->confirmMsg("Tags saved.");
-        $args = array();
-        foreach (array("tag", "tagtype", "tagact", "tagcr_method", "tagcr_source", "tagcr_gapless") as $arg)
-            if (isset($_REQUEST[$arg]))
-                $args[$arg] = $_REQUEST[$arg];
-        redirectSelf($args);
-    }
-}
-if (isset($_REQUEST["tagact"]) && $Me->isPC && SearchActions::any()
-    && isset($_REQUEST["tag"]) && check_post())
-    tagaction();
-else if (isset($_REQUEST["tagact"]) && defval($_REQUEST, "ajax"))
-    $Conf->ajaxExit(array("ok" => false, "error" => "Malformed request"));
-
-
-// download votes
-if ($getaction == "votes" && SearchActions::any() && defval($_REQUEST, "tag")
-    && $Me->isPC) {
-    $tagger = new Tagger;
-    if (($tag = $tagger->check($_REQUEST["tag"], Tagger::NOVALUE | Tagger::NOCHAIR))) {
-        $showtag = trim($_REQUEST["tag"]); // no "23~" prefix
-        $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "tagIndex" => $tag)));
-        $texts = array();
-        while (($row = PaperInfo::fetch($result, $Me)))
-            if ($Me->can_view_tags($row, true))
-                arrayappend($texts[$row->paperId], array($showtag, (float) $row->tagIndex, $row->paperId, $row->title));
-        downloadCSV(SearchActions::reorder($texts), array("tag", "votes", "paper", "title"), "votes");
-        exit;
-    } else
-        Conf::msg_error($tagger->error_html);
-}
-
-
-// download rank
-$settingrank = ($Conf->setting("tag_rank") && defval($_REQUEST, "tag") == "~" . $Conf->setting_data("tag_rank"));
-if ($getaction == "rank" && SearchActions::any() && defval($_REQUEST, "tag")
-    && ($Me->isPC || ($Me->is_reviewer() && $settingrank))) {
-    $tagger = new Tagger;
-    if (($tag = $tagger->check($_REQUEST["tag"], Tagger::NOVALUE | Tagger::NOCHAIR))) {
-        $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "tagIndex" => $tag, "order" => "order by tagIndex, PaperReview.overAllMerit desc, Paper.paperId")));
-        $real = "";
-        $null = "\n";
-        while (($row = PaperInfo::fetch($result, $Me)))
-            if ($Me->can_change_tag($row, $tag, null, 1)) {
-                if ($row->tagIndex === null)
-                    $null .= "X\t$row->paperId\t$row->title\n";
-                else if ($real === "" || $lastIndex == $row->tagIndex - 1)
-                    $real .= "\t$row->paperId\t$row->title\n";
-                else if ($lastIndex == $row->tagIndex)
-                    $real .= "=\t$row->paperId\t$row->title\n";
-                else
-                    $real .= str_pad("", min($row->tagIndex - $lastIndex, 5), ">") . "\t$row->paperId\t$row->title\n";
-                $lastIndex = $row->tagIndex;
-            }
-        $text = "# Edit the rank order by rearranging this file's lines.
-
-# The first line has the highest rank. Lines starting with \"#\" are
-# ignored. Unranked papers appear at the end in lines starting with
-# \"X\", sorted by overall merit. Create a rank by removing the \"X\"s and
-# rearranging the lines. Lines starting with \"=\" mark papers with the
-# same rank as the preceding papers. Lines starting with \">>\", \">>>\",
-# and so forth indicate rank gaps between papers. When you are done,
-# upload the file at\n"
-            . "#   " . hoturl_absolute("offline") . "\n\n"
-            . "Tag: " . trim($_REQUEST["tag"]) . "\n"
-            . "\n"
-            . $real . $null;
-        downloadText($text, "rank");
-        exit;
-    } else
-        Conf::msg_error($tagger->error_html);
-}
-
-
-// download text author information for selected papers
-if ($getaction == "authors" && SearchActions::any()
-    && ($Me->privChair || ($Me->isPC && !$Conf->subBlindAlways()))) {
-    // first fetch contacts if chair
-    $contactline = array();
-    if ($Me->privChair) {
-        $result = Dbl::qe_raw("select Paper.paperId, title, firstName, lastName, email, affiliation from Paper join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.conflictType>=" . CONFLICT_AUTHOR . ") join ContactInfo on (ContactInfo.contactId=PaperConflict.contactId) where Paper.paperId" . SearchActions::sql_predicate());
-        while (($row = edb_orow($result))) {
-            $key = $row->paperId . " " . $row->email;
-            if ($row->firstName && $row->lastName)
-                $a = $row->firstName . " " . $row->lastName;
-            else
-                $a = $row->firstName . $row->lastName;
-            $contactline[$key] = array($row->paperId, $row->title, $a, $row->email, $row->affiliation, "contact_only");
-        }
-    }
-
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection())));
-    $texts = array();
-    while (($prow = PaperInfo::fetch($result, $Me))) {
-        if (!$Me->can_view_authors($prow, true))
-            continue;
-        foreach ($prow->author_list() as $au) {
-            $line = array($prow->paperId, $prow->title, $au->name(), $au->email, $au->affiliation);
-
-            if ($Me->privChair) {
-                $key = $au->email ? $prow->paperId . " " . $au->email : "XXX";
-                if (isset($contactline[$key])) {
-                    unset($contactline[$key]);
-                    $line[] = "contact_author";
-                } else
-                    $line[] = "author";
-            }
-
-            arrayappend($texts[$prow->paperId], $line);
-        }
-    }
-
-    // If chair, append the remaining non-author contacts
-    if ($Me->privChair)
-        foreach ($contactline as $key => $line) {
-            $paperId = (int) $key;
-            arrayappend($texts[$paperId], $line);
-        }
-
-    $header = array("paper", "title", "name", "email", "affiliation");
-    if ($Me->privChair)
-        $header[] = "type";
-    downloadCSV(SearchActions::reorder($texts), $header, "authors");
-    exit;
-}
-
-
-// download text PC conflict information for selected papers
-if ($getaction == "pcconf" && SearchActions::any() && $Me->privChair) {
-    $result = Dbl::qe_raw("select Paper.paperId, title, group_concat(concat(PaperConflict.contactId, ':', conflictType) separator ' ')
-                from Paper
-                left join PaperConflict on (PaperConflict.paperId=Paper.paperId)
-                where Paper.paperId" . SearchActions::sql_predicate() . "
-                group by Paper.paperId");
-
-    $pcme = array();
-    foreach (pcMembers() as $pc)
-        $pcme[$pc->contactId] = $pc->email;
-    asort($pcme);
-
-    $allConflictTypes = Conflict::$type_descriptions;
-    $allConflictTypes[CONFLICT_CHAIRMARK] = "Chair-confirmed";
-    $allConflictTypes[CONFLICT_AUTHOR] = "Author";
-    $allConflictTypes[CONFLICT_CONTACTAUTHOR] = "Contact";
-
-    if ($result) {
-        $texts = array();
-        while (($row = edb_row($result))) {
-            $x = " " . $row[2];
-            foreach ($pcme as $pcid => $pcemail) {
-                $pcid = " $pcid:";
-                if (($p = strpos($x, $pcid)) !== false) {
-                    $ctype = (int) substr($x, $p + strlen($pcid));
-                    $ctype = defval($allConflictTypes, $ctype, "Conflict $ctype");
-                    arrayappend($texts[$row[0]], array($row[0], $row[1], $pcemail, $ctype));
-                }
-            }
-        }
-        downloadCSV(SearchActions::reorder($texts),
-                    array("paper", "title", "PC email", "conflict type"),
-                    "pcconflicts");
-        exit;
-    }
-}
-
-
-// download text lead or shepherd information for selected papers
-if (($getaction == "lead" || $getaction == "shepherd")
-    && SearchActions::any() && $Me->isPC) {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "reviewerName" => $getaction)));
-    $shep = $getaction == "shepherd";
-    if ($result) {
-        $texts = array();
-        while (($row = PaperInfo::fetch($result, $Me)))
-            if ($row->reviewEmail
-                && (($shep && $Me->can_view_shepherd($row, true))
-                    || (!$shep && $Me->can_view_lead($row, true))))
-                arrayappend($texts[$row->paperId],
-                            array($row->paperId, $row->title, $row->reviewEmail, trim("$row->reviewFirstName $row->reviewLastName")));
-        downloadCSV(SearchActions::reorder($texts), array("paper", "title", "${getaction}email", "${getaction}name"), "${getaction}s");
-        exit;
-    }
-}
-
-
-// download text contact author information, with email, for selected papers
-if ($getaction == "contact" && $Me->privChair && SearchActions::any()) {
-    // Note that this is chair only
-    $result = Dbl::qe_raw("select Paper.paperId, title, firstName, lastName, email
-	from Paper join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.conflictType>=" . CONFLICT_AUTHOR . ")
-	join ContactInfo on (ContactInfo.contactId=PaperConflict.contactId)
-	where Paper.paperId" . SearchActions::sql_predicate() . " order by Paper.paperId");
-    if ($result) {
-        $texts = array();
-        while (($row = edb_row($result))) {
-            $a = ($row[3] && $row[2] ? "$row[3], $row[2]" : "$row[3]$row[2]");
-            arrayappend($texts[$row[0]], array($row[0], $row[1], $a, $row[4]));
-        }
-        downloadCSV(SearchActions::reorder($texts), array("paper", "title", "name", "email"), "contacts");
-        exit;
-    }
-}
-
-
-// download current assignments
-if ($getaction == "pcassignments" && $Me->is_manager() && SearchActions::any()) {
-    // Note that this is chair only
-    $pcm = pcMembers();
-    $round_list = $Conf->round_list();
-    $reviewnames = array(REVIEW_PC => "pcreview", REVIEW_SECONDARY => "secondary", REVIEW_PRIMARY => "primary");
-    $any_round = false;
-    $texts = array();
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "assignments" => 1)));
-    while (($prow = PaperInfo::fetch($result, $Me)))
-        if (!$Me->allow_administer($prow)) {
-            $texts[] = array();
-            $texts[] = array("paper" => $prow->paperId,
-                             "action" => "none",
-                             "title" => "You cannot override your conflict with this paper");
-        } else if ($prow->assignmentContactIds) {
-            $texts[] = array();
-            $texts[] = array("paper" => $prow->paperId,
-                             "action" => "clearreview",
-                             "email" => "#pc",
-                             "round" => "any",
-                             "title" => $prow->title);
-            $cids = explode(",", $prow->assignmentContactIds);
-            $rtypes = explode(",", $prow->assignmentReviewTypes);
-            $rrounds = explode(",", $prow->assignmentReviewRounds);
-            for ($i = 0; $i < count($cids); ++$i)
-                if (($pc = @$pcm[$cids[$i]]) && $rtypes[$i] >= REVIEW_PC) {
-                    $round = (int) $rrounds[$i];
-                    $round_name = $round ? $round_list[$round] : "none";
-                    $any_round = $any_round || $round != 0;
-                    $texts[] = array("paper" => $prow->paperId,
-                                     "action" => $reviewnames[$rtypes[$i]],
-                                     "email" => $pc->email,
-                                     "round" => $round_name);
-                }
-        }
-    $header = array("paper", "action", "email");
-    if ($any_round)
-        $header[] = "round";
-    $header[] = "title";
-    downloadCSV($texts, $header, "pcassignments", array("selection" => $header));
-    exit;
-}
-
-
-// download scores and, maybe, anonymity for selected papers
-if ($getaction == "scores" && $Me->isPC && SearchActions::any()) {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "allReviewScores" => 1, "reviewerName" => 1)));
-
-    // compose scores; NB chair is always forceShow
-    $errors = array();
-    $texts = $any_scores = array();
-    $any_decision = $any_reviewer_identity = false;
-    $rf = ReviewForm::get();
-    while (($row = PaperInfo::fetch($result, $Me))) {
-        if (!$row->reviewSubmitted)
-            /* skip */;
-        else if (($whyNot = $Me->perm_view_review($row, null, true)))
-            $errors[] = whyNotText($whyNot, "view review") . "<br />";
-        else {
-            $a = array("paper" => $row->paperId, "title" => $row->title, "blind" => $row->blind);
-            if ($row->outcome && $Me->can_view_decision($row, true))
-                $a["decision"] = $any_decision = $Conf->decision_name($row->outcome);
-            $view_bound = $Me->view_score_bound($row, $row, true);
-            $this_scores = false;
-            foreach ($rf->forder as $field => $f)
-                if ($f->view_score > $view_bound && $f->has_options
-                    && ($row->$field || $f->allow_empty)) {
-                    $a[$f->abbreviation] = $f->unparse_value($row->$field);
-                    $any_scores[$f->abbreviation] = $this_scores = true;
-                }
-            if ($Me->can_view_review_identity($row, $row, true)) {
-                $any_reviewer_identity = true;
-                $a["revieweremail"] = $row->reviewEmail;
-                $a["reviewername"] = trim($row->reviewFirstName . " " . $row->reviewLastName);
-            }
-            if ($this_scores)
-                arrayappend($texts[$row->paperId], $a);
-        }
-    }
-
-    if (count($texts)) {
-        $header = array("paper", "title");
-        if ($Conf->subBlindOptional())
-            $header[] = "blind";
-        if ($any_decision)
-            $header[] = "decision";
-        $header = array_merge($header, array_keys($any_scores));
-        if ($any_reviewer_identity)
-            array_push($header, "revieweremail", "reviewername");
-        downloadCSV(SearchActions::reorder($texts), $header, "scores", ["selection" => true]);
-        exit;
-    } else
-        Conf::msg_error(join("", $errors) . "No papers selected.");
-}
-
-
-// download preferences for selected papers
-function downloadRevpref($extended) {
-    global $Conf, $Me, $Opt;
-    // maybe download preferences for someone else
-    $Rev = $Me;
-    if (($rev = cvtint(@$_REQUEST["reviewer"])) > 0 && $Me->privChair) {
-        if (!($Rev = Contact::find_by_id($rev)))
-            return Conf::msg_error("No such reviewer");
-    }
-    $q = $Conf->paperQuery($Rev, array("paperId" => SearchActions::selection(), "topics" => 1, "reviewerPreference" => 1));
-    $result = Dbl::qe_raw($q);
-    $texts = array();
-    list($tmap, $tomap) = array($Conf->topic_map(), $Conf->topic_order_map());
-    while ($prow = PaperInfo::fetch($result, $Rev)) {
-        $t = $prow->paperId;
-        if ($prow->conflictType > 0)
-            $t .= ",conflict";
-        else
-            $t .= "," . unparse_preference($prow);
-        $t .= "," . $prow->title . "\n";
-        if ($extended) {
-            if ($Rev->can_view_authors($prow, false))
-                $t .= prefix_word_wrap("#  Authors: ", $prow->pretty_text_author_list(), "#           ");
-            $t .= prefix_word_wrap("# Abstract: ", rtrim($prow->abstract), "#           ");
-            if ($prow->topicIds != "") {
-                $tt = topic_ids_to_text($prow->topicIds, $tmap, $tomap);
-                $t .= prefix_word_wrap("#   Topics: ", $tt, "#           ");
-            }
-            $t .= "\n";
-        }
-        defappend($texts[$prow->paperId], $t);
-    }
-
-    if (count($texts)) {
-        $header = "paper,preference,title\n";
-        downloadText($header . join("", SearchActions::reorder($texts)), "revprefs");
-        exit;
-    }
-}
-if (($getaction == "revpref" || $getaction == "revprefx")
-    && $Me->isPC && SearchActions::any())
-    downloadRevpref($getaction == "revprefx");
-
-
-// download all preferences for selected papers
-function downloadAllRevpref() {
-    global $Conf, $Me, $Opt;
-    // maybe download preferences for someone else
-    $q = $Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "allReviewerPreference" => 1, "allConflictType" => 1, "topics" => 1));
-    $result = Dbl::qe_raw($q);
-    $texts = array();
-    $pcm = pcMembers();
-    $has_conflict = $has_expertise = $has_topic_score = false;
-    while (($prow = PaperInfo::fetch($result, $Me))) {
-        $out = array();
-        $prefs = $prow->reviewer_preferences();
-        $conflicts = $prow->conflicts();
-        foreach ($pcm as $cid => $p) {
-            $pref = @$prefs[$cid] ? : array();
-            $conf = @$conflicts[$cid];
-            $tv = $prow->topicIds ? $prow->topic_interest_score($p) : 0;
-            if ($conf)
-                $pref = $tv = "";
-            if ($pref || $conf || $tv) {
-                $texts[$prow->paperId][] = array("paper" => $prow->paperId, "title" => $prow->title, "name" => Text::name_text($p), "email" => $p->email,
-                            "preference" => @$pref[0] ? : "",
-                            "expertise" => unparse_expertise(@$pref[1]),
-                            "topic_score" => $tv ? : "",
-                            "conflict" => ($conf ? "conflict" : ""));
-                $has_conflict = $has_conflict || $conf;
-                $has_expertise = $has_expertise || @$pref[1] !== null;
-                $has_topic_score = $has_topic_score || $tv;
-            }
-        }
-    }
-
-    if (count($texts)) {
-        $headers = array("paper", "title", "name", "email", "preference");
-        if ($has_expertise)
-            $headers[] = "expertise";
-        if ($has_topic_score)
-            $headers[] = "topic_score";
-        if ($has_conflict)
-            $headers[] = "conflict";
-        downloadCSV(SearchActions::reorder($texts), $headers, "allprefs", ["selection" => true]);
-        exit;
-    }
-}
-if ($getaction == "allrevpref" && $Me->privChair && SearchActions::any())
-    downloadAllRevpref();
-
-
-// download topics for selected papers
-if ($getaction == "topics" && SearchActions::any()) {
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection(), "topics" => 1)));
-
-    $texts = array();
-    $tmap = $Conf->topic_map();
-    $tomap = $Conf->topic_order_map();
-
-    while (($row = PaperInfo::fetch($result, $Me))) {
-        if (!$Me->can_view_paper($row))
-            continue;
-        $out = array();
-        $topicIds = ($row->topicIds == "" ? "x" : $row->topicIds);
-        foreach (explode(",", $topicIds) as $tid) {
-            if ($tid === "")
-                continue;
-            else if ($tid === "x")
-                list($order, $name) = array(99999, "<none>");
-            else
-                list($order, $name) = array($tomap[$tid], $tmap[$tid]);
-            $out[$order] = array($row->paperId, $row->title, $name);
-        }
-        ksort($out);
-        arrayappend($texts[$row->paperId], $out);
-    }
-
-    if (count($texts)) {
-        downloadCSV(SearchActions::reorder($texts), array("paper", "title", "topic"), "topics");
-        exit;
-    } else
-        Conf::msg_error(join("", $errors) . "No papers selected.");
-}
-
-
-// download format checker reports for selected papers
-if ($getaction == "checkformat" && $Me->privChair && SearchActions::any()) {
-    $result = Dbl::qe_raw("select paperId, title, mimetype from Paper where paperId" . SearchActions::sql_predicate() . " order by paperId");
-    $format = $Conf->setting_data("sub_banal", "");
-
-    // generate output gradually since this takes so long
-    downloadText(false, "formatcheck", false);
-    echo "#paper\tformat\tpages\ttitle\n";
-
-    // compose report
-    $texts = array();
-    while ($row = edb_row($result))
-        $texts[$row[0]] = $row;
-    foreach (SearchActions::reorder($texts) as $row) {
-        if ($row[2] == "application/pdf") {
-            $cf = new CheckFormat;
-            if ($cf->analyzePaper($row[0], false, $format)) {
-                $fchk = array();
-                foreach (CheckFormat::$error_types as $en => $etxt)
-                    if ($cf->errors & $en)
-                        $fchk[] = $etxt;
-                $fchk = (count($fchk) ? join(",", $fchk) : "ok");
-                $pp = $cf->pages;
-            } else {
-                $fchk = "error";
-                $pp = "?";
-            }
-        } else {
-            $fchk = "notpdf";
-            $pp = "?";
-        }
-        echo $row[0], "\t", $fchk, "\t", $pp, "\t", $row[1], "\n";
-        ob_flush();
-        flush();
-    }
-
-    exit;
-}
-
-
-// download ACM CMS information for selected papers
-if ($getaction == "acmcms" && SearchActions::any() && $Me->privChair) {
-    $idq = "p.paperId" . SearchActions::sql_predicate();
-
-    // analyze paper page counts
-    $pagecount = array();
-    $result = Dbl::qe_raw("select p.paperId, p.finalPaperStorageId, ps.infoJson from Paper p join PaperStorage ps on (ps.paperStorageId=if(p.finalPaperStorageId=0,p.paperStorageId,p.finalPaperStorageId)) where $idq");
-    while (($row = edb_row($result)))
-        if ($row[2] && ($j = json_decode($row[2])) && isset($j->npages))
-            $pagecount[$row[0]] = $j->npages;
-        else {
-            $cf = new CheckFormat;
-            if ($cf->analyzePaper($row[0], !!$row[1]))
-                $pagecount[$row[0]] = $cf->pages;
-        }
-
-    // generate report
-    $result = Dbl::qe_raw("select paperId, title, authorInformation from Paper p where $idq");
-    $texts = array();
-    while (($row = PaperInfo::fetch($result, $Me))) {
-        $papertype = "Full Paper";
-        if (isset($pagecount[$row->paperId]) && $pagecount[$row->paperId] < 5)
-            $papertype = "Short Paper";
-        $aun = $aue = [];
-        foreach ($row->author_list() as $au) {
-            $aun[] = ($au->name() ? : "Unknown")
-                . ":" . ($au->affiliation ? : "Unaffiliated");
-            $aue[] = $au->email ? : "unknown@example.com";
-        }
-        $texts[$row->paperId] = [
-            "papertype" => $papertype, "title" => $row->title,
-            "authors" => join(";", $aun), "leademail" => (string) @$aue[0],
-            "emails" => join(";", array_splice($aue, 1))
-        ];
-    }
-    $texts = SearchActions::reorder($texts);
-    downloadCSV(SearchActions::reorder($texts), false, "acmcms",
-                ["selection" => ["papertype", "title", "authors", "leademail", "emails"],
-                 "always_quote" => true]);
-    exit;
-}
-
-
-// download status JSON for selected papers
-if ($getaction == "json" && SearchActions::any() && $Me->privChair) {
-    $pj = array();
-    $ps = new PaperStatus($Me, ["forceShow" => true]);
-    foreach (SearchActions::selection() as $pid)
-        if (($j = $ps->load($pid)))
-            $pj[] = $j;
-    if (count($pj) == 1)
-        $pj = $pj[0];
-    header("Content-Type: application/json");
-    header("Content-Disposition: attachment; filename=" . mime_quote_string($Opt["downloadPrefix"] . (is_array($pj) ? "" : "paper" . SearchActions::selection_at(0) . "-") . "data.json"));
-    echo json_encode($pj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
-    exit;
-}
-
-
-// download status JSON plus documents for selected papers
-function jsonattach_document($dj, $prow, $dtype, $drow) {
-    global $jsonattach_zip;
-    if ($drow->docclass->load($drow)) {
-        $dj->content_file = HotCRPDocument::filename($drow);
-        $jsonattach_zip->add_as($drow, $dj->content_file);
-    }
-}
-
-if ($getaction == "jsonattach" && SearchActions::any() && $Me->privChair) {
-    global $jsonattach_zip;
-    $jsonattach_zip = new ZipDocument($Opt["downloadPrefix"] . "data.zip");
-    $pj = array();
-    $ps = new PaperStatus($Me, ["forceShow" => true]);
-    $ps->add_document_callback("jsonattach_document");
-    foreach (SearchActions::selection() as $pid)
-        if (($j = $ps->load($pid)))
-            $pj[] = $j;
-        else
-            $jsonattach_zip->warnings[] = "#$pid: No such paper";
-    if (count($pj) == 1)
-        $pj = $pj[0];
-    $jsonattach_zip->add(json_encode($pj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n",
-                         $Opt["downloadPrefix"] . (is_array($pj) ? "" : "paper" . SearchActions::selection_at(0) . "-") . "data.json");
-    $result = $jsonattach_zip->download();
-    exit;
-}
-
-
-// set outcome for selected papers
-function search_set_decisions() {
-    global $Conf, $Me;
-    $o = cvtint(@$_REQUEST["decision"]);
-    $decision_map = $Conf->decision_map();
-    if (!isset($decision_map[$o]))
-        return Conf::msg_error("Bad decision value.");
-    $result = Dbl::qe_raw($Conf->paperQuery($Me, array("paperId" => SearchActions::selection())));
-    $success = $fails = array();
-    while (($prow = PaperInfo::fetch($result, $Me)))
-        if ($Me->can_set_decision($prow))
-            $success[] = $prow->paperId;
-        else
-            $fails[] = "#" . $prow->paperId;
-    if (count($fails))
-        Conf::msg_error("You cannot set paper decisions for " . pluralx($fails, "paper") . " " . commajoin($fails) . ".");
-    if (count($success)) {
-        Dbl::qe("update Paper set outcome=$o where paperId ?a", $success);
-        $Conf->update_paperacc_setting($o > 0);
-        redirectSelf(array("atab" => "decide", "decision" => $o));
-    }
-    $_REQUEST["atab"] = "decide";
-}
-if (isset($_REQUEST["setdecision"]) && defval($_REQUEST, "decision", "") != ""
-    && SearchActions::any() && check_post())
-    search_set_decisions();
-
-
-// "Assign"
-if (isset($_REQUEST["setassign"]) && defval($_REQUEST, "marktype", "") != ""
-    && SearchActions::any() && check_post()) {
-    $mt = $_REQUEST["marktype"];
-    $mpc = defval($_REQUEST, "markpc", "0");
-    $pc = ($mpc == "0" ? null : Contact::find_by_email($mpc));
-
-    if (!$Me->privChair)
-        Conf::msg_error("Only PC chairs can set assignments and conflicts.");
-    else if ($mt == "auto") {
-        $t = (in_array($_REQUEST["t"], array("acc", "s")) ? $_REQUEST["t"] : "all");
-        $q = join("+", SearchActions::selection());
-        go(hoturl("autoassign", "pap=$q&t=$t&q=$q"));
-    } else if ($mt == "lead" || $mt == "shepherd") {
-        if ($Me->assign_paper_pc(SearchActions::selection(), $mt, $pc))
-            $Conf->confirmMsg(ucfirst(pluralx(SearchActions::selection(), $mt)) . " set.");
-        else if ($OK)
-            $Conf->confirmMsg("No changes.");
-    } else if (!$pc)
-        Conf::msg_error("“" . htmlspecialchars($mpc) . "” is not a PC member.");
-    else if ($mt == "conflict" || $mt == "unconflict") {
-        if ($mt == "conflict") {
-            Dbl::qe("insert into PaperConflict (paperId, contactId, conflictType) (select paperId, ?, ? from Paper where paperId" . SearchActions::sql_predicate() . ") on duplicate key update conflictType=greatest(conflictType, values(conflictType))", $pc->contactId, CONFLICT_CHAIRMARK);
-            $Me->log_activity("Mark conflicts with $mpc", SearchActions::selection());
-        } else {
-            Dbl::qe("delete from PaperConflict where PaperConflict.conflictType<? and contactId=? and (paperId" . SearchActions::sql_predicate() . ")", CONFLICT_AUTHOR, $pc->contactId);
-            $Me->log_activity("Remove conflicts with $mpc", SearchActions::selection());
-        }
-    } else if (substr($mt, 0, 6) == "assign"
-               && ($asstype = substr($mt, 6))
-               && isset(ReviewForm::$revtype_names[$asstype])) {
-        Dbl::qe_raw("lock tables PaperConflict write, PaperReview write, PaperReviewRefused write, Paper write, ActionLog write, Settings write");
-        $result = Dbl::qe_raw("select Paper.paperId, reviewId, reviewType, reviewModified, conflictType from Paper left join PaperReview on (Paper.paperId=PaperReview.paperId and PaperReview.contactId=" . $pc->contactId . ") left join PaperConflict on (Paper.paperId=PaperConflict.paperId and PaperConflict.contactId=" . $pc->contactId .") where Paper.paperId" . SearchActions::sql_predicate());
-        $conflicts = array();
-        $assigned = array();
-        $nworked = 0;
-        while (($row = PaperInfo::fetch($result, $Me))) {
-            if ($asstype && $row->conflictType > 0)
-                $conflicts[] = $row->paperId;
-            else if ($asstype && $row->reviewType >= REVIEW_PC && $asstype != $row->reviewType)
-                $assigned[] = $row->paperId;
-            else {
-                $Me->assign_review($row->paperId, $pc->contactId, $asstype);
-                $nworked++;
-            }
-        }
-        if (count($conflicts))
-            Conf::msg_error("Some papers were not assigned because of conflicts (" . join(", ", $conflicts) . ").  If these conflicts are in error, remove them and try to assign again.");
-        if (count($assigned))
-            Conf::msg_error("Some papers were not assigned because the PC member already had an assignment (" . join(", ", $assigned) . ").");
-        if ($nworked)
-            $Conf->confirmMsg(($asstype == 0 ? "Unassigned reviews." : "Assigned reviews."));
-        Dbl::qe_raw("unlock tables");
-        $Conf->update_rev_tokens_setting(false);
-    }
-}
-
-
-// send mail
-if (isset($_REQUEST["sendmail"]) && SearchActions::any()) {
-    if ($Me->privChair) {
-        $r = (in_array($_REQUEST["recipients"], array("au", "rev")) ? $_REQUEST["recipients"] : "all");
-        if (SearchActions::selection_equals_search(new PaperSearch($Me, $_REQUEST)))
-            $x = "q=" . urlencode($_REQUEST["q"]) . "&plimit=1";
-        else
-            $x = "p=" . join("+", SearchActions::selection());
-        go(hoturl("mail", $x . "&t=" . urlencode($_REQUEST["t"]) . "&recipients=$r"));
-    } else
-        Conf::msg_error("Only the PC chairs can send mail.");
+} else if ($Qreq->fn == "load")
+    $Conf->ajaxExit(["ok" => false, "error" => "No such field."]);
+
+// look for search action
+if ($Qreq->fn) {
+    SearchAction::load();
+    $subfn = $Qreq[$Qreq->fn . "fn"];
+    if (SearchAction::has_function($Qreq->fn, $subfn))
+        SearchAction::call($Qreq->fn, $subfn, $Me, $Qreq, $SSel);
 }
 
 
@@ -1195,12 +295,8 @@ if (defval($_REQUEST, "ajax"))
 
 // set display options, including forceShow if chair
 $pldisplay = $Conf->session("pldisplay");
-if ($Me->privChair) {
-    if (strpos($pldisplay, " force ") !== false)
-        $_REQUEST["forceShow"] = 1;
-    else
-        unset($_REQUEST["forceShow"]);
-}
+if ($Me->privChair)
+    $Me->set_forceShow(strpos($pldisplay, " force ") !== false);
 
 
 // search
@@ -1208,9 +304,8 @@ $Conf->header("Search", "search", actionBar());
 $Conf->echoScript(); // need the JS right away
 $Search = new PaperSearch($Me, $_REQUEST);
 if (isset($_REQUEST["q"])) {
-    $pl = new PaperList($Search, ["sort" => true, "list" => true, "row_id_pattern" => "p#", "display" => defval($_REQUEST, "display")], make_qreq());
-    if (check_post())
-        $pl->papersel = SearchActions::selection_map();
+    $pl = new PaperList($Search, ["sort" => true, "list" => true, "row_id_pattern" => "p#", "display" => defval($_REQUEST, "display")], $Qreq);
+    $pl->papersel = $SSel->selection_map();
     $pl_text = $pl->table_html($Search->limitName, [
             "class" => "pltable_full", "table_id" => "foldpl",
             "attributes" => ["data-fold-session" => 'pldisplay.$']
@@ -1268,12 +363,13 @@ function displayOptionCheckbox($type, $column, $title, $opt = array()) {
     } else
         $loadresult = "<div></div>";
     $opt["class"] = "cbx";
+    $indent = get($opt, "indent");
+    unset($opt["indent"]);
 
     $text = Ht::checkbox("show$type", 1, $checked, $opt)
         . "&nbsp;" . Ht::label($title) . $loadresult;
     $displayOptions[] = (object) array("type" => $type, "text" => $text,
-                "checked" => $checked, "column" => $column,
-                "indent" => defval($opt, "indent"));
+                "checked" => $checked, "column" => $column, "indent" => $indent);
 }
 
 function displayOptionText($text, $column, $opt = array()) {
@@ -1344,7 +440,7 @@ if ($pl) {
     if ($Me->can_view_some_review_identity(true))
         displayOptionCheckbox("reviewers", 2, "Reviewers");
     if ($Me->privChair) {
-        displayOptionCheckbox("allrevpref", 2, "Review preferences");
+        displayOptionCheckbox("allpref", 2, "Review preferences");
         displayOptionCheckbox("pcconf", 2, "PC conflicts");
     }
     if ($Me->isPC && $pl->any->lead)
@@ -1547,7 +643,7 @@ if ($pl && $pl->count > 0) {
         if (isset($cbodies[$i]) && $cbodies[$i]) {
             $klass = $ncolumns ? "padlb " : "";
             if (isset($cheaders[$i]))
-                $header .= "  <td class='${klass}nowrap'>" . $cheaders[$i] . "</td>\n";
+                $header .= "  <td class='${klass}nw'>" . $cheaders[$i] . "</td>\n";
             else
                 $header .= "  <td></td>\n";
             $body .= "  <td class='${klass}top'><table>" . $cbodies[$i] . "</table></td>\n";
@@ -1643,11 +739,11 @@ echo "</div>";
 echo "</td></tr>
 <tr><td class='tllx'><table><tr>
   <td><div class='tll1'><a class='tla' onclick='return crpfocus(\"searchform\", 1)' href=\"", selfHref(array("tab" => "basic")), "\">Search</a></div></td>
-  <td><div class='tll2'><a class='tla nowrap' onclick='return crpfocus(\"searchform\", 2)' href=\"", selfHref(array("tab" => "advanced")), "\">Advanced search</a></div></td>\n";
+  <td><div class='tll2'><a class='tla nw' onclick='return crpfocus(\"searchform\", 2)' href=\"", selfHref(array("tab" => "advanced")), "\">Advanced search</a></div></td>\n";
 if ($ss)
-    echo "  <td><div class='tll4'><a class='tla nowrap' onclick='fold(\"searchform\",1,4);return crpfocus(\"searchform\",4)' href=\"", selfHref(array("tab" => "ss")), "\">Saved searches</a></div></td>\n";
+    echo "  <td><div class='tll4'><a class='tla nw' onclick='fold(\"searchform\",1,4);return crpfocus(\"searchform\",4)' href=\"", selfHref(array("tab" => "ss")), "\">Saved searches</a></div></td>\n";
 if ($pl && $pl->count > 0)
-    echo "  <td><div class='tll3'><a class='tla nowrap' onclick='fold(\"searchform\",1,3);return crpfocus(\"searchform\",3)' href=\"", selfHref(array("tab" => "display")), "\">Display options</a></div></td>\n";
+    echo "  <td><div class='tll3'><a class='tla nw' onclick='fold(\"searchform\",1,3);return crpfocus(\"searchform\",3)' href=\"", selfHref(array("tab" => "display")), "\">Display options</a></div></td>\n";
 echo "</tr></table></td></tr>\n</table>\n\n";
 if ($pl && $pl->count > 0)
     // `echoScript()` not necessary because we've already got the script
@@ -1665,9 +761,9 @@ if ($pl) {
     echo "<div class='maintabsep'></div>\n\n<div class='pltable_full_ctr'>";
 
     if (isset($pl->any->sel))
-        echo Ht::form_div(selfHref(array("selector" => 1, "post" => post_value())), array("id" => "sel", "onsubmit" => "return paperselCheck.call(this)")),
+        echo Ht::form_div(selfHref(array("post" => post_value(), "forceShow" => null)), array("id" => "sel", "onsubmit" => "return plist_onsubmit.call(this)")),
             Ht::hidden("defaultact", "", array("id" => "defaultact")),
-            Ht::hidden("forceShow", (string) @$_REQUEST["forceShow"], array("id" => "forceShow")),
+            Ht::hidden("forceShow", req_s("forceShow"), array("id" => "forceShow")),
             Ht::hidden_default_submit("default", 1);
 
     echo $pl_text;

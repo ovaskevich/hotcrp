@@ -204,7 +204,7 @@ function fileUploaded(&$var) {
     switch ($var['error']) {
     case UPLOAD_ERR_OK:
         return is_uploaded_file($var['tmp_name'])
-            || (PHP_SAPI === "cli" && @$var["tmp_name_safe"]);
+            || (PHP_SAPI === "cli" && get($var, "tmp_name_safe"));
     case UPLOAD_ERR_NO_FILE:
         return false;
     case UPLOAD_ERR_INI_SIZE:
@@ -333,60 +333,18 @@ function documentDownload($doc, $dlimg_class = "dlimg", $text = null, $no_size =
     return $x . "</a>";
 }
 
-function paperDocumentData($prow, $documentType = DTYPE_SUBMISSION, $paperStorageId = 0) {
-    global $Conf, $Opt;
-    assert($paperStorageId || $documentType == DTYPE_SUBMISSION || $documentType == DTYPE_FINAL);
-    if ($documentType == DTYPE_FINAL && $prow->finalPaperStorageId <= 0)
-        $documentType = DTYPE_SUBMISSION;
-    if ($paperStorageId == 0 && $documentType == DTYPE_FINAL)
-        $paperStorageId = $prow->finalPaperStorageId;
-    else if ($paperStorageId == 0)
-        $paperStorageId = $prow->paperStorageId;
-    if ($paperStorageId <= 1)
-        return null;
-
-    // pre-load document object from paper
-    $doc = (object) array("paperId" => $prow->paperId,
-                          "mimetype" => defval($prow, "mimetype", ""),
-                          "size" => defval($prow, "size", 0),
-                          "timestamp" => defval($prow, "timestamp", 0),
-                          "sha1" => defval($prow, "sha1", ""));
-    if ($prow->finalPaperStorageId > 0) {
-        $doc->paperStorageId = $prow->finalPaperStorageId;
-        $doc->documentType = DTYPE_FINAL;
-    } else {
-        $doc->paperStorageId = $prow->paperStorageId;
-        $doc->documentType = DTYPE_SUBMISSION;
-    }
-
-    // load document object from database if pre-loaded version doesn't work
-    if ($paperStorageId > 0
-        && ($doc->documentType != $documentType
-            || $paperStorageId != $doc->paperStorageId)) {
-        $size = $Conf->sversion >= 74 ? "size" : "length(paper) as size";
-        $result = Dbl::qe("select paperStorageId, paperId, $size, mimetype, timestamp, sha1, filename, documentType from PaperStorage where paperStorageId=$paperStorageId");
-        $doc = edb_orow($result);
-    }
-
-    return $doc;
-}
-
 function paperDownload($prow, $final = false) {
     global $Conf, $Me;
     // don't let PC download papers in progress
     if ($prow->timeSubmitted <= 0 && !$Me->can_view_pdf($prow))
         return "";
-    $doc = paperDocumentData($prow, $final ? DTYPE_FINAL : DTYPE_SUBMISSION);
+    $doc = $prow->document($final ? DTYPE_FINAL : DTYPE_SUBMISSION);
     return $doc ? documentDownload($doc) : "";
 }
 
 function topicTable($prow, $active = 0) {
     global $Conf;
     $paperId = ($prow ? $prow->paperId : -1);
-
-    // read from paper row if appropriate
-    if ($paperId > 0 && $active < 0 && isset($prow->topicIds))
-        return PaperInfo::unparse_topics($prow->topicIds, @$prow->topicInterest, false);
 
     // get current topics
     $paperTopic = array();
@@ -405,16 +363,16 @@ function topicTable($prow, $active = 0) {
     foreach ($tmap as $tid => $tname) {
         if (!isset($allTopics[$tid]))
             continue;
-        $out .= '<div class="ctelt">';
+        $out .= '<div class="ctelt"><div class="ctelti">';
         $tname = '<span class="topic0">' . htmlspecialchars($tname) . '</span>';
         if ($paperId <= 0 || $active >= 0) {
-            $out .= '<table><tr><td>'
+            $out .= '<table><tr><td class="nw">'
                 . Ht::checkbox_h("top$tid", 1, ($active > 0 ? isset($_REQUEST["top$tid"]) : isset($paperTopic[$tid])),
                                  array("disabled" => $active < 0))
                 . "&nbsp;</td><td>" . Ht::label($tname) . "</td></tr></table>";
         } else
             $out .= $tname;
-        $out .= "</div>\n";
+        $out .= "</div></div>\n";
         $i++;
     }
     return $out . "</div>";
@@ -442,6 +400,37 @@ class SessionList {
     static private $active_listid = null;
     static private $active_list = null;
     static private $requested_list = false;
+    static private function decode_ids($ids) {
+        if (($a = json_decode($ids)) !== null)
+            return $a;
+        $a = [];
+        preg_match_all('/[-\d]+/', $ids, $m);
+        foreach ($m[0] as $p)
+            if (($pos = strpos($p, "-"))) {
+                $j = (int) substr($p, $pos + 1);
+                for ($i = (int) substr($p, 0, $pos); $i <= $j; ++$i)
+                    $a[] = $i;
+            } else
+                $a[] = (int) $p;
+        return $a;
+    }
+    static private function encode_ids($ids) {
+        if (count($ids) < 30)
+            return json_encode($ids);
+        $a = array();
+        $p0 = $p1 = -100;
+        foreach ($ids as $p) {
+            if ($p1 + 1 != $p) {
+                if ($p0 > 0)
+                    $a[] = ($p0 == $p1 ? $p0 : "$p0-$p1");
+                $p0 = $p;
+            }
+            $p1 = $p;
+        }
+        if ($p0 > 0)
+            $a[] = ($p0 == $p1 ? $p0 : "$p0-$p1");
+        return "[" . join(",", $a) . "]";
+    }
     static function lookup($idx) {
         global $Conf, $Me;
         $lists = $Conf->session("l", array());
@@ -449,25 +438,19 @@ class SessionList {
         if ($l && $l->cid == ($Me ? $Me->contactId : 0)) {
             $l = clone $l;
             if (is_string($l->ids))
-                $l->ids = json_decode($l->ids);
+                $l->ids = self::decode_ids($l->ids);
             $l->listno = (int) $idx;
             return $l;
         } else
             return null;
     }
-    static function change($idx, $delta, $replace = false) {
-        global $Conf, $Me;
-        $lists = $Conf->session("l", array());
-        $l = get($lists, $idx);
-        if ($l && $l->cid == ($Me ? $Me->contactId : 0) && !$replace)
-            $l = clone $l;
-        else
-            $l = (object) array();
-        foreach ($delta as $k => $v)
-            $l->$k = $v;
-        if (isset($l->ids) && !is_string($l->ids))
-            $l->ids = json_encode($l->ids);
-        $Conf->save_session_array("l", $idx, $l);
+    static function change($idx, $l) {
+        global $Conf;
+        $l = is_object($l) ? get_object_vars($l) : $l;
+        if (isset($l["ids"]) && !is_string($l["ids"]))
+            $l["ids"] = self::encode_ids($l["ids"]);
+        $Conf->save_session_array("l", $idx, (object) $l);
+        return true;
     }
     static function allocate($listid) {
         global $Conf, $Me;
@@ -529,14 +512,14 @@ class SessionList {
         global $Me;
         if (self::$requested_list === false) {
             // look up list ID
-            $listdesc = @$_REQUEST["ls"];
+            $listdesc = req("ls");
             if (isset($_COOKIE["hotcrp_ls"]))
                 $listdesc = $listdesc ? : $_COOKIE["hotcrp_ls"];
 
             $list = null;
             if (($listno = cvtint($listdesc, null))
                 && ($xlist = self::lookup($listno))
-                && (!@$xlist->cid || $xlist->cid == ($Me ? $Me->contactId : 0)))
+                && (!get($xlist, "cid") || $xlist->cid == ($Me ? $Me->contactId : 0)))
                 $list = $xlist;
 
             // look up list description
@@ -577,7 +560,7 @@ class SessionList {
 
         // start with requested list
         $list = self::requested();
-        if ($list && !str_starts_with((string) @$list->listid, $listtype))
+        if ($list && !str_starts_with(get_s($list, "listid"), $listtype))
             $list = null;
 
         // look up ID in list; try new lists if not found
@@ -596,12 +579,11 @@ class SessionList {
             $list = null;
 
         // save list changes
-        if ($list && !@$list->listno) {
+        if ($list && !get($list, "listno"))
             $list->listno = self::allocate($list->listid);
-            self::change($list->listno, $list, true);
-        }
         if ($list) {
-            self::change($list->listno, ["timestamp" => $Now]);
+            $list->timestamp = $Now;
+            self::change($list->listno, $list);
             $list->id_position = $k;
         }
         self::$active_listid = $listid;
@@ -741,6 +723,12 @@ function commajoin($what, $joinword = "and") {
         return join(", ", array_slice($what, 0, -1)) . ", " . $joinword . " " . $what[count($what) - 1];
 }
 
+function prefix_commajoin($what, $prefix, $joinword = "and") {
+    return commajoin(array_map(function ($x) use ($prefix) {
+        return $prefix . $x;
+    }, $what), $joinword);
+}
+
 function numrangejoin($range) {
     $i = 0;
     $a = array();
@@ -761,11 +749,19 @@ function numrangejoin($range) {
 function pluralx($n, $what) {
     if (is_array($n))
         $n = count($n);
-    if ($n == 1)
-        return $what;
+    return $n == 1 ? $what : pluralize($what);
+}
+
+function pluralize($what) {
     if ($what == "this")
         return "these";
-    if (preg_match('/\A.*?(?:s|sh|ch|[bcdfgjklmnpqrstvxz][oy])\z/', $what)) {
+    else if ($what == "has")
+        return "have";
+    else if ($what == "is")
+        return "are";
+    else if (str_ends_with($what, ")") && preg_match('/\A(.*?)(\s*\([^)]*\))\z/', $what, $m))
+        return pluralize($m[1]) . $m[2];
+    else if (preg_match('/\A.*?(?:s|sh|ch|[bcdfgjklmnpqrstvxz][oy])\z/', $what)) {
         if (substr($what, -1) == "y")
             return substr($what, 0, -1) . "ies";
         else
@@ -897,9 +893,9 @@ function whyNotText($whyNot, $action) {
                 $text .= "Authors can’t view paper reviews at the moment. ";
         } else
             $text .= "You can’t $action $thisPaper at the moment. ";
-        $text .= "(<a class='nowrap' href='" . hoturl("deadlines") . "'>View deadlines</a>) ";
+        $text .= "(<a class='nw' href='" . hoturl("deadlines") . "'>View deadlines</a>) ";
     }
-    if (@$whyNot["override"])
+    if (isset($whyNot["override"]))
         $text .= "“Override deadlines” can override this restriction. ";
     if (isset($whyNot['blindSubmission']))
         $text .= "Submission to this conference is blind. ";
@@ -913,26 +909,31 @@ function whyNotText($whyNot, $action) {
         $text .= "You didn’t write this review, so you can’t change it. ";
     if (isset($whyNot['reviewToken']))
         $text .= "If you know a valid review token, enter it above to edit that review. ";
-    if (@$whyNot["clickthrough"])
+    if (isset($whyNot["clickthrough"]))
         $text .= "You can’t do that until you agree to the current terms. ";
-    if (@$whyNot["otherTwiddleTag"])
+    if (isset($whyNot["otherTwiddleTag"]))
         $text .= "Tag “#" . htmlspecialchars($whyNot["tag"]) . "” doesn’t belong to you. ";
-    if (@$whyNot["chairTag"])
+    if (isset($whyNot["chairTag"]))
         $text .= "Tag “#" . htmlspecialchars($whyNot["tag"]) . "” can only be set by administrators. ";
-    if (@$whyNot["voteTag"])
+    if (isset($whyNot["voteTag"]))
         $text .= "The voting tag “#" . htmlspecialchars($whyNot["tag"]) . "” shouldn’t be changed directly. To vote for this paper, change the “#~" . htmlspecialchars($whyNot["tag"]) . "” tag. ";
-    if (@$whyNot["voteTagNegative"])
+    if (isset($whyNot["voteTagNegative"]))
         $text .= "Negative votes aren’t allowed. ";
     // finish it off
     if (isset($whyNot["chairMode"]))
-        $text .= "(<a class='nowrap' href=\"" . selfHref(array("forceShow" => 1)) . "\">" . ucfirst($action) . " the paper anyway</a>) ";
+        $text .= "(<a class='nw' href=\"" . selfHref(array("forceShow" => 1)) . "\">" . ucfirst($action) . " the paper anyway</a>) ";
     if (isset($whyNot["forceShow"]) && $whyNot["forceShow"] === true)
         $text .= "(As an administrator, you can override your conflict.) ";
     else if (isset($whyNot["forceShow"]))
-        $text .= "(<a class='nowrap' href=\"". selfHref(array("forceShow" => 1)) . "\">Override conflict</a>) ";
+        $text .= "(<a class='nw' href=\"". selfHref(array("forceShow" => 1)) . "\">Override conflict</a>) ";
     if ($text && $action == "view")
         $text .= "Enter a paper number above, or <a href='" . hoturl("search", "q=") . "'>list the papers you can view</a>. ";
     return rtrim($text);
+}
+
+function whyNotHtmlToText($e) {
+    $e = preg_replace('|\(?<a.*?</a>\)?\s*\z|i', "", $e);
+    return preg_replace('|<.*?>|', "", $e);
 }
 
 function actionBar($mode = null, $prow = null) {
@@ -969,9 +970,9 @@ function actionBar($mode = null, $prow = null) {
     if ($quicklinks_txt)
         $x .= $quicklinks_txt;
     if ($quicklinks_txt && $Me->privChair && $listtype == "p")
-        $x .= "  <td id=\"trackerconnect\" class=\"nowrap\"><a id=\"trackerconnectbtn\" href=\"#\" onclick=\"return hotcrp_deadlines.tracker(1)\" class=\"btn btn-default hottooltip\" data-hottooltip=\"Start meeting tracker\">&#9759;</a><td>\n";
+        $x .= "  <td id=\"trackerconnect\" class=\"nw\"><a id=\"trackerconnectbtn\" href=\"#\" onclick=\"return hotcrp_deadlines.tracker(1)\" class=\"btn btn-default hottooltip\" data-hottooltip=\"Start meeting tracker\">&#9759;</a><td>\n";
 
-    $x .= "  <td class='gopaper nowrap'>" . goPaperForm($goBase, $xmode) . "</td>\n";
+    $x .= "  <td class='gopaper nw'>" . goPaperForm($goBase, $xmode) . "</td>\n";
 
     return $x . "</tr></table>";
 }
@@ -1007,18 +1008,25 @@ function downloadCSV($info, $header, $filename, $options = array()) {
         $csvt = CsvGenerator::TYPE_COMMA;
     else
         $csvt = CsvGenerator::TYPE_TAB;
-    if (@$options["always_quote"])
+    if (get($options, "always_quote"))
         $csvt |= CsvGenerator::FLAG_ALWAYS_QUOTE;
+    if (get($options, "crlf"))
+        $csvt |= CsvGenerator::FLAG_CRLF;
     $csvg = new CsvGenerator($csvt);
     if ($header)
         $csvg->set_header($header, true);
-    if (@$options["selection"])
+    if (get($options, "selection"))
         $csvg->set_selection($options["selection"] === true ? $header : $options["selection"]);
-    $csvg->add($info);
-    if (@$options["sort"])
-        $csvg->sort($options["sort"]);
-    $csvg->download_headers($Opt["downloadPrefix"] . $filename . $csvg->extension(), !defval($options, "inline"));
-    $csvg->download();
+    $csvg->download_headers($Opt["downloadPrefix"] . $filename . $csvg->extension(), !get($options, "inline"));
+    if ($info === false)
+        return $csvg;
+    else {
+        $csvg->add($info);
+        if (get($options, "sort"))
+            $csvg->sort($options["sort"]);
+        $csvg->download();
+        exit;
+    }
 }
 
 function downloadText($text, $filename, $inline = false) {
@@ -1028,6 +1036,7 @@ function downloadText($text, $filename, $inline = false) {
     if ($text !== false) {
         $csvg->add($text);
         $csvg->download();
+        exit;
     }
 }
 
@@ -1070,8 +1079,8 @@ function unparse_expertise($expertise) {
 
 function unparse_preference($preference, $expertise = null) {
     if (is_object($preference))
-        list($preference, $expertise) = array(@$preference->reviewerPreference,
-                                              @$preference->reviewerExpertise);
+        list($preference, $expertise) = array(get($preference, "reviewerPreference"),
+                                              get($preference, "reviewerExpertise"));
     else if (is_array($preference))
         list($preference, $expertise) = $preference;
     if ($preference === null || $preference === false)
@@ -1081,14 +1090,14 @@ function unparse_preference($preference, $expertise = null) {
 
 function unparse_preference_span($preference, $always = false) {
     if (is_object($preference))
-        $preference = array(@$preference->reviewerPreference,
-                            @$preference->reviewerExpertise,
-                            @$preference->topicInterestScore);
+        $preference = array(get($preference, "reviewerPreference"),
+                            get($preference, "reviewerExpertise"),
+                            get($preference, "topicInterestScore"));
     else if (!is_array($preference))
         $preference = array($preference, null, null);
-    $pv = (int) @$preference[0];
-    $ev = @$preference[1];
-    $tv = (int) @$preference[2];
+    $pv = (int) get($preference, 0);
+    $ev = get($preference, 1);
+    $tv = (int) get($preference, 2);
     $type = 1;
     if ($pv < 0 || (!$pv && $tv < 0))
         $type = -1;
@@ -1110,7 +1119,7 @@ function decisionSelector($curOutcome = 0, $id = null, $extra = "") {
         $curOutcome = null;
     $outcomes = array_keys($decs);
     if ($curOutcome === null)
-        $text .= "    <option value='' selected='selected'><b>Set decision...</b></option>\n";
+        $text .= "    <option value='' selected='selected'>Set decision...</option>\n";
     foreach ($decs as $dnum => $dname)
         $text .= "    <option value='$dnum'" . ($curOutcome == $dnum && $curOutcome !== null ? " selected='selected'" : "") . ">" . htmlspecialchars($dname) . "</option>\n";
     return $text . "  </select>";
@@ -1126,7 +1135,7 @@ function pcMembers() {
         $result = Dbl::q("select firstName, lastName, affiliation, email, contactId, roles, contactTags, disabled from ContactInfo where (roles&" . Contact::ROLE_PC . ")!=0");
         $by_name_text = array();
         $pctags = array("pc" => "pc");
-        while ($result && ($row = $result->fetch_object("Contact"))) {
+        while ($result && ($row = Contact::fetch($result))) {
             $pc[$row->contactId] = $row;
             if ($row->firstName || $row->lastName) {
                 $name_text = Text::name_text($row);
@@ -1169,22 +1178,19 @@ function pcByEmail($email) {
     return null;
 }
 
-function pc_members_selector_options($include_none, $accept_assignment_prow = null,
-                                     $include_cid = 0) {
+function pc_members_selector_options($include_none) {
     global $Opt;
     $sel = array();
     if ($include_none)
         $sel["0"] = is_string($include_none) ? $include_none : "None";
     $textarg = array("lastFirst" => @$Opt["sortByLastName"]);
     foreach (pcMembers() as $p)
-        if (!$accept_assignment_prow
-            || $p->can_accept_review_assignment($accept_assignment_prow)
-            || $p->contactId == $include_cid)
-            $sel[htmlspecialchars($p->email)] = Text::name_html($p, $textarg);
+        $sel[htmlspecialchars($p->email)] = Text::name_html($p, $textarg);
     return $sel;
 }
 
 function review_type_icon($revtype, $unfinished = null, $title = null) {
+    // see also script.js:review_form
     static $revtypemap = array(-3 => array("&minus;", "Refused"),
                                -2 => array("A", "Author"),
                                -1 => array("C", "Conflict"),

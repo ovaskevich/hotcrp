@@ -239,12 +239,12 @@ class Text {
 
         if (($p1 = strrpos($name, ",")) !== false) {
             $first = trim(substr($name, $p1 + 1));
-            if (!preg_match('@^(Esq\.?|Ph\.?D\.?|M\.?[SD]\.?|Esquire|Junior|Senior|Jr.?|Sr.?|I+)$@i', $first)) {
+            if (!preg_match('@^(Esq\.?|Ph\.?D\.?|M\.?[SD]\.?|Esquire|Junior|Senior|Jr.?|Sr.?|I+|IV|VI*|IX|XI*|2n?d|3r?d|[4-9]th)$@i', $first)) {
                 list($ret[0], $ret[1]) = array($first, trim(substr($name, 0, $p1)));
                 return $ret;
             }
         }
-        if (preg_match('@[^\s,]+(\s+Jr\.?|\s+Sr\.?|\s+i+|\s+Ph\.?D\.?|\s+M\.?[SD]\.?)?(,.*)?\s*$@i', $name, $m)) {
+        if (preg_match('@[^\s,]+(\s+Jr\.?|\s+Sr\.?|\s+i+|\s+iv|\s+vi*|\s+ix|\s+xi*|\s+2n?d|\s+3r?d|\s+[4-9]th|\s+Ph\.?D\.?|\s+M\.?[SD]\.?)?(,.*)?\s*$@i', $name, $m)) {
             $ret[0] = trim(substr($name, 0, strlen($name) - strlen($m[0])));
             $ret[1] = trim($m[0]);
             if (preg_match('@^(\S.*?)\s+(v[oa]n|d[eu])$@i', $ret[0], $m))
@@ -252,6 +252,24 @@ class Text {
         } else
             $ret[1] = trim($name);
         return $ret;
+    }
+
+    static function split_first_middle($first) {
+        if (preg_match('%\A((?:\pL\.\s*)*\pL[^\s.]\S*)\s+(.*)\z%', $first, $m)
+            || preg_match('%\A(\pL[^\s.]\S*)\s*(.*)\z%', $first, $m))
+            return [$m[1], $m[2]];
+        else
+            return [$first, ""];
+    }
+
+    static function split_last_suffix($last) {
+        if (preg_match('%\A(.*?\S)(?:\s+|\s*,\s*)(Jr\.?|Sr\.?|I+|IV|V|VI*|IX|XI*|2n?d|3r?d|[4-9]th)\z%i', $last, $m)) {
+            if ($m[2] === "Jr" || $m[2] === "Sr")
+                return [$m[1], $m[2] . "."];
+            else
+                return [$m[1], $m[2]];
+        } else
+            return [$last, ""];
     }
 
     public static function unaccented_name(/* ... */) {
@@ -363,5 +381,19 @@ class Text {
 
     public static function is_boring_word($word) {
         return isset(self::$boring_words[strtolower($word)]);
+    }
+
+    public static function single_line_paragraphs($text) {
+        preg_match_all('/.*?(?:\r\n?|\n|\z)/', $text, $m);
+        $out = "";
+        $last = false;
+        foreach ($m[0] as $line) {
+            if ($line !== "" && $last && !ctype_space(substr($line, 0, 1)))
+                $out = rtrim($out) . " " . $line;
+            else
+                $out .= $line;
+            $last = strlen($line) > 50;
+        }
+        return $out;
     }
 }
