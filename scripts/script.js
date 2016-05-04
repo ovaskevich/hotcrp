@@ -3,12 +3,16 @@
 // Distributed under an MIT-like license; see LICENSE
 
 var siteurl, siteurl_postvalue, siteurl_suffix, siteurl_defaults,
-    siteurl_absolute_base,
-    hotcrp_paperid, hotcrp_list, hotcrp_status, hotcrp_user,
+    siteurl_absolute_base, assetsurl,
+    hotcrp_paperid, hotcrp_list, hotcrp_status, hotcrp_user, hotcrp_pc,
     hotcrp_want_override_conflict;
 
 function $$(id) {
     return document.getElementById(id);
+}
+
+function geval(__str) {
+    return eval(__str);
 }
 
 function serialize_object(x) {
@@ -38,13 +42,13 @@ function add_callback(cb1, cb2) {
 
 
 // promises
-function Promise(value) {
+function HPromise(value) {
     this.value = value;
     this.state = value === undefined ? false : 1;
     this.c = [];
 }
-Promise.prototype.then = function (yes, no) {
-    var next = new Promise;
+HPromise.prototype.then = function (yes, no) {
+    var next = new HPromise;
     this.c.push([no, yes, next]);
     if (this.state !== false)
         this._resolve();
@@ -54,7 +58,7 @@ Promise.prototype.then = function (yes, no) {
     }
     return next;
 };
-Promise.prototype._resolve = function () {
+HPromise.prototype._resolve = function () {
     var i, x, f, v;
     for (i in this.c) {
         x = this.c[i];
@@ -71,21 +75,21 @@ Promise.prototype._resolve = function () {
     }
     this.c = [];
 };
-Promise.prototype.fulfill = function (value) {
+HPromise.prototype.fulfill = function (value) {
     if (this.state === false) {
         this.value = value;
         this.state = 1;
         this._resolve();
     }
 };
-Promise.prototype.reject = function (reason) {
+HPromise.prototype.reject = function (reason) {
     if (this.state === false) {
         this.value = reason;
         this.state = 0;
         this._resolve();
     }
 };
-Promise.prototype.onThen = function (f) {
+HPromise.prototype.onThen = function (f) {
     this.on = add_callback(this.on, f);
     return this;
 };
@@ -190,7 +194,10 @@ jQuery.fn.extend({
         return g;
     },
     scrollIntoView: function () {
-        var p = this.geometry(), w = jQuery(window).geometry();
+        var p = this.geometry(), x = this[0].parentNode;
+        while (x && x.tagName && $(x).css("overflow-y") === "visible")
+            x = x.parentNode;
+        var w = jQuery(x && x.tagName ? x : window).geometry();
         if (p.top < w.top)
             this[0].scrollIntoView();
         else if (p.bottom > w.bottom)
@@ -217,9 +224,16 @@ window.escape_entities = (function () {
     return function (s) {
         if (s === null || typeof s === "number")
             return s;
-        return s.replace(re, function (match) {
-            return rep[match];
-        });
+        return s.replace(re, function (match) { return rep[match]; });
+    };
+})();
+
+window.unescape_entities = (function () {
+    var re = /&.*?;/g, rep = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&#039;": "'"};
+    return function (s) {
+        if (s === null || typeof s === "number")
+            return s;
+        return s.replace(re, function (match) { return rep[match]; });
     };
 })();
 
@@ -227,6 +241,18 @@ function text_to_html(text) {
     var n = document.createElement("div");
     n.appendChild(document.createTextNode(text));
     return n.innerHTML;
+}
+
+function text_eq(a, b) {
+    if (a === b)
+        return true;
+    a = (a == null ? "" : a).replace(/\r\n?/g, "\n");
+    b = (b == null ? "" : b).replace(/\r\n?/g, "\n");
+    return a === b;
+}
+
+function regexp_quote(s) {
+    return String(s).replace(/([-()\[\]{}+?*.$\^|,:#<!\\])/g, '\\$1').replace(/\x08/g, '\\x08');
 }
 
 function plural_noun(n, what) {
@@ -310,7 +336,7 @@ function sprintf(fmt) {
                 conv[3] = 6;
             if (conv[4] == "g") {
                 arg = Number(arg).toPrecision(conv[3]).toString();
-                arg = arg.replace(/[.](\d*[1-9])?0+(|e.*)$/,
+                arg = arg.replace(/\.(\d*[1-9])?0+(|e.*)$/,
                                   function (match, p1, p2) {
                                       return (p1 == null ? "" : "." + p1) + p2;
                                   });
@@ -620,6 +646,14 @@ function hoturl_post(page, options) {
     return hoturl(page, options);
 }
 
+function hoturl_html(page, options) {
+    return escape_entities(hoturl(page, options));
+}
+
+function hoturl_post_html(page, options) {
+    return escape_entities(hoturl_post(page, options));
+}
+
 function url_absolute(url, loc) {
     var x = "", m;
     loc = loc || window.location.href;
@@ -734,7 +768,7 @@ return function (content, bubopt) {
     else if (typeof bubopt === "string")
         bubopt = {color: bubopt};
 
-    var nearpos = null, dirspec = bubopt.dir || "r", dir = null,
+    var nearpos = null, dirspec = bubopt.dir, dir = null,
         color = bubopt.color ? " " + bubopt.color : "";
 
     var bubdiv = $('<div class="bubble' + color + '" style="margin:0"><div class="bubtail bubtail0' + color + '" style="width:0;height:0"></div><div class="bubcontent"></div><div class="bubtail bubtail1' + color + '" style="width:0;height:0"></div></div>')[0];
@@ -867,6 +901,8 @@ return function (content, bubopt) {
             sizes = calculate_sizes(color);
 
         // parse dirspec
+        if (dirspec == null)
+            dirspec = "r";
         var noflip = /!/.test(dirspec),
             noconstrain = /\*/.test(dirspec),
             dsx = dirspec.replace(/[^a0-3neswtrblhv]/, ""),
@@ -955,8 +991,12 @@ return function (content, bubopt) {
     var bubble = {
         near: function (epos, reference) {
             var i, off;
-            if (typeof epos === "string" || epos.tagName || epos.jquery)
-                epos = $(epos).geometry(true);
+            if (typeof epos === "string" || epos.tagName || epos.jquery) {
+                epos = $(epos);
+                if (dirspec == null)
+                    dirspec = epos.attr("data-hottooltip-dir");
+                epos = epos.geometry(true);
+            }
             for (i = 0; i < 4; ++i)
                 if (!(lcdir[i] in epos) && (lcdir[i ^ 2] in epos))
                     epos[lcdir[i]] = epos[lcdir[i ^ 2]];
@@ -1029,7 +1069,10 @@ return function (content, bubopt) {
 
 
 function tooltip(info) {
-    var j, near, tt;
+    if (window.disable_tooltip)
+        return null;
+
+    var j;
     if (info.tagName)
         info = {element: info};
     j = $(info.element);
@@ -1043,9 +1086,51 @@ function tooltip(info) {
             return $();
     }
 
-    if (info.content == null)
-        info.content = j.attr("data-hottooltip") ||
-            jqnear(j.attr("data-hottooltip-content-selector")).html();
+    var tt = null, content = info.content, bub = null, to = null, refcount = 0;
+    function erase() {
+        to = clearTimeout(to);
+        bub && bub.remove();
+        j.removeData("hotcrp_tooltip");
+        if (window.global_tooltip === tt)
+            window.global_tooltip = null;
+    }
+    function show_bub() {
+        if (content && !bub) {
+            bub = make_bubble(content, {color: "tooltip dark", dir: info.dir});
+            bub.near(info.near || info.element).hover(tt.enter, tt.exit);
+        } else if (content)
+            bub.html(content);
+        else if (bub) {
+            bub && bub.remove();
+            bub = null;
+        }
+    }
+    tt = {
+        enter: function () {
+            to = clearTimeout(to);
+            ++refcount;
+            return tt;
+        },
+        exit: function () {
+            var delay = info.type == "focus" ? 0 : 200;
+            to = clearTimeout(to);
+            if (--refcount == 0)
+                to = setTimeout(erase, delay);
+            return tt;
+        },
+        erase: erase,
+        elt: info.element,
+        html: function (new_content) {
+            if (new_content === undefined)
+                return content;
+            else {
+                content = new_content;
+                bub_show();
+            }
+            return tt;
+        }
+    };
+
     if (info.dir == null)
         info.dir = j.attr("data-hottooltip-dir") || "v";
     if (info.type == null)
@@ -1055,51 +1140,44 @@ function tooltip(info) {
     if (info.near)
         info.near = jqnear(info.near)[0];
 
-    if (!info.content || window.disable_tooltip)
-        return null;
-
-    if ((tt = window.global_tooltip)) {
-        if (tt.elt !== info.element || tt.content !== info.content)
-            tt.erase();
-        else
-            return tt;
+    function complete(new_content) {
+        var tx = window.global_tooltip;
+        content = new_content;
+        if (tx && tx.elt == info.element && tx.html() == content && !info.done)
+            tt = tx;
+        else {
+            tx && tx.erase();
+            j.data("hotcrp_tooltip", tt);
+            show_bub();
+            window.global_tooltip = tt;
+        }
     }
 
-    var bub = make_bubble(info.content, {color: "tooltip dark", dir: info.dir}),
-        to = null, refcount = 0;
-    function erase() {
-        to = clearTimeout(to);
-        bub.remove();
-        j.removeData("hotcrp_tooltip");
-        if (window.global_tooltip === tt)
-            window.global_tooltip = null;
-    }
-    tt = {
-        enter: function () {
-            to = clearTimeout(to);
-            ++refcount;
-        },
-        exit: function () {
-            var delay = info.type == "focus" ? 0 : 200;
-            to = clearTimeout(to);
-            if (--refcount == 0)
-                to = setTimeout(erase, delay);
-        },
-        erase: erase, elt: info.element, content: info.content
-    };
-    j.data("hotcrp_tooltip", tt);
-    bub.near(info.near || info.element).hover(tt.enter, tt.exit);
-    return window.global_tooltip = tt;
+    if (content == null && j[0].hasAttribute("data-hottooltip"))
+        content = j.attr("data-hottooltip");
+    if (content == null && j[0].hasAttribute("data-hottooltip-content-selector"))
+        content = jqnear(j.attr("data-hottooltip-content-selector")).html();
+    if (content == null && j[0].hasAttribute("data-hottooltip-content-promise"))
+        geval.call(this, j[0].getAttribute("data-hottooltip-content-promise")).then(complete);
+    else
+        complete(content);
+    info.done = true;
+    return tt;
 }
 
-function tooltip_enter(evt) {
+function tooltip_enter() {
     var tt = $(this).data("hotcrp_tooltip") || tooltip(this);
     tt && tt.enter();
 }
 
-function tooltip_leave(evt) {
+function tooltip_leave() {
     var tt = $(this).data("hotcrp_tooltip");
     tt && tt.exit();
+}
+
+function tooltip_erase() {
+    var tt = $(this).data("hotcrp_tooltip");
+    tt && tt.erase();
 }
 
 function add_tooltip() {
@@ -1169,7 +1247,7 @@ function setLocalTime(elt, servtime) {
             s = strftime("%A %#e %b %Y %#R your time", d);
         else
             s = strftime("%A %#e %b %Y %#r your time", d);
-        if (elt.tagName.toUpperCase() == "SPAN") {
+        if (elt.tagName == "SPAN") {
             elt.innerHTML = " (" + s + ")";
             elt.style.display = "inline";
         } else {
@@ -1217,18 +1295,18 @@ function display_main(is_initial) {
                 break;
             }
     }
-    if (!dlname && dl.is_author && dl.resp)
-        for (i in dl.resp.roundsuf) {
-            x = dl["resp" + dl.resp.roundsuf[i]];
+    if (!dlname && dl.is_author && dl.resps)
+        for (i in dl.resps) {
+            x = dl.resps[i];
             if (x.open && (+dl.now <= +x.done ? now - 120 <= +x.done : x.ingrace)) {
-                dlname = (dl.resp.rounds[i] == "1" ? "Response" : dl.resp.rounds[i] + " response") + " deadline";
+                dlname = (i == "1" ? "Response" : i + " response") + " deadline";
                 dltime = +x.done;
                 break;
             }
         }
 
     if (dlname) {
-        s = "<a href=\"" + escape_entities(hoturl("deadlines")) + "\">" + dlname + "</a> ";
+        s = "<a href=\"" + hoturl_html("deadlines") + "\">" + dlname + "</a> ";
         if (!dltime || dltime < now)
             s += "is NOW";
         else
@@ -1238,7 +1316,7 @@ function display_main(is_initial) {
     }
 
     elt.innerHTML = s;
-    elt.style.display = s ? (elt.tagName.toUpperCase() == "SPAN" ? "inline" : "block") : "none";
+    elt.style.display = s ? (elt.tagName == "SPAN" ? "inline" : "block") : "none";
 
     if (!redisplay_timeout && dlname) {
         if (!dltime || dltime - now < 180.5)
@@ -1288,7 +1366,7 @@ function tracker_paper_columns(idx, paper) {
         t += '<a class="uu" href="' + escape_entities(url) + '">#' + paper.pid + '</a>';
     t += '</td><td class="trackerbody">';
     if (paper.title) {
-        var f = paper.format ? ' ptitle preformat" data-format="' + paper.format : "";
+        var f = paper.format ? ' ptitle need-format" data-format="' + paper.format : "";
         x.push('<a class="uu' + f + '" href="' + url + '">' + text_to_html(paper.title) + '</a>');
         if (paper.format)
             tracker_has_format = true;
@@ -1324,7 +1402,8 @@ function tracker_html(mytracker) {
     tracker_has_format = false;
     var t = "";
     if (dl.is_admin) {
-        t += '<div class="hottooltip" id="trackerlogo" data-hottooltip="<div class=\'tooltipmenu\'><div><a class=\'ttmenu\' href=\'' + hoturl("buzzer") + '\' target=\'_blank\'>Discussion status page</a></div></div>"></div>';
+        var dt = '<div class="tooltipmenu"><div><a class="ttmenu" href="' + hoturl_html("buzzer") + '" target="_blank">Discussion status page</a></div></div>';
+        t += '<div class="hottooltip" id="trackerlogo" data-hottooltip="' + escape_entities(dt) + '"></div>';
         t += '<div style="float:right"><a class="btn btn-transparent btn-closer hottooltip" href="#" onclick="return hotcrp_deadlines.tracker(-1)" data-hottooltip="Stop meeting tracker">x</a></div>';
     } else
         t += '<div id="trackerlogo"></div>';
@@ -1351,7 +1430,7 @@ function display_tracker() {
     if ((e = $$("trackerconnectbtn"))) {
         if (mytracker) {
             e.className = "btn btn-danger hottooltip";
-            e.setAttribute("data-hottooltip", "<div class=\"tooltipmenu\"><div><a class=\"ttmenu\" href=\"#\" onclick=\"return hotcrp_deadlines.tracker(-1)\">Stop meeting tracker</a></div><div><a class=\"ttmenu\" href=\"" + hoturl("buzzer") + "\" target=\"_blank\">Discussion status page</a></div></div>");
+            e.setAttribute("data-hottooltip", "<div class=\"tooltipmenu\"><div><a class=\"ttmenu\" href=\"#\" onclick=\"return hotcrp_deadlines.tracker(-1)\">Stop meeting tracker</a></div><div><a class=\"ttmenu\" href=\"" + hoturl_html("buzzer") + "\" target=\"_blank\">Discussion status page</a></div></div>");
         } else {
             e.className = "btn btn-default hottooltip";
             e.setAttribute("data-hottooltip", "Start meeting tracker");
@@ -1675,7 +1754,7 @@ function highlightUpdate(which, off) {
     if (!which)
         which = document;
 
-    i = which.tagName ? which.tagName.toUpperCase() : "";
+    i = which.tagName ? which.tagName : "";
     if (i != "INPUT" && i != "BUTTON") {
         ins = which.getElementsByTagName("input");
         for (i = 0; i < ins.length; i++)
@@ -1694,7 +1773,7 @@ function hiliter(elt, off) {
         elt = document.getElementById(elt);
     else if (!elt || elt.preventDefault)
         elt = this;
-    while (elt && elt.tagName && (elt.tagName.toUpperCase() != "DIV"
+    while (elt && elt.tagName && (elt.tagName != "DIV"
                                   || !/\baahc\b/.test(elt.className)))
         elt = elt.parentNode;
     if (!elt || !elt.tagName)
@@ -1789,8 +1868,11 @@ function aufoldup(event) {
         m8 = e.className.match(/\bfold8([co])\b/);
     if (m9 && (!m8 || m8[1] == "o"))
         foldup(e, event, {n: 9, s: "foldpaperp"});
-    if (m8 && (!m9 || m8[1] == "c" || m9[1] == "o"))
+    if (m8 && (!m9 || m8[1] == "c" || m9[1] == "o")) {
         foldup(e, event, {n: 8, s: "foldpapera"});
+        if (m8[1] == "o" && $$("foldpscollab"))
+            fold("pscollab", 1);
+    }
     return false;
 }
 
@@ -1803,14 +1885,26 @@ function divclick(event) {
 }
 
 function crpfocus(id, subfocus, seltype) {
-    var selt = $$(id);
+    var selt = $$(id), m;
+    while (subfocus && typeof subfocus === "object")
+        if ((m = subfocus.className.match(/\b(?:lll|lld|tll|tld)(\d+)/)))
+            subfocus = +m[1];
+        else
+            subfocus = subfocus.parentElement;
     if (selt && subfocus)
         selt.className = selt.className.replace(/links[0-9]*/, 'links' + subfocus);
+
     var felt = $$(id + (subfocus ? subfocus : "") + "_d");
+    if (!felt && subfocus) {
+        var $j = $(selt).find(".lld" + subfocus + " .wantcrpfocus, .tld" + subfocus + " .wantcrpfocus");
+        if ($j.length == 1)
+            felt = $j[0];
+    }
     if (felt && !(felt.type == "text" && felt.value && seltype == 1))
         felt.focus();
     if (felt && felt.type == "text" && seltype == 3 && felt.select)
         felt.select();
+
     if ((selt || felt) && window.event)
         window.event.returnValue = false;
     if (seltype && seltype >= 1)
@@ -1824,7 +1918,7 @@ function crpSubmitKeyFilter(elt, e) {
     if (event_modkey(e) || event_key(e) != "Enter")
         return true;
     form = elt;
-    while (form && form.tagName && form.tagName.toUpperCase() != "FORM")
+    while (form && form.tagName && form.tagName != "FORM")
         form = form.parentNode;
     if (form && form.tagName) {
         elt.blur();
@@ -1881,24 +1975,54 @@ function papersel(value, name) {
     return false;
 }
 
-var papersel_check_safe = false;
-function paperselCheck() {
-    var e, values, check_safe = papersel_check_safe;
-    papersel_check_safe = false;
-    if ((e = $$("sel_papstandin")))
-        e.parentNode.removeChild(e);
-    if ($(this).find("input[name='pap[]']:checked").length)
-        /* OK */;
-    else if (check_safe) {
-        e = document.createElement("div");
-        e.id = "sel_papstandin";
-        values = $(this).find("input[name='pap[]']").map(function () { return this.value; }).get();
-        e.innerHTML = '<input type="hidden" name="pap" value="' + values.join(" ") + "\" />";
-        $$("sel").appendChild(e);
-    } else {
-        alert("Select one or more papers first.");
-        return false;
+function plist_onsubmit() {
+    // analyze why this is being submitted
+    var fn = this.getAttribute("data-submit-fn");
+    this.removeAttribute("data-submit-fn");
+    if (!fn && this.defaultact)
+        fn = $(this.defaultact).val();
+    if (!fn && document.activeElement) {
+        var $td = $(document.activeElement).closest("td"), cname;
+        if ($td.length && (cname = $td[0].className.match(/\b(lld\d+)\b/))) {
+            var $sub = $td.closest("tr").find("." + cname).find("input[type=submit], button[type=submit]");
+            if ($sub.length == 1)
+                fn = this.defaultact.value = $sub[0].value;
+        }
     }
+
+    // if nothing selected, either select all or error out
+    $("#sel_papstandin").remove();
+    if (!$(this).find("input[name='pap[]']:checked").length) {
+        var subbtn = fn && $(this).find("input[type=submit], button[type=submit]").filter("[value=" + fn + "]");
+        if (subbtn && subbtn.length == 1 && subbtn[0].hasAttribute("data-plist-submit-all")) {
+            var values = $(this).find("input[name='pap[]']").map(function () { return this.value; }).get();
+            $("#sel").append('<div id="sel_papstandin"><input type="hidden" name="pap" value="' + values.join(" ") + '" /></div>');
+        } else {
+            alert("Select one or more papers first.");
+            return false;
+        }
+    }
+
+    // encode the expected download in the form action, to ease debugging
+    if (!this.hasAttribute("data-original-action"))
+        this.setAttribute("data-original-action", this.action);
+    var action = this.getAttribute("data-original-action"), s = fn;
+    if (s == "get")
+        s = "get-" + $(this.getfn).val();
+    else if (s == "tag")
+        s = "tag-" + $(this.tagfn).val() + "-" + $(this.tag).val();
+    else if (s == "assign") {
+        s = "assign-" + $(this.assignfn).val();
+        if ($(this.assignfn).val() != "auto")
+            s += "-" + $(this.markpc).val();
+    } else if (s == "decide")
+        s = "decide-" + $(this.decision).val();
+    if (s)
+        this.action = hoturl_add(action, "action=" + encodeURIComponent(s));
+    return true;
+}
+function plist_submit() {
+    $(this).closest("form")[0].setAttribute("data-submit-fn", this.value);
     return true;
 }
 
@@ -1909,6 +2033,18 @@ function pc_tags_members(tag) {
         if (pc_tags[pc].indexOf(tag) >= 0)
             answer.push(pc);
     return answer;
+}
+
+function make_onkeypress_enter(f) {
+    return function (evt) {
+        if (!event_modkey(evt) && event_key(evt) == "Enter") {
+            evt.preventDefault();
+            evt.stopImmediatePropagation();
+            f.call(this);
+            return false;
+        } else
+            return true;
+    };
 }
 
 window.autosub = (function () {
@@ -1922,7 +2058,7 @@ function autosub_kp(event) {
     else if (current === false)
         return false;
     form = this;
-    while (form && form.tagName && form.tagName.toUpperCase() != "FORM")
+    while (form && form.tagName && form.tagName != "FORM")
         form = form.parentNode;
     if (form && form.tagName) {
         inputs = form.getElementsByTagName("input");
@@ -1941,7 +2077,7 @@ return function (name, elt) {
     if (da && typeof name === "string")
         da.value = name;
     current = name;
-    if (elt && !elt.onkeypress && elt.tagName.toUpperCase() == "INPUT")
+    if (elt && !elt.onkeypress && elt.tagName == "INPUT")
         elt.onkeypress = autosub_kp;
 };
 
@@ -1963,7 +2099,7 @@ function plactions_dofold() {
     }
     // Assign > "for [USER]"
     if (jQuery("#foldass").length) {
-        val = jQuery("#foldass select[name='marktype']").val();
+        val = jQuery("#foldass select[name='assignfn']").val();
         fold("ass", !!(val && val == "auto"));
         sel = jQuery("#foldass select[name='markpc']");
         if (val == "lead" || val == "shepherd") {
@@ -2045,15 +2181,15 @@ function handle_clickthrough(form) {
 
 // bad-pairs
 function badpairs_change(more) {
-    var n = $("#bptable").find("tbody > tr").length;
+    var tbody = $("#bptable > tbody"), n = tbody.children().length;
     if (more) {
         ++n;
-        $("#bptable").find("tbody").append('<tr><td class="rentry nw">or &nbsp;</td><td class="lentry"><select name="bpa' + n + '" onchange="badpairs_click()"></select> &nbsp;and&nbsp; <select name="bpb' + n + '" onchange="badpairs_click()"></select></td></tr>');
-        var options = $("#bptable").find("select").first().html();
-        $("#bptable").find("select[name='bpa" + n + "'], select[name='bpb" + n + "']").html(options).val(0);
+        tbody.append('<tr><td class="rentry nw">or &nbsp;</td><td class="lentry"><select name="bpa' + n + '" onchange="badpairs_click()"></select> &nbsp;and&nbsp; <select name="bpb' + n + '" onchange="badpairs_click()"></select></td></tr>');
+        var options = tbody.find("select").first().html();
+        tbody.find("select[name='bpa" + n + "'], select[name='bpb" + n + "']").html(options).val(0);
     } else if (n > 1) {
         --n;
-        $("#bptable").find("tbody > tr:last-child").remove();
+        tbody.children().last().remove();
     }
     return false;
 }
@@ -2148,17 +2284,27 @@ function make_outline_flasher(elt, rgba, duration) {
 function setajaxcheck(elt, rv) {
     if (typeof elt == "string")
         elt = $$(elt);
-    if (elt) {
-        make_outline_flasher(elt);
-        if (!rv.ok && !rv.error)
-            rv.error = "Error";
-        if (rv.ok)
-            make_outline_flasher(elt, "0, 200, 0");
-        else
-            elt.style.outline = "5px solid red";
-        if (rv.error)
-            make_bubble(rv.error, "errorbubble").near(elt).removeOn(elt, "input change");
+    if (!elt)
+        return;
+    if (elt.jquery && rv && !rv.ok && rv.errf) {
+        var i, e, $f = elt.closest("form");
+        for (i in rv.errf)
+            if ((e = $f.find("[name='" + i + "']")).length) {
+                elt = e[0];
+                break;
+            }
     }
+    if (elt.jquery)
+        elt = elt[0];
+    make_outline_flasher(elt);
+    if (rv && !rv.ok && !rv.error)
+        rv = {error: "Error"};
+    if (!rv || rv.ok)
+        make_outline_flasher(elt, "0, 200, 0");
+    else
+        elt.style.outline = "5px solid red";
+    if (rv && rv.error)
+        make_bubble(rv.error, "errorbubble").near(elt).removeOn(elt, "input change hide");
 }
 
 function link_urls(t) {
@@ -2228,37 +2374,64 @@ function render0(text) {
 var default_format = 0, renderers = {"0": {format: 0, render: render0}};
 
 function lookup(format) {
-    if (format == null || !renderers[format])
+    var r, p;
+    if (format && (r = renderers[format]))
+        return r;
+    if (format && typeof format === "string"
+        && (p = format.indexOf(".")) > 0
+        && (r = renderers[format.substring(0, p)]))
+        return r;
+    if (format == null)
         format = default_format;
     return renderers[format] || renderers[0];
 }
 
-var render_text = function (format, text /* arguments... */) {
-    var x = null, a, i, r = lookup(format);
-    if (r.format) {
-        a = [text];
-        for (i = 2; i < arguments.length; ++i)
-            a.push(arguments[i]);
+function do_render(format, is_inline, a) {
+    var r = lookup(format);
+    if (r.format)
         try {
-            return {format: r.format, content: r.render.apply(null, a)};
+            var f = (is_inline && r.render_inline) || r.render;
+            return {
+                format: r.formatClass || r.format,
+                content: f.apply(this, a)
+            }
         } catch (e) {
         }
-    }
-    return {format: 0, content: render0(text)};
-};
+    return {format: 0, content: render0(a[0])};
+}
+
+function render_text(format, text /* arguments... */) {
+    var a = [text], i;
+    for (i = 2; i < arguments.length; ++i)
+        a.push(arguments[i]);
+    return do_render.call(this, format, false, a);
+}
 
 function render_inline(format, text /* arguments... */) {
-    var x = null, a, i, r = lookup(format);
-    if (r.format && r.render_inline) {
-        a = [text];
-        for (i = 2; i < arguments.length; ++i)
-            a.push(arguments[i]);
-        try {
-            return {format: r.format, content: r.render_inline.apply(null, a)};
-        } catch (e) {
-        }
+    var a = [text], i;
+    for (i = 2; i < arguments.length; ++i)
+        a.push(arguments[i]);
+    return do_render.call(this, format, true, a);
+}
+
+function on() {
+    var $j = $(this), format = this.getAttribute("data-format"),
+        content = this.getAttribute("data-content") || $j.text(), args = null, f, i;
+    if ((i = format.indexOf(".")) > 0) {
+        var a = format.split(/\./);
+        format = a[0];
+        args = {};
+        for (i = 1; i < a.length; ++i)
+            args[a[i]] = true;
     }
-    return {format: 0, content: escape_entities(text)};
+    if (this.tagName == "DIV")
+        f = render_text.call(this, format, content, args);
+    else
+        f = render_inline.call(this, format, content, args);
+    if (f.format)
+        $j.html(f.content);
+    var s = $.trim(this.className.replace(/(?:^| )(?:(?:need-format|format\d+)(?: |$))*/g, " "));
+    this.className = s + (s ? " format" : "format") + (f.format || 0);
 }
 
 $.extend(render_text, {
@@ -2275,19 +2448,8 @@ $.extend(render_text, {
         default_format = format;
     },
     inline: render_inline,
-    on_page: function () {
-        $(".preformat").each(function () {
-            var $j = $(this), format = +this.getAttribute("data-format"),
-                content = this.getAttribute("data-content") || $j.text(), f;
-            $j.removeClass("preformat");
-            if (this.tagName.toUpperCase() == "SPAN")
-                f = render_inline(format, content);
-            else
-                f = render_text(format, content);
-            if (f.format)
-                $j.removeClass("format0").addClass("format" + format).html(f.content);
-        });
-    }
+    on: on,
+    on_page: function () { $(".need-format").each(on); }
 });
 return render_text;
 })();
@@ -2295,7 +2457,12 @@ return render_text;
 
 // reviews
 window.review_form = (function ($) {
-var formj, form_order;
+var formj, ratingsj, form_order;
+var rtype_info = {
+    "-3": ["−" /* &minus; */, "Refused"], "-2": ["A", "Author"],
+    "-1": ["C", "Conflict"], 1: ["E", "External review"],
+    2: ["P", "PC review"], 3: ["2", "Secondary review"], 4: ["1", "Primary review"]
+};
 
 function score_tooltip_enter(evt) {
     var j = $(this), tt = j.data("hotcrp_tooltip");
@@ -2317,8 +2484,12 @@ function score_header_tooltip_enter(evt) {
         var fieldj = formj[rv.getAttribute("data-rf")];
         if (fieldj && (fieldj.description || fieldj.options)) {
             var d = "", si, vo;
-            if (fieldj.description)
-                d += "<p>" + fieldj.description + "</p>";
+            if (fieldj.description) {
+                if (/<(?:p|div|table)/i.test(fieldj.description))
+                    d += fieldj.description;
+                else
+                    d += "<p>" + fieldj.description + "</p>";
+            }
             if (fieldj.options) {
                 d += "<div class=\"od\">Choices are:</div>";
                 for (si = 0, vo = fieldj.score_info.value_order();
@@ -2337,7 +2508,7 @@ function score_header_tooltips(j) {
     });
 }
 
-function render_review(j, rrow) {
+function render_review_body(rrow) {
     var view_order = $.grep(form_order, function (f) {
         return f.options ? f.uid in rrow : !!rrow[f.uid];
     });
@@ -2374,8 +2545,118 @@ function render_review(j, rrow) {
             t += '<hr class="c" /></div>';
         last_display = display;
     }
-    j.html(t);
-    score_header_tooltips(j);
+    return t;
+}
+
+function ratereviewform_change() {
+    var $form = $(this).closest("form");
+    $.post($form[0].action + "&ajax=1",
+           $form.serialize(),
+           function (data, status, jqxhr) {
+               var result = "Internal error, please try again later.";
+               if (data && data.result)
+                   result = data.result;
+               $form.find(".result").remove();
+               $form.find("div.inline").append('<span class="result"> &nbsp;<span class="barsep">·</span>&nbsp; ' + data.result + '</span>');
+           });
+}
+
+function add_review(rrow) {
+    var hc = new HtmlCollector,
+        rid = rrow.ordinal ? rrow.pid + "" + rrow.ordinal : "" + rrow.rid,
+        rlink = "r=" + rid + (hotcrp_want_override_conflict ? "&forceShow=1" : ""),
+        has_user_rating = false, i, ratekey, selected;
+
+    hc.push('<div class="revcard" id="r' + rid + '" data-rid="' + rrow.rid + '">', '</div>');
+
+    // HEADER
+    hc.push('<div class="revcard_head">', '</div>');
+
+    // edit/text links
+    hc.push('<div class="floatright">', '</div>');
+    if (rrow.editable)
+        hc.push('<a href="' + hoturl_html("review", rlink) + '" class="xx">'
+                + '<img class="b" src="' + assetsurl + 'images/edit.png" alt="[Edit]" />'
+                + '&nbsp;<u>Edit</u></a><br />');
+    hc.push_pop('<a href="' + hoturl_html("review", rlink + "&text=1") + '" class="xx">'
+                + '<img class="b" src="' + assetsurl + 'images/txt.png" alt="[Text]" />'
+                + '&nbsp;<u>Plain text</u></a>');
+
+    hc.push('<h3><a href="' + hoturl_html("review", rlink) + '" class="u">'
+            + 'Review' + (rrow.submitted ? '&nbsp;#' + rid : '') + '</a></h3>');
+
+    // author info
+    var revinfo = [], rtype_text = "";
+    if (rrow.rtype) {
+        rtype_text = ' &nbsp;<span class="rt' + rrow.rtype + (rrow.submitted ? "" : "n") +
+            '" title="' + rtype_info[rrow.rtype][1] + '"><span class="rti">' +
+            rtype_info[rrow.rtype][0] + '</span></span>';
+        if (rrow.round)
+            rtype_text += '&nbsp;<span class="revround">' + escape_entities(rrow.round) + '</span>';
+    }
+    if (rrow.token)
+        revinfo.push('Review token ' + rrow.token + rtype_text);
+    else if (rrow.author && rrow.blind)
+        revinfo.push('[' + rrow.author + ']' + rtype_text);
+    else if (rrow.author)
+        revinfo.push(rrow.author + rtype_text);
+    else if (rtype_text)
+        revinfo.push(rtype_text.substr(7));
+    if (rrow.modified_at)
+        revinfo.push('Updated ' + rrow.modified_at_text);
+    if (revinfo.length)
+        hc.push(' <span class="revinfo">' + revinfo.join(' <span class="barsep">·</span> ') + '</span>');
+
+    // ratings
+    has_user_rating = "user_rating" in rrow;
+    var rateinfo = [];
+    if (rrow.ratings && rrow.ratings.length) {
+        var ratecount = {}, ratetext = [];
+        for (i = 0; i < rrow.ratings.length; ++i) {
+            ratekey = rrow.ratings[i];
+            ratecount[ratekey] = (ratecount[ratekey] || 0) + 1;
+        }
+        for (i = 0; i < ratingsj.order.length; ++i) {
+            ratekey = ratingsj.order[i];
+            if (ratecount[ratekey])
+                ratetext.push(ratecount[ratekey] + " “" + ratingsj[ratekey] + "”");
+        }
+        if (ratetext.length)
+            rateinfo.push('<span class="rev_rating_summary">Ratings: ' + ratetext.join(', ') + '</span>');
+    }
+    if (has_user_rating) {
+        var rhc = new HtmlCollector;
+        rhc.push('<form method="post" action="' + hoturl_post_html("review", rlink) + '" class="ratereviewform"><div class="inline">', '</div></form>');
+        rhc.push('How helpful is this review? &nbsp;');
+        rhc.push('<select name="rating">', '</select>');
+        for (i = 0; i != ratingsj.order.length; ++i) {
+            ratekey = ratingsj.order[i];
+            selected = rrow.user_rating === null ? ratekey === "n" : ratekey === rrow.user_rating;
+            rhc.push('<option value="' + ratekey + '"' + (selected ? ' selected="selected"' : '') + '>' + ratingsj[ratekey] + '</option>');
+        }
+        rhc.pop_n(2);
+        rateinfo.push(rhc.render());
+        rateinfo.push('<a href="' + hoturl_html("help", "t=revrate") + '">What is this?</a>');
+    }
+    if (rateinfo.length) {
+        hc.push('<div class="rev_rating">', '</div>');
+        hc.push_pop(rateinfo.join(' <span class="barsep">·</span> '));
+    }
+
+    if (rrow.message_html)
+        hc.push('<div class="hint">' + rrow.message_html + '</div>');
+
+    hc.push_pop('<hr class="c" />');
+
+    // BODY
+    hc.push('<div class="revcard_body">', '</div>');
+    hc.push_pop(render_review_body(rrow));
+
+    // complete render
+    var $j = $(hc.render()).appendTo($("#body"));
+    if (has_user_rating)
+        $j.find(".ratereviewform select").change(ratereviewform_change);
+    score_header_tooltips($j);
 }
 
 return {
@@ -2392,12 +2673,15 @@ return {
         form_order = $.map(formj, function (v) { return v; });
         form_order.sort(function (a, b) { return a.position - b.position; });
     },
+    set_ratings: function (j) {
+        ratingsj = j;
+    },
     score_tooltips: function (j) {
         j.find(".revscore").each(function () {
             $(this).hover(score_tooltip_enter, tooltip_leave);
         });
     },
-    render_review: render_review
+    add_review: add_review
 };
 })($);
 
@@ -2407,7 +2691,7 @@ window.papercomment = (function ($) {
 var vismap = {rev: "hidden from authors",
               pc: "hidden from authors and external reviewers",
               admin: "shown only to administrators"};
-var cmts = {}, cmtcontainer = null, has_unload = false;
+var cmts = {}, has_unload = false;
 var idctr = 0, resp_rounds = {};
 var detwiddle = new RegExp("^" + (hotcrp_user.cid ? hotcrp_user.cid : "") + "~");
 
@@ -2442,11 +2726,11 @@ function comment_identity_time(cj) {
 
 
 function edit_allowed(cj) {
-    if (cj.response) {
-        var k = "can_respond" + (cj.response == "1" ? "" : "." + cj.response);
-        return hotcrp_status.perm[hotcrp_paperid][k] === true;
-    } else
-        return hotcrp_status.perm[hotcrp_paperid].can_comment === true;
+    var p = hotcrp_status.perm[hotcrp_paperid];
+    if (cj.response)
+        return p.can_responds && p.can_responds[cj.response] === true;
+    else
+        return p.can_comment === true;
 }
 
 function render_editing(hc, cj) {
@@ -2584,11 +2868,7 @@ function beforeunload() {
         x = analyze($cs[i]);
         text = $($cs[i]).val().replace(/\s+$/, "");
         text2 = (x.cj && x.cj.text) || "";
-        if (text === text2)
-            continue;
-        text = text.replace(/\r\n?/g, "\n");
-        text2 = text2.replace(/\r\n?/g, "\n");
-        if (text !== text2)
+        if (!text_eq(text, (x.cj && x.cj.text) || ""))
             return "Your comment edits have not been saved. If you leave this page now, they will be lost.";
     }
 }
@@ -2756,25 +3036,30 @@ function render_cmt_text(textj, cj, chead) {
 }
 
 function add(cj, editing) {
-    var cid = cj_cid(cj), j = $("#" + cid);
+    var cid = cj_cid(cj), j = $("#" + cid), $pc = null;
     if (!j.length) {
-        if (!cmtcontainer || cj.response || cmtcontainer.hasClass("response")) {
+        var $c = $("#body").children().last();
+        if (!$c.hasClass("cmtcard") && ($pc = $("#body > .cmtcard").last()).length)
+            $pc.append('<div class="cmtcard_link"><a href="#' + cid + '" class="qq">Later comments &#x25BC;</a></div>');
+        if (!$c.hasClass("cmtcard") || cj.response || $c.hasClass("response")) {
+            var t;
             if (cj.response)
-                cmtcontainer = '<div id="' + cid +
+                t = '<div id="' + cid +
                     '" class="cmtcard cmtid response responseround_' + cj.response +
                     '"><div class="cmtcard_head"><h3>' +
                     (cj.response == "1" ? "Response" : cj.response + " Response") +
                     '</h3></div>';
             else
-                cmtcontainer = '<div class="cmtcard">';
-            cmtcontainer = $(cmtcontainer + '<div class="cmtcard_body"></div></div>');
-            cmtcontainer.appendTo("#cmtcontainer");
+                t = '<div class="cmtcard">';
+            $c = $(t + '<div class="cmtcard_body"></div></div>').appendTo("#body");
+            if (!cj.response && $pc && $pc.length)
+                $c.prepend('<div class="cmtcard_link"><a href="#' + ($pc.find("[id]").last().attr("id")) + '" class="qq">Earlier comments &#x25B2;</a></div>');
         }
         if (cj.response)
             j = $('<div class="cmtg"></div>');
         else
             j = $('<div id="' + cid + '" class="cmtg cmtid"></div>');
-        j.appendTo(cmtcontainer.find(".cmtcard_body"));
+        j.appendTo($c.find(".cmtcard_body"));
     }
     if (editing == null && cj.response && cj.draft && cj.editable)
         editing = true;
@@ -2846,6 +3131,27 @@ function comment_shortcut() {
         return true;
     } else
         return false;
+}
+
+function nextprev_shortcut(evt, key) {
+    var hash = (location.hash || "#").replace(/^#/, ""), $j, walk;
+    var siblingdir = (key == "n" ? "nextSibling" : "previousSibling");
+    var jdir = (key == "n" ? "first" : "last");
+    if (hash && ($j = $("#" + hash)).length
+        && ($j.hasClass("cmtcard") || $j.hasClass("revcard") || $j.hasClass("cmtg"))) {
+        walk = $j[0];
+        if (!walk[siblingdir] && $j.hasClass("cmtg"))
+            walk = $j.closest(".cmtcard")[0];
+        walk = walk[siblingdir];
+        if (walk && !walk.hasAttribute("id") && $(walk).hasClass("cmtcard"))
+            walk = $(walk).find(".cmtg")[jdir]()[0];
+    } else {
+        $j = $(".cmtcard[id], .revcard[id], .cmtcard > .cmtcard_body > .cmtg[id]");
+        walk = $j[jdir]()[0];
+    }
+    if (walk && walk.hasAttribute("id"))
+        location.hash = "#" + walk.getAttribute("id");
+    return true;
 }
 
 function blur_keyup_shortcut(evt) {
@@ -2963,8 +3269,7 @@ function shortcut(top_elt) {
         target = evt.target || evt.srcElement;
         // reject modified keys, interesting targets
         if (!key || evt.altKey || evt.ctrlKey || evt.metaKey
-            || (target && target.tagName && target != top_elt
-                && (x = target.tagName.toUpperCase())
+            || (target && (x = target.tagName) && target != top_elt
                 && (x == "TEXTAREA"
                     || x == "SELECT"
                     || (x == "INPUT"
@@ -2976,7 +3281,7 @@ function shortcut(top_elt) {
         for (i = 0; i < x.length; ++i)
             for (j = 0; j < x[i].childNodes.length; ++j) {
                 a = x[i].childNodes[j];
-                if (a.nodeType == 1 && a.tagName.toUpperCase() == "DIV"
+                if (a.nodeType == 1 && a.tagName == "DIV"
                     && a.className.match(/\baahc\b.*\balert\b/)
                     && !x[i].className.match(/\bshortcutok\b/))
                     return true;
@@ -3025,6 +3330,8 @@ function shortcut(top_elt) {
                 add(["s", "l"], make_selector_shortcut("lead"));
                 add(["s", "s"], make_selector_shortcut("shepherd"));
                 add(["s", "t"], make_selector_shortcut("tags"));
+                add("n", nextprev_shortcut);
+                add("p", nextprev_shortcut);
             }
         }
         return self;
@@ -3060,7 +3367,7 @@ function strnatcmp(a, b) {
         return 1;
 }
 
-var alltags = new Promise().onThen(function (p) {
+var alltags = new HPromise().onThen(function (p) {
     if (hotcrp_user.is_pclike)
         jQuery.get(hoturl("api", "fn=alltags"), null, function (v) {
             var tlist = (v && v.tags) || [];
@@ -3071,6 +3378,23 @@ var alltags = new Promise().onThen(function (p) {
         p.fulfill([]);
 });
 
+var votereport = (function () {
+var vr = {};
+function votereport(tag) {
+    if (!vr[tag])
+        vr[tag] = new HPromise().onThen(function (p) {
+            $.get(hoturl("api", {fn: "votereport", p: hotcrp_paperid, tag: tag}), null, function (v) {
+                p.fulfill(v.ok ? v.result || "" : v.error);
+            });
+        });
+    return vr[tag];
+}
+votereport.clear = function () {
+    vr = {};
+};
+return votereport;
+})();
+
 function completion_item(c) {
     if (typeof c === "string")
         return {s: c};
@@ -3080,7 +3404,7 @@ function completion_item(c) {
         return c;
 }
 
-var search_completion = new Promise().onThen(function (search_completion) {
+var search_completion = new HPromise().onThen(function (search_completion) {
     jQuery.get(hoturl("api", "fn=searchcompletion"), null, function (v) {
         var sc = (v && v.searchcompletion) || [],
             scs = $.grep(sc, function (x) { return typeof x === "string"; }),
@@ -3115,19 +3439,19 @@ function taghelp_tset(elt, displayed) {
         n = x[1].match(/^([^#\s]*)/);
         return alltags.then(make_suggestions(m[1], false, m[2], n[1], displayed));
     } else
-        return new Promise(null);
+        return new HPromise(null);
 }
 
 function taghelp_q(elt, displayed) {
     var x = completion_split(elt), m, n;
-    if (x && (m = x[0].match(/.*?(?:^|[^\w:])((?:tag|r?order):\s*|#|(?:show|hide):\s*#)([^#\s()]*)$/))) {
+    if (x && (m = x[0].match(/.*?(?:^|[^\w:])((?:tag|r?order):\s*#?|#|(?:show|hide):\s*#)([^#\s()]*)$/))) {
         n = x[1].match(/^([^#\s()]*)/);
         return alltags.then(make_suggestions(m[1], false, m[2], n[1], displayed));
     } else if (x && (m = x[0].match(/.*?(\b(?:has|ss|opt|dec|round|topic|style|color|show|hide):\s*)([^"\s()]*|"[^"]*)$/))) {
         n = x[1].match(/^([^\s()]*)/);
         return search_completion.then(make_suggestions(m[1], true, m[2], n[1], displayed));
     } else
-        return new Promise(null);
+        return new HPromise(null);
 }
 
 function make_suggestions(pfx, include_pfx, precaret, postcaret, displayed) {
@@ -3138,19 +3462,19 @@ function make_suggestions(pfx, include_pfx, precaret, postcaret, displayed) {
         for (var i = 0; i < tlist.length; ++i) {
             var titem = completion_item(tlist[i]),
                 text = titem.s, ltext = titem.s.toLowerCase(),
-                pos = 0, h = "";
+                pos = 0, h, className = "suggestion";
+
             if (include_pfx) {
                 if (ltext.substr(0, pfx.length) !== pfx)
                     continue;
                 pos = pfx.length;
-            }
-            var start = '">' + pfx, ncdelete = 0;
+                h = text;
+            } else
+                h = pfx + text;
+
             if (!lprecaret.length
                 || ltext.substr(pos, lprecaret.length) === lprecaret) {
-                if (lprecaret.length) {
-                    start += escape_entities(text.substr(pos, lprecaret.length));
-                    pos += lprecaret.length;
-                }
+                pos += lprecaret.length;
                 if (best_postcaret_index === null)
                     best_postcaret_index = res.length;
                 if (lpostcaret.length) {
@@ -3161,19 +3485,16 @@ function make_suggestions(pfx, include_pfx, precaret, postcaret, displayed) {
                     }
                 } else if (text.length == pos)
                     best_postcaret_index = res.length;
-            } else {
-                // continue
-                ncdelete = lprecaret.length;
-            }
+                className = "suggestion smatch";
+            } else
+                className = "suggestion";
 
-            var posttext = escape_entities(text.substr(pos));
-            res.push('<div class="suggestion" data-autocomplete="' + ncdelete + ' ' +posttext + start + posttext + '</div>');
+            res.push('<div class="' + className + '">' + escape_entities(h) + '</div>');
         }
         if (res.length) {
             if (best_postcaret_index !== null)
-                res[best_postcaret_index] = res[best_postcaret_index].replace(/^<div class="suggestion"/, '<div class="suggestion active"');
-            return {list: res, precaret_length: pfx.length + precaret.length,
-                    postcaret_length: postcaret.length};
+                res[best_postcaret_index] = res[best_postcaret_index].replace(/^<div class="suggestion/, '<div class="suggestion active');
+            return {list: res, lengths: [pfx.length + precaret.length, postcaret.length]};
         } else
             return null;
     };
@@ -3205,14 +3526,14 @@ function suggest(elt, klass, cleanf) {
             '">' + cinfo.list.join('') + '</div>';
 
         var $elt = jQuery(elt), shadow = textarea_shadow($elt),
-            matchpos = elt.selectionStart - cinfo.precaret_length;
+            matchpos = elt.selectionStart - cinfo.lengths[0];
         shadow.text(elt.value.substring(0, matchpos))
             .append("<span>&#x2060;</span>")
             .append(document.createTextNode(elt.value.substring(matchpos)));
         var $pos = shadow.find("span").geometry(), soff = shadow.offset();
         $pos = geometry_translate($pos, -soff.left - $elt.scrollLeft(), -soff.top + 4 - $elt.scrollTop());
         tagdiv.html(t).near($pos, elt);
-        tagdiv.self().attr("data-autocomplete-postcaret-length", cinfo.postcaret_length);
+        tagdiv.self().attr("data-autocomplete-pos", matchpos + " " + (matchpos + cinfo.lengths[0]) + " " + (matchpos + cinfo.lengths[0] + cinfo.lengths[1]));
         shadow.remove();
     }
 
@@ -3221,43 +3542,45 @@ function suggest(elt, klass, cleanf) {
     }
 
     function maybe_complete($ac, ignore_empty_completion) {
-        var common = null, ndelete, attr, i, j;
+        var common = null, text, i, smatch = true;
         for (i = 0; i != $ac.length; ++i) {
-            attr = $ac[i].getAttribute("data-autocomplete");
-            common = common === null ? attr : common_prefix(attr, common);
+            text = $($ac[i]).text();
+            common = common === null ? text : common_prefix(common, text);
+            if (smatch && !/smatch/.test($ac[i].className))
+                smatch = false;
         }
         if (common === null)
             return null;
         else if ($ac.length == 1)
-            return do_complete(common, true, ignore_empty_completion);
+            return do_complete(common, smatch, true, ignore_empty_completion);
         else {
             interacted = true;
-            return do_complete(common, false, ignore_empty_completion);
+            return do_complete(common, smatch, false, ignore_empty_completion);
         }
     }
 
-    function do_complete(text, done, ignore_empty_completion) {
-        var space = text.indexOf(" "), nkill = +text.substring(0, space);
-        text = text.substring(space + 1);
-        var pc_len = +tagdiv.self().attr("data-autocomplete-postcaret-length");
-        if (!pc_len && (nkill || text == "") && ignore_empty_completion) {
+    function do_complete(text, smatch, done, ignore_empty_completion) {
+        var poss = tagdiv.self().attr("data-autocomplete-pos").split(" ");
+        if ((!smatch || text == elt.value.substring(+poss[0], +poss[2]))
+            && ignore_empty_completion) {
             done && kill();
             return null; /* null == no completion occurred (false == failed) */
         }
         done && (text += " ");
-        var start = elt.selectionStart;
-        var val = elt.value.substring(0, start - nkill) + text +
-            elt.value.substring(start + pc_len);
+        var val = elt.value.substring(0, +poss[0]) + text + elt.value.substring(+poss[2]);
         $(elt).val(val);
-        elt.selectionStart = elt.selectionEnd = start - nkill + text.length;
+        elt.selectionStart = elt.selectionEnd = +poss[0] + text.length;
         done ? kill() : setTimeout(display, 1);
         return true;
     }
 
     function move_active(k) {
-        var $sug = tagdiv.self().find(".suggestion"),
+        var $sug = tagdiv.self().find(".suggestion"), pos,
             $active = tagdiv.self().find(".suggestion.active").removeClass("active");
-        if (k == "ArrowUp" || k == "ArrowDown") {
+        if (!$active.length /* should not happen */) {
+            pos = (k == "ArrowUp" || k == "ArrowLeft" ? $sug.length - 1 : 0);
+            $active = $($sug[pos]);
+        } else if (k == "ArrowUp" || k == "ArrowDown") {
             var pos = 0;
             while (pos != $sug.length && $sug[pos] !== $active[0])
                 ++pos;
@@ -3287,7 +3610,7 @@ function suggest(elt, klass, cleanf) {
             }
             if (next)
                 $active = $(next);
-            else if (isleft)
+            else
                 return false;
         }
         $active.addClass("active");
@@ -3322,7 +3645,7 @@ function suggest(elt, klass, cleanf) {
     }
 
     function click(evt) {
-        maybe_complete($(this).find(".suggestion"));
+        maybe_complete($(this));
         evt.stopPropagation();
         interacted = true;
     }
@@ -3361,11 +3684,15 @@ function add_revpref_ajax(selector, reviewer) {
     }
 
     function rp_change() {
-        var self = this, whichpaper = this.name.substr(7);
+        var self = this, pid = this.name.substr(7), cid = reviewer, pos;
+        if ((pos = pid.indexOf("u")) > 0) {
+            cid = pid.substr(pos + 1);
+            pid = pid.substr(0, pos);
+        }
         $.ajax({
-            url: hoturl_post("api", "fn=setpref&p=" + whichpaper),
+            url: hoturl_post("api", "fn=setpref&p=" + pid),
             type: "POST", dataType: "json",
-            data: {pref: self.value, reviewer: reviewer},
+            data: {pref: self.value, reviewer: cid},
             success: function (rv) {
                 setajaxcheck(self, rv);
                 if (rv.ok && rv.value != null)
@@ -3377,20 +3704,10 @@ function add_revpref_ajax(selector, reviewer) {
         });
     }
 
-    function rp_keypress(e) {
-        e = e || window.event;
-        if (event_modkey(e) || event_key(e) != "Enter")
-            return true;
-        else {
-            rp_change.apply(this);
-            return false;
-        }
-    }
-
     $(selector).off(".revpref_ajax")
         .on("focus.revpref_ajax", "input.revpref", rp_focus)
         .on("change.revpref_ajax", "input.revpref", rp_change)
-        .on("keypress.revpref_ajax", "input.revpref", rp_keypress);
+        .on("keypress.revpref_ajax", "input.revpref", make_onkeypress_enter(rp_change));
 }
 
 
@@ -3429,16 +3746,39 @@ function add_conflict_ajax(selector) {
 }
 
 
-window.add_edittag_ajax = (function () {
-var ready, dragtag, valuemap,
-    plt_tbody, dragging, rowanal, srcindex, dragindex, dragger,
-    dragwander, scroller, mousepos, scrolldelta;
+window.plinfo_tags = (function () {
+var ready, plt_tbody, full_ordertag, dragtag, full_dragtag,
+    rowanal, rowanal_gaps, rowanal_gappos, highlight_entries,
+    dragging, srcindex, dragindex, dragger,
+    scroller, mousepos, scrolldelta;
+
+function canonicalize_tag(tag) {
+    return tag && /^~[^~]/.test(tag) ? hotcrp_user.cid + tag : tag;
+}
+
+function set_plt_tbody(e) {
+    var table = $(e).closest("table.pltable");
+    full_ordertag = canonicalize_tag(table.attr("data-order-tag"));
+    full_ordertag && plinfo.on_set_tags(set_tags_callback);
+    dragtag = table.attr("data-drag-tag");
+    full_dragtag = canonicalize_tag(dragtag);
+    plt_tbody = $(table).children().filter("tbody")[0];
+
+    table.off(".edittag_ajax")
+        .on("click.edittag_ajax", "input.edittag", tag_save)
+        .on("change.edittag_ajax", "input.edittagval", tag_save)
+        .on("keypress.edittag_ajax", "input.edittagval", make_onkeypress_enter(tag_save));
+    if (full_dragtag) {
+        table.on("mousedown.edittag_ajax", "span.dragtaghandle", tag_mousedown);
+        $(function () { $(plt_tbody).find("tr.plheading").filter("[data-anno-id]").find("td.plheading").each(add_draghandle); });
+    }
+}
 
 function parse_tagvalue(s) {
     s = s.replace(/^\s+|\s+$/, "").toLowerCase();
     if (s == "y" || s == "yes" || s == "t" || s == "true" || s == "✓")
         return 0;
-    else if (s == "n" || s == "no" || s == "" || s == "f" || s == "false" || s == "na" || s == "n/a")
+    else if (s == "n" || s == "no" || s == "" || s == "f" || s == "false" || s == "na" || s == "n/a" || s == "clear")
         return false;
     else if (s.match(/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)$/))
         return +s;
@@ -3447,68 +3787,69 @@ function parse_tagvalue(s) {
 }
 
 function unparse_tagvalue(tv) {
-    return tv === false ? "" : tv;
+    return tv === false || tv === null ? "" : sprintf("%.2f", tv).replace(/\.0+$|0+$/, "");
 }
 
-function tag_save(elt, success) {
-    var m = elt.name.match(/^tag:(\S+) (\d+)$/),
-        data = {addtags: "", deltags: ""};
-    if (elt.type.toLowerCase() == "checkbox")
-        elt.checked ? data.addtags = m[1] : data.deltags = m[1];
-    else {
-        var tv = parse_tagvalue(elt.value);
-        if (tv === false)
-            data.deltags = m[1];
-        else if (tv !== null)
-            data.addtags = m[1] + "#" + tv;
-        else {
-            setajaxcheck(elt, {ok: false, error: "Tag value must be an integer (or “n” to remove the tag)."});
-            return false;
+function make_tag_save_callback(elt) {
+    return function (rv) {
+        var focus = document.activeElement;
+        elt && setajaxcheck(elt, rv);
+        if (rv.ok) {
+            var pids = rv.p || {};
+            if (rv.pid)
+                pids[rv.pid] = rv;
+            highlight_entries = true;
+            for (var p in pids)
+                plinfo.set_tags(+p, pids[p].tags, pids[p].color_classes);
+            highlight_entries = false;
+            focus && focus.focus();
         }
+    };
+}
+
+function set_tags_callback(pid) {
+    var si = analyze_rows(pid);
+    if (rowanal[si].entry && highlight_entries)
+        setajaxcheck(rowanal[si].entry);
+    row_move(si);
+}
+
+function tag_save() {
+    var m = this.name.match(/^tag:(\S+) (\d+)$/), ch = null, newval;
+    if (this.type.toLowerCase() == "checkbox")
+        ch = this.checked ? m[1] : m[1] + "#clear";
+    else if ((newval = parse_tagvalue(this.value)) !== null)
+        ch = m[1] + "#" + (newval !== false ? newval : "clear");
+    else {
+        setajaxcheck(this, {ok: false, error: "Value must be a number (or empty to remove the tag)."});
+        return;
     }
     $.ajax(ajax_link_errors({
-        url: hoturl_post("api", "fn=settags&p=" + m[2] + "&forceShow=1"),
-        type: "POST", dataType: "json", data: data,
-        success: success
+        url: hoturl_post("api", {fn: "settags", p: m[2], addtags: ch, forceShow: 1}),
+        type: "POST", success: make_tag_save_callback(this)
     }));
-    return data;
-}
-
-function tag_onclick() {
-    var that = this;
-    tag_save(that, function (rv) {
-        setajaxcheck(that, rv);
-    });
-}
-
-function tag_keypress(evt) {
-    evt = evt || window.event;
-    if (event_modkey(evt) || event_key(evt) != "Enter")
-        return true;
-    else {
-        this.onchange();
-        return false;
-    }
 }
 
 function PaperRow(l, r, index) {
-    var rows = plt_tbody.childNodes;
+    var rows = plt_tbody.childNodes, i;
     this.l = l;
     this.r = r;
     this.index = index;
     this.tagvalue = false;
-    var inputs = rows[l].getElementsByTagName("input");
-    var i, prefix = "tag:" + dragtag + " ";
-    for (i in inputs)
-        if (inputs[i].name
-            && inputs[i].name.substr(0, prefix.length) == prefix) {
-            this.entry = inputs[i];
-            this.tagvalue = parse_tagvalue(inputs[i].value);
-            break;
-        }
-    this.id = rows[l].getAttribute("data-pid");
-    if ((i = rows[l].getAttribute("data-title-hint")))
-        this.titlehint = i;
+    var tags = rows[l].getAttribute("data-tags"), m;
+    if (tags && (m = new RegExp("(?:^| )" + regexp_quote(full_ordertag) + "#(\\S+)").exec(tags)))
+        this.tagvalue = parse_tagvalue(m[1]);
+    this.isgroup = false;
+    this.id = 0;
+    if (rows[l].getAttribute("data-anno-tag")) {
+        this.isgroup = true;
+        if (rows[l].hasAttribute("data-anno-id"))
+            this.annoid = +rows[l].getAttribute("data-anno-id");
+    } else {
+        this.id = +rows[l].getAttribute("data-pid");
+        if (dragtag)
+            this.entry = $(rows[l]).find("input[name='tag:" + dragtag + " " + this.id + "']")[0];
+    }
 }
 PaperRow.prototype.top = function () {
     return $(plt_tbody.childNodes[this.l]).offset().top;
@@ -3519,11 +3860,27 @@ PaperRow.prototype.bottom = function () {
 PaperRow.prototype.middle = function () {
     return (this.top() + this.bottom()) / 2;
 };
+PaperRow.prototype.titlehint = function () {
+    var tg = $(plt_tbody.childNodes[this.l]).find("a.ptitle, span.plheading_group"),
+        titletext = null, m;
+    if (tg.length) {
+        titletext = tg[0].getAttribute("data-title");
+        if (!titletext)
+            titletext = tg.text();
+        if (titletext && titletext.length > 60 && (m = /^.{0,60}(?=\s)/.exec(titletext)))
+            titletext = m[0] + "…";
+        else if (titletext && titletext.length > 60)
+            titletext = titletext.substr(0, 60) + "…";
+    }
+    return titletext;
+};
 
 function analyze_rows(e) {
     var rows = plt_tbody.childNodes, i, l, r, e, eindex = null;
-    while (e && e.nodeName != "TR")
+    while (e && typeof e !== "number" && e.nodeName != "TR")
         e = e.parentElement;
+
+    // create analysis
     rowanal = [];
     for (i = 0, l = null; i < rows.length; ++i)
         if (rows[i].nodeName == "TR") {
@@ -3539,6 +3896,36 @@ function analyze_rows(e) {
         }
     if (l !== null)
         rowanal.push(new PaperRow(l, r, rowanal.length));
+
+    // search for paper
+    if (typeof e === "number")
+        for (i = 0; i < rowanal.length; ++i)
+            if (rowanal[i].id == e) {
+                eindex = i;
+                break;
+            }
+
+    // analyze whether this is a gapless order
+    var sd = 0, nd = 0, s2d = 0, lv = null;
+    for (i = 0; i < rowanal.length; ++i)
+        if (rowanal[i].id && rowanal[i].tagvalue !== false) {
+            if (lv !== null) {
+                var delta = rowanal[i].tagvalue - lv;
+                ++nd;
+                sd += delta;
+                s2d += delta * delta;
+            }
+            lv = rowanal[i].tagvalue;
+        }
+    s2d = Math.sqrt(s2d);
+    if (nd >= 3 && sd >= 0.9 * nd && sd <= 1.1 * nd && s2d >= 0.9 * nd && s2d <= 1.1 * nd)
+        rowanal_gaps = null;
+    else {
+        rowanal_gaps = [];
+        while (rowanal_gaps.length < 3)
+            rowanal_gaps.push([1, 1, 1, 1, 1, 2, 2, 2, 3, 4][Math.floor(Math.random() * 10)]);
+    }
+
     return eindex;
 }
 
@@ -3558,6 +3945,13 @@ function tag_scroll() {
             scrolldelta -= delta;
         }
     }
+}
+
+function endgroup_index(i) {
+    if (i < rowanal.length && rowanal[i].isgroup)
+        while (i + 1 < rowanal.length && !rowanal[i + 1].isgroup)
+            ++i;
+    return i;
 }
 
 function tag_mousemove(evt) {
@@ -3581,15 +3975,23 @@ function tag_mousemove(evt) {
             l = m + 1;
     }
 
-    // find nearest insertion position
-    if (l < rowanal.length && y > rowanal[l].middle())
-        ++l;
+    // if dragging a group, restrict to groups
+    if (rowanal[srcindex].isgroup && rowanal[srcindex + 1] && !rowanal[srcindex + 1].isgroup)
+        while (l > 0 && l < rowanal.length && !rowanal[l].isgroup)
+            --l;
+    r = endgroup_index(l);
+
+    // if below middle, insert at next location
+    if (l < rowanal.length && y > (rowanal[l].top() + rowanal[r].bottom()) / 2)
+        l = r + 1;
+
     // if user drags far away, snap back
     var plt_geometry = $(plt_tbody).geometry();
     if (x < Math.min(geometry.left, plt_geometry.left) - 30
         || x > Math.max(geometry.right, plt_geometry.right) + 30
         || y < plt_geometry.top - 40 || y > plt_geometry.bottom + 40)
         l = srcindex;
+
     // scroll
     if (!scroller && (y < geometry.top || y > geometry.bottom)) {
         scroller = setInterval(tag_scroll, 13);
@@ -3597,18 +3999,16 @@ function tag_mousemove(evt) {
     }
 
     // calculate new dragger position
-    a = l;
-    if (a == srcindex || a == srcindex + 1) {
-        y = rowanal[srcindex].middle();
-        a = srcindex;
-    } else if (a < rowanal.length)
-        y = rowanal[a].top();
-    else
-        y = rowanal[rowanal.length - 1].bottom();
-    if (dragindex === a)
-        return;
-    dragindex = a;
-    dragwander = dragwander || dragindex != srcindex;
+    if (l == srcindex || l == endgroup_index(srcindex) + 1)
+        l = srcindex;
+    if (l !== dragindex) {
+        tag_dragto(l);
+        event_stop(evt);
+    }
+}
+
+function tag_dragto(l) {
+    dragindex = l;
 
     // create dragger
     if (!dragger) {
@@ -3616,33 +4016,158 @@ function tag_mousemove(evt) {
         window.disable_tooltip = true;
     }
 
+    // calculate new value
+    var newval;
+    if (dragindex == srcindex)
+        newval = rowanal[dragindex].tagvalue;
+    else {
+        calculate_shift(srcindex, dragindex);
+        newval = rowanal[srcindex].newvalue;
+    }
+
     // set dragger content and show it
-    m = "#" + rowanal[srcindex].id;
-    if (rowanal[srcindex].titlehint)
-        m += " &nbsp;" + rowanal[srcindex].titlehint;
-    var v;
-    if (srcindex != dragindex) {
-        a = calculate_shift(srcindex, dragindex);
-        v = a[srcindex].newvalue;
-    } else
-        v = rowanal[srcindex].tagvalue;
-    if (v !== false) {
+    var m = "", x, y;
+    if (rowanal[srcindex].id)
+        m += "#" + rowanal[srcindex].id;
+    if ((x = rowanal[srcindex].titlehint()))
+        m += (m ? " &nbsp;" : "") + x;
+    if (newval !== false) {
         m += '<span style="padding-left:2em';
         if (srcindex !== dragindex)
             m += ';font-weight:bold';
-        m += '">#' + dragtag + '#' + v + '</span>';
+        m += '">#' + dragtag + '#' + unparse_tagvalue(newval) + '</span>';
     }
-
-    dragger.html(m).at($(rowanal[srcindex].entry).offset().left - 6, y)
-        .color("edittagbubble" + (srcindex == dragindex ? " sametag" : ""));
-
-    event_stop(evt);
+    if (dragindex == srcindex)
+        y = rowanal[srcindex].middle();
+    else if (dragindex < rowanal.length)
+        y = rowanal[dragindex].top();
+    else
+        y = rowanal[rowanal.length - 1].bottom();
+    if (rowanal[srcindex].entry)
+        x = $(rowanal[srcindex].entry).offset().left - 6;
+    else
+        x = $(plt_tbody.childNodes[rowanal[srcindex].l]).geometry().right - 20;
+    dragger.html(m).at(x, y).color("edittagbubble" + (srcindex == dragindex ? " sametag" : ""));
 }
 
-function row_move(srcindex, dstindex) {
+function value_increment() {
+    if (!rowanal_gaps)
+        return 1;
+    else {
+        rowanal_gappos = (rowanal_gappos + 1) % rowanal_gaps.length;
+        return rowanal_gaps[rowanal_gappos];
+    }
+}
+
+function calculate_shift(si, di) {
+    var simax = endgroup_index(si);
+    rowanal_gappos = 0;
+    var i, j, sdelta = value_increment();
+    if (rowanal[si].tagvalue !== false
+        && simax + 1 < rowanal.length
+        && rowanal[simax + 1].tagvalue !== false) {
+        i = rowanal[simax + 1].tagvalue - rowanal[simax].tagvalue;
+        if (i >= 1)
+            sdelta = i;
+    }
+    if (simax != si && rowanal[simax].tagvalue)
+        sdelta += rowanal[simax].tagvalue - rowanal[si].tagvalue;
+
+    var newval = -Infinity, delta = 0, si_moved = false;
+    for (i = 0; i < rowanal.length; ++i)
+        rowanal[i].newvalue = rowanal[i].tagvalue;
+    function adjust_newval(j) {
+        return newval === false ? newval : newval + (rowanal[j].tagvalue - rowanal[si].tagvalue);
+    }
+
+    for (i = 0; i < rowanal.length; ++i) {
+        if (rowanal[i].tagvalue === false) {
+            if (i == 0)
+                newval = 1;
+            else if (rowanal[i - 1].tagvalue === false)
+                newval = false;
+            else if (i == 1)
+                newval += value_increment();
+            else
+                newval += rowanal[i - 1].tagvalue - rowanal[i - 2].tagvalue;
+        } else {
+            if (i > 0
+                && rowanal[i].tagvalue > rowanal[i - 1].tagvalue + value_increment()
+                && rowanal[i].tagvalue > newval)
+                delta = 0;
+            if (i == di && !si_moved && !rowanal[si].isgroup && i > 0) {
+                if (rowanal[i - 1].isgroup)
+                    delta = rowanal[i - 1].newvalue - rowanal[i].tagvalue;
+                else if (rowanal[i].isgroup)
+                    delta = rowanal[i - 1].newvalue + value_increment() - rowanal[i].tagvalue;
+            }
+            newval = rowanal[i].tagvalue + delta;
+        }
+        if (i == si && si < di) {
+            if (rowanal[i + 1].tagvalue !== false)
+                delta = -(rowanal[i + 1].tagvalue - rowanal[i].tagvalue);
+            continue;
+        } else if (i == si) {
+            delta -= sdelta;
+            continue;
+        } else if (i >= si && i <= simax)
+            continue;
+        else if (i == di && !si_moved) {
+            for (j = si; j <= simax; ++j)
+                rowanal[j].newvalue = adjust_newval(j);
+            delta += sdelta;
+            newval = rowanal[simax].newvalue;
+            --i;
+            si_moved = true;
+            continue;
+        }
+        if ((i >= di && rowanal[i].tagvalue === false)
+            || (i >= si && i >= di && rowanal[i].tagvalue >= newval))
+            break;
+        if (rowanal[i].tagvalue !== false)
+            rowanal[i].newvalue = newval;
+    }
+    if (rowanal.length == di) {
+        if (newval !== false)
+            newval += value_increment();
+        for (j = si; j <= simax; ++j)
+            rowanal[j].newvalue = adjust_newval(j);
+    }
+}
+
+function rowcompar(a, b) {
+    var av = rowanal[a].tagvalue, bv = rowanal[b].tagvalue;
+    if ((av === false) !== (bv === false))
+        return av === false ? 1 : -1;
+    if (av != bv)
+        return av < bv ? -1 : 1;
+    var aid = rowanal[a].id, bid = rowanal[b].id;
+    if (!aid !== !bid)
+        return aid ? 1 : -1;
+    if (aid !== bid)
+        return aid < bid ? -1 : 1;
+    var rows = plt_tbody.childNodes;
+    var at = $(rows[rowanal[a].l]).find(".plheading_group").attr("data-title"),
+        bt = $(rows[rowanal[b].l]).find(".plheading_group").attr("data-title"),
+        cmp = strnatcmp(at, bt);
+    if (cmp)
+        return cmp;
+    else
+        return rowanal[a].annoid - rowanal[b].annoid;
+}
+
+function row_move(srcindex) {
+    // find new position
+    var id = rowanal[srcindex].id, newval = rowanal[srcindex].tagvalue;
+    var rows = plt_tbody.childNodes, ltv, dstindex, cmp;
+    for (dstindex = 0; dstindex < rowanal.length; ++dstindex)
+        if (dstindex !== srcindex && rowcompar(srcindex, dstindex) < 0)
+            break;
+    if (dstindex === srcindex + 1)
+        return;
+
     // shift row groups
-    var rows = plt_tbody.childNodes,
-        range = [rowanal[srcindex].l, rowanal[srcindex].r],
+    var range = [rowanal[srcindex].l, rowanal[srcindex].r],
         sibling, e;
     sibling = dstindex < rowanal.length ? rows[rowanal[dstindex].l] : null;
     while (range[0] <= range[1]) {
@@ -3660,85 +4185,88 @@ function row_move(srcindex, dstindex) {
                 e = 1 - e;
             if (/\bk[01]\b/.test(c))
                 rows[i].className = c.replace(/\bk[01]\b/, "k" + e);
+            else if (/\bplheading\b/.test(c)) {
+                e = 1;
+                var np = 0;
+                for (var j = i + 1; j < rows.length; ++j)
+                    if (rows[j].nodeName == "TR") {
+                        if (/\bplheading\b/.test(rows[j].className))
+                            break;
+                        np += /^plx/.test(rows[j].className) ? 0 : 1;
+                    }
+                $(rows[i]).find(".plheading_count").html(plural(np, "paper"));
+            }
         }
 }
 
-function calculate_shift(si, di) {
-    var na = [].concat(rowanal), i, j, delta;
 
-    // initialize newvalues, make sure all elements in drag range have values
-    for (i = 0; i < na.length; ++i) {
-        na[i].newvalue = na[i].tagvalue;
-        if (i < di && i != si && na[i].newvalue === false) {
-            j = i - 1 - (i - 1 == si);
-            na[i].newvalue = (i > 0 ? na[i-1].newvalue + 1 : 1);
-        }
-    }
+function add_taganno_row(tag, annoid) {
+    var $r = $("tr.pl_headrow:first-child > th");
+    var titlecol = 0, ncol = $r.length;
+    for (var i = 0; i != ncol; ++i)
+        if ($($r[i]).hasClass("pl_title"))
+            titlecol = i;
+    var h = '<tr class="plheading" data-anno-tag="' + tag + '" data-anno-id="' + annoid + '">';
+    if (titlecol)
+        h += '<td class="plheading_spacer" colspan="' + titlecol + '"></td>';
+    h += '<td class="plheading" colspan="' + (ncol - titlecol) + '">' +
+        '<span class="plheading_group"></span>' +
+        '<span class="plheading_count"></span></td></tr>';
+    var row = $(h)[0];
+    if (tag === full_dragtag)
+        add_draghandle.call($(row).find("td.plheading")[0]);
+    plt_tbody.insertBefore(row, null);
+    return row;
+}
 
-    if (si < di) {
-        if (na[si].newvalue !== na[si+1].newvalue) {
-            delta = na[si].tagvalue - na[si+1].tagvalue;
-            for (i = si + 1; i < di; ++i)
-                na[i].newvalue += delta;
-        }
-        if (di < na.length && na[di].newvalue !== false
-            && na[di].newvalue > na[di-1].newvalue + 2)
-            delta = Math.floor((na[di-1].newvalue + na[di].newvalue)/2);
-        else
-            delta = na[di-1].newvalue + 1;
-    } else {
-        if (di == 0 && na[di].newvalue < 0)
-            delta = na[di].newvalue - 1;
-        else if (di == 0)
-            delta = 1;
-        else if (na[di].newvalue > na[di-1].newvalue + 2)
-            delta = Math.floor((na[di-1].newvalue + na[di].newvalue)/2);
-        else
-            delta = na[di-1].newvalue + 1;
+function taganno_success(rv) {
+    if (!rv.ok)
+        return;
+    var $headings = $("tr.plheading").filter('[data-anno-tag="' + rv.tag + '"]');
+    var annoid_seen = {};
+    for (var i = 0; i < rv.anno.length; ++i) {
+        var anno = rv.anno[i];
+        var row = $headings.filter('[data-anno-id="' + anno.annoid + '"]')[0];
+        if (!row)
+            row = add_taganno_row(rv.tag, anno.annoid);
+        row.setAttribute("data-tags", anno.annoid === null ? "" : rv.tag + "#" + anno.tagval);
+        var heading = anno.heading === null ? "" : anno.heading;
+        var $g = $(row).find(".plheading_group").attr({"data-format": anno.format || 0, "data-title": heading});
+        $g.text(heading === "" ? heading : heading + " ");
+        anno.format && render_text.on.call($g[0]);
+        annoid_seen[anno.annoid] = true;
+        rv.tag === full_ordertag && row_move(analyze_rows(row));
     }
-    na[si].newvalue = delta;
-    for (i = di; i < na.length; ++i) {
-        if (i != si && na[i].newvalue !== false && na[i].newvalue <= delta) {
-            if (i == di || na[i].tagvalue != na[i-1].tagvalue)
-                ++delta;
-            na[i].newvalue = delta;
-        } else if (i != si)
-            break;
+    for (i = 0; i < $headings.length; ++i) { // remove unmentioned annotations
+        var annoid = $headings[i].getAttribute("data-anno-id");
+        if (annoid !== null && !annoid_seen[annoid])
+            $($headings[i]).remove();
     }
-    return na;
 }
 
 function commit_drag(si, di) {
-    var na = calculate_shift(si, di), i;
-    for (i = 0; i < na.length; ++i)
-        if (na[i].newvalue !== na[i].tagvalue && na[i].entry) {
-            na[i].entry.value = unparse_tagvalue(na[i].newvalue);
-            na[i].entry.onchange();
-        }
-}
-
-function sorttag_onchange() {
-    var that = this, tv = parse_tagvalue(that.value);
-    tag_save(that, function (rv) {
-        setajaxcheck(that, rv);
-        var srcindex = analyze_rows(that);
-        if (!rv.ok || srcindex === null)
-            return;
-        var id = rowanal[srcindex].id, i, ltv;
-        valuemap[id] = tv;
-        for (i = 0; i < rowanal.length; ++i) {
-            ltv = valuemap[rowanal[i].id];
-            if (!rowanal[i].entry
-                || (tv !== false && ltv === false)
-                || (tv !== false && ltv !== null && +ltv > +tv)
-                || (ltv === tv && +rowanal[i].id > +id))
-                break;
-        }
-        var had_focus = document.activeElement == that;
-        row_move(srcindex, i);
-        if (had_focus)
-            that.focus();
-    });
+    var saves = [], annosaves = [], elts;
+    calculate_shift(si, di);
+    for (var i = 0; i < rowanal.length; ++i)
+        if (rowanal[i].newvalue === rowanal[i].tagvalue)
+            /* do nothing */;
+        else if (rowanal[i].id) {
+            var x = unparse_tagvalue(rowanal[i].newvalue);
+            saves.push(rowanal[i].id + " " + dragtag + "#" + (x === "" ? "clear" : x));
+        } else if (rowanal[i].annoid)
+            annosaves.push({annoid: rowanal[i].annoid, tagval: unparse_tagvalue(rowanal[i].newvalue)});
+    if (saves.length)
+        $.ajax(ajax_link_errors({
+            url: hoturl_post("api", {fn: "settags", forceShow: 1}),
+            type: "POST", dataType: "json", data: {tagassignment: saves.join(",")},
+            success: make_tag_save_callback(rowanal[si].entry)
+        }));
+    if (annosaves.length)
+        $.ajax(ajax_link_errors({
+            url: hoturl_post("api", {fn: "settaganno", tag: dragtag, forceShow: 1}),
+            type: "POST", dataType: "json", data: {anno: JSON.stringify(annosaves)},
+            success: taganno_success
+        }));
 }
 
 function tag_mousedown(evt) {
@@ -3746,7 +4274,7 @@ function tag_mousedown(evt) {
     if (dragging)
         tag_mouseup();
     dragging = this;
-    dragindex = dragwander = null;
+    dragindex = null;
     srcindex = analyze_rows(this);
     if (document.addEventListener) {
         document.addEventListener("mousemove", tag_mousemove, true);
@@ -3779,69 +4307,139 @@ function tag_mouseup(evt) {
     }
     if (scroller)
         scroller = (clearInterval(scroller), null);
-
     if (srcindex !== null && (dragindex === null || srcindex != dragindex))
         commit_drag(srcindex, dragindex);
-
     dragging = srcindex = dragindex = null;
 }
 
-return function (selector, active_dragtag) {
-    var sel = $$("sel");
-    if (!ready) {
-        ready = true;
-        $(selector).off(".edittag_ajax")
-            .on("click.edittag_ajax", "input.edittag", tag_onclick)
-            .on("change.edittag_ajax", "input.edittagval", tag_onclick)
-            .on("keypress.edittag_ajax", "input.edittagval", tag_keypress);
+function edit_anno(locator) {
+    var $d, elt = $(locator).closest("tr")[0], annos, last_newannoid = 0;
+    plt_tbody || set_plt_tbody(elt);
+    var mytag = elt.getAttribute("data-anno-tag"),
+        annoid = elt.hasAttribute("data-anno-id") ? +elt.getAttribute("data-anno-id") : null;
+    function close() {
+        window.global_tooltip && window.global_tooltip.erase();
+        $d.remove();
     }
-    if (active_dragtag) {
-        dragtag = active_dragtag;
-        valuemap = {};
-
-        $(function () {
-            plt_tbody = $(selector).find("tbody")[0];
-            $(plt_tbody).find("input[name^=\"tag:" + dragtag + " \"]").each(function () {
-                var x = document.createElement("span"), id = this.name.substr(5 + dragtag.length);
-                x.className = "dragtaghandle";
-                x.setAttribute("data-pid", id);
-                x.setAttribute("title", "Drag to change order");
-                this.parentElement.insertBefore(x, this.nextSibling);
-                x.onmousedown = tag_mousedown;
-                this.onchange = sorttag_onchange;
-                valuemap[id] = parse_tagvalue(this.value);
-            });
+    function onclick(evt) {
+        if (this.name === "cancel")
+            close();
+        else if (this.name === "add") {
+            var hc = new HtmlCollector;
+            add_anno(hc, {});
+            var $row = $(hc.render());
+            $row.appendTo($d.find(".tagannos"));
+            $row.find("input[name='heading_n" + last_newannoid + "']").focus();
+            $d.find(".popup_bottom").scrollIntoView();
+            popup_near($d[0].childNodes[0], window);
+        } else {
+            var anno = [];
+            for (var i = 0; i < annos.length; ++i) {
+                var heading = $d.find("input[name='heading_" + annos[i].annoid + "']").val();
+                var tagval = $d.find("input[name='tagval_" + annos[i].annoid + "']").val();
+                var deleted = $d.find("input[name='deleted_" + annos[i].annoid + "']").val();
+                if (heading != annos[i].heading || tagval != annos[i].tagval || deleted)
+                    anno.push({annoid: annos[i].annoid, heading: heading, tagval: tagval, deleted: !!deleted});
+            }
+            for (i = 1; i <= last_newannoid; ++i) {
+                heading = $d.find("input[name='heading_n" + i + "']").val();
+                tagval = $d.find("input[name='tagval_n" + i + "']").val();
+                if (heading != "" || tagval != 0)
+                    anno.push({annoid: "new", heading: heading, tagval: tagval});
+            }
+            $.ajax(ajax_link_errors({
+                url: hoturl_post("api", {fn: "settaganno", tag: mytag}),
+                type: "POST", dataType: "json", data: {anno: JSON.stringify(anno)},
+                success: make_onsave($d)
+            }));
+        }
+        return false;
+    }
+    function ondeleteclick() {
+        var $div = $(this).closest(".settings_revfield"), annoid = $div.attr("data-anno-id");
+        $div.find("input[name='tagval_" + annoid + "']").after("[deleted]").remove();
+        $div.append('<input type="hidden" name="deleted_' + annoid + '" value="1" />');
+        $div.find("input[name='heading_" + annoid + "']").prop("disabled", true);
+        tooltip_erase.call(this);
+        $(this).remove();
+        return false;
+    }
+    function make_onsave($d) {
+        return function (rv) {
+            setajaxcheck($d.find("button[name='save']"), rv);
+            if (rv.ok) {
+                taganno_success(rv);
+                close();
+            }
+        };
+    }
+    function add_anno(hc, anno) {
+        var annoid = anno.annoid;
+        if (annoid == null)
+            annoid = "n" + (last_newannoid += 1);
+        hc.push('<div class="settings_revfield" data-anno-id="' + annoid + '"><table><tbody>', '</tbody></table></div>');
+        hc.push('<tr><td class="lcaption nw">Description</td><td class="lentry"><input name="heading_' + annoid + '" type="text" placeholder="none" size="32" tabindex="1000" /></td></tr>');
+        hc.push('<tr><td class="lcaption nw">Start value</td><td class="lentry"><input name="tagval_' + annoid + '" type="text" size="5" tabindex="1000" />', '</td></tr>');
+        if (anno.annoid)
+            hc.push(' <a class="btn btn-transparent btn-closer deletegroup-link hottooltip" href="#" style="display:inline-block;margin-left:0.5em" data-hottooltip="Delete group">x</a>');
+        hc.pop_n(2);
+    }
+    function show_dialog(rv) {
+        if (!rv.ok || !rv.editable)
+            return;
+        var hc = new HtmlCollector;
+        hc.push('<div class="popupbg">', '</div>');
+        hc.push('<div class="popupo popupcenter"><form>', '</form></div>');
+        hc.push('<h2>Annotate #' + mytag.replace(/^\d+~/, "~") + ' order</h2>');
+        hc.push('<div class="tagannos">', '</div>');
+        annos = rv.anno;
+        for (var i = 0; i < annos.length; ++i)
+            add_anno(hc, annos[i]);
+        hc.pop();
+        hc.push('<div class="g"><button name="add" type="button" tabindex="1000">Add group</button></div>');
+        hc.push('<div class="popup_actions"><button name="cancel" type="button" tabindex="1001">Cancel</button><button name="save" type="submit" tabindex="1000">Save changes</button></div>');
+        hc.push('<div class="popup_bottom"></div>');
+        $d = $(hc.render());
+        for (var i = 0; i < annos.length; ++i) {
+            $d.find("input[name='heading_" + annos[i].annoid + "']").val(annos[i].heading);
+            $d.find("input[name='tagval_" + annos[i].annoid + "']").val(unparse_tagvalue(annos[i].tagval));
+        }
+        $d.on("click", "button", onclick).on("click", "a.deletegroup-link", ondeleteclick);
+        $d.find(".hottooltip").each(add_tooltip);
+        $d.click(function (evt) {
+            evt.target == $d[0] && close();
         });
+        $d.appendTo($(document.body));
+        popup_near($d[0].childNodes[0], window);
     }
+    $.ajax(ajax_link_errors({
+        url: hoturl_post("api", {fn: "taganno", tag: mytag}),
+        type: "POST", success: show_dialog
+    }));
+}
+
+function plinfo_tags(selector) {
+    plt_tbody || set_plt_tbody($(selector));
 };
 
+function add_draghandle() {
+    var x = document.createElement("span");
+    x.className = "dragtaghandle";
+    x.setAttribute("title", "Drag to change order");
+    if (this.tagName === "TD") {
+        x.style.float = "right";
+        x.style.position = "static";
+        x.style.paddingRight = "24px";
+        this.insertBefore(x, null);
+    } else
+        this.parentElement.insertBefore(x, this.nextSibling);
+    $(this).removeClass("need-draghandle");
+}
+
+plinfo_tags.edit_anno = edit_anno;
+plinfo_tags.add_draghandle = add_draghandle;
+return plinfo_tags;
 })();
-
-
-// review ratings
-function makeratingajax(form, id) {
-    var selects;
-    form.className = "fold7c";
-    form.onsubmit = function () {
-        return Miniajax.submit(id, function (rv) {
-                if ((ee = $$(id + "result")) && rv.result)
-                    ee.innerHTML = " <span class='barsep'>·</span> " + rv.result;
-            });
-    };
-    selects = form.getElementsByTagName("select");
-    for (var i = 0; i < selects.length; ++i)
-        selects[i].onchange = function () {
-            void form.onsubmit();
-        };
-}
-
-function addRatingAjax() {
-    var forms = document.getElementsByTagName("form"), id;
-    for (var i = 0; i < forms.length; ++i)
-        if ((id = forms[i].getAttribute("id"))
-            && id.substr(0, 11) == "ratingform_")
-            makeratingajax(forms[i], id);
-}
 
 
 // popup dialogs
@@ -3850,8 +4448,13 @@ function popup_near(elt, anchor) {
     var wg = $(window).geometry();
     var x = (anchorPos.right + anchorPos.left - elt.offsetWidth) / 2;
     var y = (anchorPos.top + anchorPos.bottom - elt.offsetHeight) / 2;
-    elt.style.left = Math.max(wg.left + 5, Math.min(wg.right - 5 - elt.offsetWidth, x)) + "px";
-    elt.style.top = Math.max(wg.top + 5, Math.min(wg.bottom - 5 - elt.offsetHeight, y)) + "px";
+    var parent_offset = {left: 0, top: 0};
+    if (/popupbg/.test(elt.parentNode.className))
+        parent_offset = $(elt.parentNode).offset();
+    x = Math.max(wg.left + 5, Math.min(wg.right - 5 - elt.offsetWidth, x)) - parent_offset.left;
+    y = Math.max(wg.top + 5, Math.min(wg.bottom - 5 - elt.offsetHeight, y)) - parent_offset.top;
+    elt.style.left = x + "px";
+    elt.style.top = y + "px";
 }
 
 function popup(anchor, which, dofold, populate) {
@@ -3861,6 +4464,8 @@ function popup(anchor, which, dofold, populate) {
         anchor = anchor || $$("popupanchor_" + which);
     }
 
+    if (elt && /popupbg/.test(elt.parentNode.className))
+        elt.parentNode.style.display = dofold ? "none" : "block";
     if (elt && dofold)
         elt.className = "popupc";
     else if (elt) {
@@ -3876,7 +4481,7 @@ function popup(anchor, which, dofold, populate) {
             if (elts[i].className.indexOf("popup_populate") >= 0)
                 populates[elts[i].name] = elts[i];
         form = anchor;
-        while (form && form.tagName && form.tagName.toUpperCase() != "FORM")
+        while (form && form.tagName && form.tagName != "FORM")
             form = form.parentNode;
         elts = (form && form.tagName ? form.getElementsByTagName("input") : []);
         for (i = 0; i < elts.length; ++i)
@@ -3893,13 +4498,13 @@ function popup(anchor, which, dofold, populate) {
 
 function override_deadlines(elt, callback) {
     var ejq = jQuery(elt);
-    var djq = jQuery('<div class="popupo"><p>'
+    var djq = jQuery('<div class="popupbg"><div class="popupo"><p>'
                      + (ejq.attr("data-override-text") || "")
                      + " Are you sure you want to override the deadline?</p>"
                      + '<form><div class="popup_actions">'
                      + '<button type="button" name="cancel">Cancel</button>'
                      + '<button type="button" name="submit">Save changes</button>'
-                     + '</div></form></div>');
+                     + '</div></form></div></div>');
     djq.find("button[name=cancel]").on("click", function () {
         djq.remove();
     });
@@ -3914,7 +4519,7 @@ function override_deadlines(elt, callback) {
         djq.remove();
     });
     djq.appendTo(document.body);
-    popup_near(djq[0], elt);
+    popup_near(djq[0].childNodes[0], elt);
 }
 
 
@@ -4062,97 +4667,322 @@ check_version.ignore = function (id) {
 
 // ajax loading of paper information
 var plinfo = (function () {
-var fields, field_order, aufull = {}, loadargs = {};
+var which = "pl", fields, field_order, aufull = {}, loadargs = {}, tagmap = false,
+    _bypid = {}, _bypidx = {};
 
-function add_column(f, which) {
-    var i, index = 0, $j = $("#fold" + which),
+function field_index(f) {
+    var i, index = 0;
+    for (i = 0; i != field_order.length && field_order[i] != f; ++i)
+        if (!field_order[i].column == !f.column && !field_order[i].missing)
+            ++index;
+    return index;
+}
+
+function pidmap() {
+    var map = {};
+    $("tr.pl").each(function () {
+        map[+this.getAttribute("data-pid")] = this;
+    });
+    return map;
+}
+
+function populate_bypid(table, selector) {
+    $(selector).each(function () {
+        var tr = this.tagName === "TR" ? this : this.parentNode;
+        if (tr.hasAttribute("data-pid"))
+            table[+tr.getAttribute("data-pid")] = this;
+    });
+}
+
+function pidrow(pid) {
+    if (!(pid in _bypid))
+        populate_bypid(_bypid, "tr.pl");
+    return $(_bypid[pid]);
+}
+
+function pidxrow(pid) {
+    if (!(pid in _bypidx))
+        populate_bypid(_bypidx, "tr.plx > td.plx");
+    return $(_bypidx[pid]);
+}
+
+function pidnear(elt) {
+    while (elt && elt.nodeName && elt.nodeName !== "TR")
+        elt = elt.parentNode;
+    var pid;
+    if (elt && elt.nodeName === "TR" && (pid = elt.getAttribute("data-pid")))
+        return +pid;
+    return null;
+}
+
+function pidattr(pid, name, value) {
+    if (arguments.length == 2)
+        return pidrow(pid).attr(name);
+    else
+        pidrow(pid).attr(name, value);
+}
+
+function pidfield(pid, f, index) {
+    var row = f.column ? pidrow(pid) : pidxrow(pid);
+    if (row && index == null)
+        index = field_index(f);
+    return $(row.length ? row[0].childNodes[index] : null);
+}
+
+
+function render_allpref() {
+    $(".need-allpref").each(function () {
+        var t = [], pid = pidnear(this), allpref = pidattr(pid, "data-allpref") || "",
+            atomre = /(\d+)([PT]\S+)/g, m;
+        while ((m = atomre.exec(allpref)) !== null) {
+            var pc = hotcrp_pc[m[1]], x = '';
+            if (pc.color_classes)
+                x += '<span class="' + pc.color_classes + '">' + pc.name + '</span>';
+            else
+                x += pc.name;
+            x += ' <span class="asspref' + (m[2].charAt(1) === "-" ? "-1" : "1") +
+                '">' + m[2].replace(/-/, "−") /* minus */ + '</span>';
+            t.push(x);
+        }
+        if (t.length) {
+            x = '<span class="nb">' + t.join(',</span> <span class="nb">') + '</span>';
+            $(this).html(x).removeClass("need-allpref");
+        } else
+            $(this).closest("div").empty();
+    });
+}
+
+function make_tagmap() {
+    if (tagmap === false) {
+        var i, x, t;
+        tagmap = {};
+        x = fields.tags.highlight_tags || [];
+        for (i = 0; i != x.length; ++i) {
+            t = x[i].toLowerCase();
+            tagmap[t] = (tagmap[t] || 0) | 1;
+        }
+        x = fields.tags.votish_tags || [];
+        for (i = 0; i != x.length; ++i) {
+            t = x[i].toLowerCase();
+            tagmap[t] = (tagmap[t] || 0) | 2;
+            t = hotcrp_user.cid + "~" + t;
+            tagmap[t] = (tagmap[t] || 0) | 2;
+        }
+        if ($.isEmptyObject(tagmap))
+            tagmap = null;
+    }
+    return tagmap;
+}
+
+var has_edittags_link, set_tags_callbacks = [];
+
+function render_row_tags(div) {
+    var f = fields.tags, tmap = make_tagmap(), pid = pidnear(div);
+    var t = [], tags = (pidattr(pid, "data-tags") || "").split(/ /);
+    for (var i = 0; i != tags.length; ++i) {
+        var text = tags[i], twiddle = text.indexOf("~"), hash = text.indexOf("#");
+        if (text !== "" && (twiddle <= 0 || text.substr(0, twiddle) == hotcrp_user.cid)) {
+            twiddle = Math.max(twiddle, 0);
+            var tbase = text.substring(0, hash), tindex = text.substr(hash + 1),
+                tagx = tmap ? tmap[tbase.toLowerCase()] || 0 : 0, h, q;
+            tbase = tbase.substring(twiddle, hash);
+            if (tagx & 2)
+                q = "#" + tbase + " showsort:-#" + tbase;
+            else if (tindex != "0")
+                q = "order:#" + tbase;
+            else
+                q = "#" + tbase;
+            h = '<a href="' + hoturl("search", {q: q}) + '" class="qq nw">#' + tbase + '</a>';
+            if ((tagx & 2) || tindex != "0")
+                h += "#" + tindex;
+            if (tagx & 1)
+                h = '<strong>' + h + '</strong>';
+            t.push([h, text.substring(twiddle, hash), text.substring(hash + 1), tagx]);
+        }
+    }
+    t.sort(function (a, b) {
+        if ((a[3] ^ b[3]) & 1)
+            return a[3] & 1 ? -1 : 1;
+        else
+            return strnatcmp(a[1], b[1]);
+    });
+    if (pidattr(pid, "data-tags-editable") != null) {
+        if (!t.length)
+            t.push(["none"]);
+        t[t.length - 1][0] += ' <span class="hoveronly"><span class="barsep">·</span> <a class="edittags-link" href="#">Edit</a></span>';
+        if (!has_edittags_link) {
+            $(div).closest("tbody").on("click", "a.edittags-link", edittags_link_onclick);
+            has_edittags_link = true;
+        }
+    }
+    if (t.length)
+        $(div).html('<em class="plx">' + f.title + ':</em> ' + $.map(t, function (x) { return x[0]; }).join(" "));
+    else
+        $(div).empty();
+}
+
+function edittags_link_onclick() {
+    $.ajax(ajax_link_errors({
+        url: hoturl_post("api", {fn: "settags", p: pidnear(this), forceShow: 1}),
+        type: "POST", success: edittags_callback
+    }));
+    return false;
+}
+
+function edittags_callback(rv) {
+    var div;
+    if (!rv.ok || !rv.pid || !(div = pidfield(rv.pid, fields.tags)))
+        return;
+    $(div).html('<em class="plx">Tags:</em> '
+                + '<textarea name="tags ' + rv.pid + '" style="vertical-align:top;max-width:70%;margin-bottom:2px" cols="120" rows="1" data-hottooltip-dir="v"></textarea>'
+                + ' &nbsp;<button name="tagsave ' + rv.pid + '" type="button">Save</button>'
+                + ' &nbsp;<button name="tagcancel ' + rv.pid + '" type="button">Cancel</button>');
+    $(div).find("textarea").val(rv.tags_edit_text).on("keydown", make_onkeypress_enter(edittags_click)).autogrow();
+    $(div).find("button").click(edittags_click);
+    $(div).find("button").click(edittags_click);
+}
+
+function edittags_click() {
+    var div = this.parentNode, pid = pidnear(div);
+    $(div).find("textarea").trigger("hide");
+    if (this.tagName !== "BUTTON" || this.name.charAt(3) == "s") {
+        $.ajax(ajax_link_errors({
+            url: hoturl_post("api", {fn: "settags", p: pid,
+                                     tags: $(div).find("textarea").val(), forceShow: 1}),
+            type: "POST", success: function (rv) {
+                if (rv.ok)
+                    plinfo.set_tags(pid, rv.tags, rv.color_classes);
+                else
+                    setajaxcheck($(div).find("textarea"), rv);
+            }
+        }));
+    } else
+        render_row_tags(this.parentNode);
+}
+
+function make_tag_column_callback(f) {
+    var tag = /^(?:#|tag:|tagval:)(\S+)/.exec(f.name)[1];
+    if (/^~[^~]/.test(tag))
+        tag = hotcrp_user.cid + tag;
+    return function (pid, tags, color_classes) {
+        var e = pidfield(pid, f), tagval = null;
+        if (!e.length || f.missing)
+            return;
+        for (var i = 0; i != tags.length; ++i)
+            if (tags[i].substr(0, tag.length) === tag && tags[i].charAt(tag.length) === "#") {
+                tagval = tags[i].substr(tag.length + 1);
+                break;
+            }
+        if (e.find("input").length) {
+            e.find(".edittag").prop("checked", tagval !== null);
+            e.find(".edittagval").val(tagval === null ? "" : String(tagval));
+        } else if (tagval === "0")
+            e.html(/tagval/.test(f.className) ? "0" : "✓");
+        else
+            e.html(tagval === null ? "" : tagval);
+    };
+}
+
+function render_needed() {
+    scorechart();
+    render_allpref();
+    $(".need-tags").each(function () {
+        render_row_tags(this.parentNode);
+    });
+    $(".need-draghandle").each(plinfo_tags.add_draghandle);
+    render_text.on_page();
+}
+
+function add_column(f) {
+    var index = field_index(f), $j = $("#fold" + which),
         classEnd = " class=\"pl " + (f.className || "pl_" + f.name) +
-            " fx" + f.foldnum + "\"";
-    for (i = 0; i != field_order.length && field_order[i] != f; ++i)
-        if (field_order[i].column && !field_order[i].missing)
-            ++index;
+            " fx" + f.foldnum + "\"",
+        h = '<th' + classEnd + '>' + f.title + '</th>';
     $j.find("tr.pl_headrow").each(function () {
-        var h = "<th" + classEnd + ">" + f.title + "</th>";
         this.insertBefore($(h)[0], this.childNodes[index] || null);
     });
+    h = '<td' + classEnd + '></td>';
     $j.find("tr.pl").each(function () {
-        var pid = this.getAttribute("data-pid");
-        var h = "<td" + classEnd + " id=\"" + f.name + "." + pid + "\"></td>";
         this.insertBefore($(h)[0], this.childNodes[index] || null);
     });
-    $j.find("tr.plx > td.plx, td.pl_footer, td.plheading").each(function () {
-        this.setAttribute("colspan", this.getAttribute("colspan") + 1);
+    $j.find("tr.plx > td.plx, td.pl_footer, td.plheading:last-child").each(function () {
+        this.setAttribute("colspan", +this.getAttribute("colspan") + 1);
     });
     f.missing = false;
 }
 
-function add_row(f, which) {
-    var i, index = 0,
-        classEnd = '" class="' + (f.className || "pl_" + f.name) +
+function add_row(f) {
+    var index = field_index(f),
+        h = '<div class="' + (f.className || "pl_" + f.name) +
             " fx" + f.foldnum + '"></div>';
-    for (i = 0; i != field_order.length && field_order[i] != f; ++i)
-        if (!field_order[i].column && !field_order[i].missing)
-            ++index;
-    $($$("fold" + which)).find("tr.plx > td.plx").each(function () {
-        var pid = this.parentNode.getAttribute("data-pid");
-        var n = $('<div id="' + f.name + '.' + pid + classEnd)[0];
-        this.insertBefore(n, this.childNodes[index] || null);
+    $("#fold" + which).find("tr.plx > td.plx").each(function () {
+        this.insertBefore($(h)[0], this.childNodes[index] || null);
     });
     f.missing = false;
 }
 
-function set(f, elt, text, which) {
+function set(f, elt, text) {
     if (text == null || text == "")
         elt.innerHTML = "";
     else {
         if (elt.className == "")
             elt.className = "fx" + foldmap[which][f.name];
         if (f.title && (!f.column || text == "Loading"))
-            text = "<h6>" + f.title + ":</h6> " + text;
+            text = '<em class="plx">' + f.title + ':</em> ' + text;
         elt.innerHTML = text;
     }
 }
 
-function make_callback(dofold, type, which) {
+function make_callback(dofold, type) {
+    var f = fields[type], values, tr;
+    function render_some() {
+        var index = field_index(f), htmlk = f.name + ".html";
+        for (var n = 0; n < 64 && tr; tr = tr.nextSibling)
+            if (tr.nodeName === "TR" && tr.hasAttribute("data-pid") && /\bpl\b/.test(tr.className)) {
+                var p = +tr.getAttribute("data-pid");
+                for (var k in values)
+                    if (k.substr(0, 5) == "attr." && p in values[k])
+                        pidattr(p, k.substr(5), values[k][p]);
+                if (values[htmlk] && p in values[htmlk])
+                    set(f, pidfield(p, f, index)[0], values[htmlk][p]);
+                ++n;
+            }
+        render_needed();
+        if (tr)
+            setTimeout(render_some, 8);
+    }
     return function (rv) {
-        var f = fields[type], i, x, elt, h6 = "";
-        if (f.title && !f.column)
-            h6 = "<h6>" + f.title + ":</h6> ";
-        x = rv[f.name + ".html"] || {};
-        for (i in x)
-            if ((elt = $$(f.name + "." + i)))
-                set(f, elt, x[i], which);
-        f.loadable = false;
-        fold(which, dofold, f.name);
         if (type == "aufull")
             aufull[!!dofold] = rv;
-        scorechart();
+        values = rv;
+        tr = $("tbody > tr.pl").first()[0];
+        if (rv.ok)
+            render_some();
+        f.loadable = false;
+        fold(which, dofold, f.name);
     };
 }
 
-function show_loading(type, which) {
+function show_loading(f) {
     return function () {
-        var f = fields[type], i, elt, divs;
-        if (!f.loadable || !(elt = $$("fold" + which)))
-            return;
-        divs = elt.getElementsByTagName("div");
-        for (i = 0; i < divs.length; i++)
-            if (divs[i].id.substr(0, f.name.length) == f.name)
-                set(f, divs[i], "Loading", which);
+        if (f.loadable) {
+            var index = field_index(f);
+            for (var p in pidmap())
+                set(f, pidfield(p, f, index)[0], "Loading");
+        }
     };
 }
 
-function plinfo(type, dofold, which) {
+function plinfo(type, dofold) {
     var elt, f = fields[type];
     if (!f)
         log_jserror("plinfo missing type " + type);
-    which = which || "pl";
     if (dofold && dofold !== true && dofold.checked !== undefined)
         dofold = !dofold.checked;
 
     // fold
     if (!dofold && f.missing)
-        f.column ? add_column(f, which) : add_row(f, which);
+        f.column ? add_column(f) : add_row(f);
     fold(which, dofold, type);
     if ((type == "aufull" || type == "anonau") && !dofold
         && (elt = $$("showau")) && !elt.checked)
@@ -4166,24 +4996,24 @@ function plinfo(type, dofold, which) {
 
     // may need to load information by ajax
     if (type == "aufull" && aufull[!!dofold])
-        make_callback(dofold, type, which)(aufull[!!dofold]);
+        make_callback(dofold, type)(aufull[!!dofold]);
     else if ((!dofold && f.loadable) || type == "aufull") {
         // set up "loading" display
-        setTimeout(show_loading(type, which), 750);
+        setTimeout(show_loading(f), 750);
 
         // initiate load
         delete loadargs.aufull;
+        loadargs.fn = "load";
         if (type == "aufull" || type == "au" || type == "anonau") {
-            loadargs.get = "authors";
+            loadargs.field = "authors";
             if (type == "aufull" ? !dofold : (elt = $$("showaufull")) && elt.checked)
                 loadargs.aufull = 1;
         } else
-            loadargs.get = type;
-        loadargs.ajax = 1;
+            loadargs.field = type;
         $.ajax({
             url: hoturl_post("search", loadargs),
             type: "POST", timeout: 10000, dataType: "json",
-            success: make_callback(dofold, type, which)
+            success: make_callback(dofold, type)
         });
     }
 
@@ -4197,10 +5027,32 @@ plinfo.needload = function (la) {
 plinfo.set_fields = function (fo) {
     field_order = fo;
     fields = {};
-    for (var i = 0; i < fo.length; ++i)
+    for (var i = 0; i < fo.length; ++i) {
         fields[fo[i].name] = fo[i];
+        if (/^(?:#|tag:|tagval:)\S+$/.test(fo[i].name))
+            set_tags_callbacks.push(make_tag_column_callback(fo[i]));
+    }
     if (fields.authors)
         fields.au = fields.anonau = fields.aufull = fields.authors;
+};
+
+plinfo.render_needed = render_needed;
+plinfo.set_tags = function (pid, tags, color_classes) {
+    if (pidrow(pid).length) {
+        pidattr(pid, "data-tags", $.isArray(tags) ? tags.join(" ") : tags);
+        if (color_classes)
+            make_pattern_fill(color_classes);
+        $("tr.pl, tr.plx").filter("[data-pid='" + pid + "']").removeClass(function (i, klass) {
+            return (klass.match(/(?:^| )(?:\S+tag|k[01])(?= |$)/g) || []).join(" ");
+        }).addClass(color_classes);
+        if (fields.tags && !fields.tags.missing)
+            render_row_tags(pidfield(pid, fields.tags)[0]);
+        for (var i in set_tags_callbacks)
+            set_tags_callbacks[i](pid, tags, color_classes);
+    }
+};
+plinfo.on_set_tags = function (f) {
+    set_tags_callbacks.push(f);
 };
 
 return plinfo;
@@ -4333,7 +5185,7 @@ function doremovedocument(elt) {
         estk = [e];
         while (estk.length) {
             e = estk.pop();
-            tn = e.nodeType == 1 ? e.tagName.toUpperCase() : "";
+            tn = e.nodeType == 1 ? e.tagName : "";
             if (tn == "TD")
                 e.style.textDecoration = "line-through";
             else if (tn == "TABLE" || tn == "TBODY" || tn == "TR")
@@ -4381,9 +5233,12 @@ save_tags.success = function (data) {
         var t = $.trim(this.className.replace(/\b\w*tag\b/g, ""));
         this.className = t + " " + (data.color_classes || "");
     });
-    $("#foldtags .psv .fn").html(data.tags_view_html == "" ? "None" : data.tags_view_html);
+    var h = data.tags_view_html == "" ? "None" : data.tags_view_html,
+        $j = $("#foldtags .psv .fn");
+    if ($j.length && $j.html() !== h)
+        $j.html(h);
     if (data.response)
-        $("#foldtags .psv .fn").prepend(data.response);
+        $j.prepend(data.response);
     if (!$("#foldtags textarea").is(":visible"))
         $("#foldtags textarea").val(data.tags_edit_text);
     $(".is-tag-index").each(function () {
@@ -4403,12 +5258,13 @@ save_tags.success = function (data) {
             j.closest(".hotcrp_tag_hideempty").toggle(res !== "");
         }
     });
+    votereport.clear();
 };
 $(function () {
     if ($$("foldtags"))
         jQuery(window).on("hotcrp_deadlines", function (evt, dl) {
-            if (dl.tags && dl.tags[hotcrp_paperid])
-                save_tags.success(dl.tags[hotcrp_paperid]);
+            if (dl.p && dl.p[hotcrp_paperid] && dl.p[hotcrp_paperid].tags)
+                save_tags.success(dl.p[hotcrp_paperid]);
         });
 });
 
@@ -4460,10 +5316,9 @@ document.body ? prepare() : $(prepare);
 
 
 // focusing
-jQuery(function () {
-jQuery(".hotradiorelation input, .hotradiorelation select").on("click keypress", function (event) {
-    var x = jQuery(this).closest(".hotradiorelation")
-        .find("input[type='radio']").first();
+$(function () {
+$(".hotradiorelation input, .hotradiorelation select").on("click keypress", function (event) {
+    var x = $(this).closest(".hotradiorelation").find("input[type='radio']").first();
     if (x.length && x[0] !== this)
         x[0].click();
     return true;
@@ -4512,8 +5367,47 @@ function save_tag_index(e) {
 }
 
 
+// PC selectors
+function populate_pcselector() {
+    var optids = hotcrp_pc.__order__, i = 0, opts = [], x, email, name, pos;
+    if (this.hasAttribute("data-pcselector-options"))
+        optids = this.getAttribute("data-pcselector-options").split(/[\s,]+/);
+    else if (this.hasAttribute("data-pcselector-allownone"))
+        i = -1;
+    var selected = this.getAttribute("data-pcselector-selected"), selindex = 0;
+    for (; i < optids.length; ++i) {
+        if (i < 0 || !+optids[i]) {
+            email = "0";
+            name = "None";
+        } else if ((x = hotcrp_pc[optids[i]])) {
+            email = x.email;
+            name = x.name;
+            if (hotcrp_pc.__sort__ === "last" && x.lastpos) {
+                if (x.emailpos)
+                    name = name.substr(x.lastpos, x.emailpos - x.lastpos - 1) + ", " + name.substr(0, x.lastpos - 1) + name.substr(x.emailpos - 1);
+                else
+                    name = name.substr(x.lastpos) + ", " + name.substr(0, x.lastpos - 1);
+            }
+        } else
+            continue;
+        var opt = document.createElement("option");
+        opt.setAttribute("value", email);
+        opt.text = unescape_entities(name);
+        this.add(opt);
+        if (email == selected || (i >= 0 && optids[i] == selected))
+            selindex = this.options.length - 1;
+    }
+    this.selectedIndex = selindex;
+    $(this).removeClass("need-pcselector");
+}
+
+$(function () { $(".need-pcselector").each(populate_pcselector); });
+
+
 // mail
 function setmailpsel(sel) {
+    var plimit = $$("plimit");
+    fold("psel", !!plimit && !plimit.checked, 8);
     fold("psel", !!sel.value.match(/^(?:pc$|pc:|all$)/), 9);
     fold("psel", !sel.value.match(/^new.*rev$/), 10);
 }

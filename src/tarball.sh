@@ -23,15 +23,15 @@ mkdistdir () {
     mkdir $crpd
 
     while read f; do
-	if [ -n "$f" ]; then
-	    d=`echo "$f" | sed 's/[^\/]*$//'`
-	    [ -n "$d" -a ! -d "$crpd/$d" ] && mkdir "$crpd/$d"
-	    if [ -f "$f" ]; then
-		ln "$f" "$crpd/$f"
-	    else
-		cp -r "$f" "$crpd/$d"
-	    fi
-	fi
+        if [ -n "$f" ]; then
+            d=`echo "$f" | sed 's/[^\/]*$//'`
+            [ -n "$d" -a ! -d "$crpd/$d" ] && mkdir "$crpd/$d"
+            if [ -f "$f" ]; then
+                ln "$f" "$crpd/$f"
+            else
+                cp -r "$f" "$crpd/$d"
+            fi
+        fi
     done
 
     export COPY_EXTENDED_ATTRIBUTES_DISABLE=true COPYFILE_DISABLE=true
@@ -154,19 +154,37 @@ src/papercolumn.php
 src/paperinfo.php
 src/paperlist.php
 src/paperoption.php
+src/papersaver.php
 src/papersearch.php
 src/paperstatus.php
 src/papertable.php
 src/paperrank.php
 src/review.php
 src/reviewformlibrary.json
-src/reviewsetform.php
 src/reviewtable.php
 src/reviewtimes.php
+src/sa/sa_assign.php
+src/sa/sa_decide.php
+src/sa/sa_get_json.php
+src/sa/sa_get_rev.php
+src/sa/sa_get_revpref.php
+src/sa/sa_get_sub.php
+src/sa/sa_mail.php
+src/sa/sa_tag.php
 src/sample.pdf
 src/schema.sql
-src/searchactions.php
+src/searchaction.php
+src/searchselection.php
 src/settinginfo.json
+src/settings/s_basics.php
+src/settings/s_decisions.php
+src/settings/s_msg.php
+src/settings/s_reviewform.php
+src/settings/s_reviews.php
+src/settings/s_sub.php
+src/settings/s_subform.php
+src/settings/s_tags.php
+src/settings/s_users.php
 src/updateschema.php
 src/useractions.php
 src/userstatus.php
@@ -189,7 +207,6 @@ images/edit18.png
 images/edit24.png
 images/exassignone.png
 images/exsearchaction.png
-images/extagsnone.png
 images/extagssearch.png
 images/extagsset.png
 images/extagvotehover.png
@@ -229,8 +246,8 @@ images/viewas.png
 scripts/.htaccess
 scripts/d3.min.js
 scripts/graph.js
-scripts/jquery-1.12.0.min.js
-scripts/jquery-1.12.0.min.map
+scripts/jquery-1.12.3.min.js
+scripts/jquery-1.12.3.min.map
 scripts/script.js
 scripts/settings.js
 

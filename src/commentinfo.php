@@ -25,11 +25,10 @@ class CommentInfo {
 
 
     function __construct($x = null, $prow = null) {
-        $this->merge(is_object($x) ? $x : null);
-        $this->prow = $prow;
+        $this->merge(is_object($x) ? $x : null, $prow);
     }
 
-    private function merge($x) {
+    private function merge($x, $prow) {
         global $Conf;
         if ($x)
             foreach ($x as $k => $v)
@@ -40,10 +39,14 @@ class CommentInfo {
         $this->commentRound = (int) $this->commentRound;
         if ($Conf->sversion < 107 && $this->commentType >= COMMENTTYPE_AUTHOR)
             $this->authorOrdinal = $this->ordinal;
+        $this->prow = $prow;
     }
 
     static public function fetch($result, $prow) {
-        return $result ? $result->fetch_object("CommentInfo", array(null, $prow)) : null;
+        $cinfo = $result ? $result->fetch_object("CommentInfo", [null, $prow]) : null;
+        if ($cinfo && !is_int($cinfo->commentId))
+            $cinfo->merge(null, $prow);
+        return $cinfo;
     }
 
 
@@ -77,6 +80,11 @@ class CommentInfo {
             && ($ctype & COMMENTTYPE_VISIBILITY) != COMMENTTYPE_ADMINONLY;
     }
 
+    private function ordinal_missing($ctype) {
+        return self::commenttype_needs_ordinal($ctype)
+            && !($ctype >= COMMENTTYPE_AUTHOR ? $this->authorOrdinal : $this->ordinal);
+    }
+
     public function unparse_ordinal() {
         $is_author = $this->commentType >= COMMENTTYPE_AUTHOR;
         $o = $is_author ? $this->authorOrdinal : $this->ordinal;
@@ -92,10 +100,9 @@ class CommentInfo {
         $o = $is_author ? $cr->authorOrdinal : $cr->ordinal;
         if (self::commenttype_needs_ordinal($cr->commentType) && $o)
             return ($is_author ? "cA" : "c") . $o;
-        else if ($cr->commentType & COMMENTTYPE_RESPONSE) {
-            $rname = $cr->commentRound ? $Conf->resp_round_name($cr->commentRound) : "";
-            return $rname . "response";
-        } else
+        else if ($cr->commentType & COMMENTTYPE_RESPONSE)
+            return $Conf->resp_round_text($cr->commentRound) . "response";
+        else
             return "cx" . $cr->commentId;
     }
 
@@ -110,7 +117,12 @@ class CommentInfo {
         return self::_user($this);
     }
 
-    public function unparse_json($contact) {
+    public function viewable_tags(Contact $user) {
+        // NB caller must check can_view_comment_tags
+        return Tagger::strip_nonviewable($this->commentTags, $user);
+    }
+
+    public function unparse_json($contact, $include_displayed_at = false) {
         global $Conf;
         if ($this->commentId && !$contact->can_view_comment($this->prow, $this, null))
             return false;
@@ -119,16 +131,14 @@ class CommentInfo {
         if (!$this->commentId) {
             if (!$contact->can_comment($this->prow, $this))
                 return false;
-            $cj = (object) array("is_new" => true, "editable" => true);
+            $cj = (object) array("pid" => $this->prow->paperId, "is_new" => true, "editable" => true);
             if ($this->commentType & COMMENTTYPE_RESPONSE)
                 $cj->response = $Conf->resp_round_name($this->commentRound);
             return $cj;
         }
 
         // otherwise, viewable comment
-        $cj = (object) array("cid" => $this->commentId);
-        if ($contact->can_comment($this->prow, $this))
-            $cj->editable = true;
+        $cj = (object) array("pid" => $this->prow->paperId, "cid" => $this->commentId);
         $cj->ordinal = $this->unparse_ordinal();
         $cj->visibility = self::$visibility_map[$this->commentType & COMMENTTYPE_VISIBILITY];
         if ($this->commentType & COMMENTTYPE_BLIND)
@@ -137,12 +147,13 @@ class CommentInfo {
             $cj->draft = true;
         if ($this->commentType & COMMENTTYPE_RESPONSE)
             $cj->response = $Conf->resp_round_name($this->commentRound);
+        if ($contact->can_comment($this->prow, $this))
+            $cj->editable = true;
 
         // tags
         if ($this->commentTags
             && $contact->can_view_comment_tags($this->prow, $this, null)) {
-            $tagger = new Tagger($contact);
-            if (($tags = $tagger->viewable($this->commentTags)))
+            if (($tags = $this->viewable_tags($contact)))
                 $cj->tags = TagInfo::split($tags);
             if ($tags && ($cc = TagInfo::color_classes($tags)))
                 $cj->color_classes = $cc;
@@ -166,6 +177,9 @@ class CommentInfo {
             $cj->modified_at_text = $Conf->unparse_time_obscure($cj->modified_at);
             $cj->modified_at_obscured = true;
         }
+        if ($include_displayed_at)
+            // XXX exposes information, should hide before export
+            $cj->displayed_at = (int) $this->timeDisplayed;
 
         // text
         if ($this->commentOverflow)
@@ -196,10 +210,10 @@ class CommentInfo {
         if (!$no_title)
             $x .= $this->prow->pretty_text_title();
         if ($this->commentTags
-            && $contact->can_view_comment_tags($this->prow, $this, null)) {
+            && $contact->can_view_comment_tags($this->prow, $this, null)
+            && ($tags = $this->viewable_tags($contact))) {
             $tagger = new Tagger($contact);
-            if (($tags = $tagger->viewable($this->commentTags)))
-                $x .= center_word_wrap($tagger->unparse_hashed($tags));
+            $x .= center_word_wrap($tagger->unparse_hashed($tags));
         }
         $x .= "---------------------------------------------------------------------------\n";
         if ($this->commentOverflow)
@@ -297,9 +311,7 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
             $ctags = null;
 
         // notifications
-        $displayed = false;
-        if (!($ctype & COMMENTTYPE_DRAFT))
-            $displayed = true;
+        $displayed = !($ctype & COMMENTTYPE_DRAFT);
 
         // query
         $text = get_s($req, "text");
@@ -351,7 +363,9 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
                     && !($ctype & COMMENTTYPE_DRAFT)
                     && ($this->commentType & COMMENTTYPE_DRAFT)))
                 $qa .= ", timeNotified=$Now";
-            if (!$this->timeDisplayed && $displayed)
+            // reset timeDisplayed if you change the comment type
+            if ((!$this->timeDisplayed || $this->ordinal_missing($ctype))
+                && $text !== "" && $displayed)
                 $qa .= ", timeDisplayed=$Now";
             $q = "update $Table set timeModified=$Now$qa, commentType=$ctype, comment=?, commentOverflow=?, commentTags=? where commentId=$this->commentId";
             if (strlen($text) <= 32000)
@@ -372,14 +386,13 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
         $contact->log_activity("Comment $cmtid " . ($text !== "" ? "saved" : "deleted"), $this->prow->$LinkColumn);
 
         // ordinal
-        if (self::commenttype_needs_ordinal($ctype) && $text !== ""
-            && !($ctype >= COMMENTTYPE_AUTHOR ? $this->authorOrdinal : $this->ordinal))
+        if ($text !== "" && $this->ordinal_missing($ctype))
             $this->save_ordinal($cmtid, $ctype, $Table, $LinkTable, $LinkColumn);
 
         // reload
         if ($text !== "") {
             $comments = $this->prow->fetch_comments("commentId=$cmtid");
-            $this->merge($comments[$cmtid]);
+            $this->merge($comments[$cmtid], $this->prow);
             if ($this->timeNotified == $this->timeModified) {
                 self::$watching = $this;
                 $this->prow->notify(WATCHTYPE_COMMENT, "CommentInfo::watch_callback", $contact);

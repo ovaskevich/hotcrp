@@ -198,12 +198,14 @@ class ContactList {
                 $scoresort = $Conf->session("scoresort", "A");
                 if ($scoresort != "A" && $scoresort != "V" && $scoresort != "D")
                     $scoresort = "A";
+                Contact::$allow_nonexistent_properties = true;
                 foreach ($rows as $row) {
                     $scoreinfo = new ScoreInfo(@$row->$fieldId);
                     $row->_sort_info = $scoreinfo->sort_data($scoresort);
                     $row->_sort_avg = $scoreinfo->mean();
                 }
                 usort($rows, array($this, "_sortScores"));
+                Contact::$allow_nonexistent_properties = false;
             }
             break;
         }
@@ -315,7 +317,7 @@ class ContactList {
                     $nti[] = $v;
                 }
             if (count($nt))
-                return PaperInfo::unparse_topics($nt, $nti, true);
+                return PaperInfo::unparse_topic_list_html($nt, $nti, true);
             else
                 return "";
         case self::FIELD_REVIEWS:
@@ -384,8 +386,7 @@ class ContactList {
                 . join(", ", $m) . '</div>';
         case self::FIELD_TAGS:
             if ($this->contact->isPC
-                && ($tags = Contact::roles_all_contact_tags($row->roles, $row->contactTags))
-                && ($tags = $this->tagger->viewable($tags))) {
+                && ($tags = $row->viewable_tags($this->contact))) {
                 $x = [];
                 foreach (TagInfo::split($tags) as $t)
                     $x[] = '<a class="qq nw" href="' . hoturl("users", "t=%23" . TagInfo::base($t)) . '">' . $this->tagger->unparse_hashed($t) . '</a>';
@@ -513,7 +514,6 @@ class ContactList {
 
         $aulimit = (strlen($this->limit) >= 2 && $this->limit[0] == 'a' && $this->limit[1] == 'u');
         $pq = "select u.contactId,
-        u.contactId as paperId,
         firstName, lastName, email, affiliation, roles, contactTags,
         voicePhoneNumber,
         u.collaborators, lastLogin, disabled";
@@ -636,9 +636,11 @@ class ContactList {
             return NULL;
 
         // fetch data
+        Contact::$allow_nonexistent_properties = true;
         $rows = array();
-        while (($row = edb_orow($result)))
+        while (($row = Contact::fetch($result)))
             $rows[] = $row;
+        Contact::$allow_nonexistent_properties = false;
         return $rows;
     }
 
@@ -719,15 +721,12 @@ class ContactList {
                 continue;
 
             $trclass = "k" . ($this->count % 2);
-            if ($show_colors) {
-                $tags = Contact::roles_all_contact_tags($row->roles, $row->contactTags);
-                if ($tags && ($m = $this->tagger->viewable_color_classes($tags))) {
-                    if (TagInfo::classes_have_colors($m)) {
-                        $trclass = $m;
-                        $hascolors = true;
-                    } else
-                        $trclass .= " $m";
-                }
+            if ($show_colors && ($m = $row->viewable_color_classes($this->contact))) {
+                if (TagInfo::classes_have_colors($m)) {
+                    $trclass = $m;
+                    $hascolors = true;
+                } else
+                    $trclass .= " $m";
             }
             if ($row->disabled && $this->contact->isPC)
                 $trclass .= " graytext";
@@ -743,8 +742,8 @@ class ContactList {
                     //$t .= "  <tr class=\"pl_$fdef[0] pl_callout $trclass";
                     if ($fdef[1] >= 3)
                         $tt .= " class=\"fx" . ($fdef[1] - 2) . "\"";
-                    $tt .= "><h6>" . $this->header($fieldId, -1, $row)
-                        . ":</h6> " . $d . "</div>";
+                    $tt .= '><em class="plx">' . $this->header($fieldId, -1, $row)
+                        . ":</em> " . $d . "</div>";
                 }
 
             if ($tt !== "") {

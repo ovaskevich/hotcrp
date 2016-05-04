@@ -60,7 +60,7 @@ function _alternateRow($caption, $entry, $next = null) {
             $caption = '<a class="qq" name="' . $anchor . '" href="#' . $anchor
                 . '">' . $caption . '</a>';
         }
-        echo '<tr><td class="sentry nowrap" colspan="2">',
+        echo '<tr><td class="sentry nw" colspan="2">',
             '<h4 class="helppage">', $caption, '</h4>', $below, '</td></tr>', "\n";
         $rowidx = null;
     }
@@ -98,11 +98,16 @@ function _searchForm($forwhat, $other = null, $size = 20) {
     if ($other && preg_match_all('/(\w+)=([^&]*)/', $other, $matches, PREG_SET_ORDER))
         foreach ($matches as $m)
             $text .= Ht::hidden($m[1], urldecode($m[2]));
-    return Ht::form_div(hoturl("search"), array("method" => "get", "divclass" => "nowrap"))
+    return Ht::form_div(hoturl("search"), array("method" => "get", "divclass" => "nw"))
         . "<input type='text' name='q' value=\""
         . htmlspecialchars($forwhat) . "\" size='$size' /> &nbsp;"
         . Ht::submit("go", "Search")
         . $text . "</div></form>";
+}
+
+function _searchLink($q, $linkhtml = null) {
+    return '<a href="' . hoturl("search", ["q" => $q]) . '">'
+        . ($linkhtml ? : htmlspecialchars($q)) . '</a>';
 }
 
 function search() {
@@ -175,7 +180,7 @@ to navigate through the rest of the search matches.</p>
 You can:</p>
 
 <ul class='compact'>
-<li>Download a <tt>.zip</tt> file with the selected papers.</li>
+<li>Download a <code>.zip</code> file with the selected papers.</li>
 <li>Download all reviews for the selected papers.</li>
 <li>Download tab-separated text files with authors, PC
  conflicts, review scores, and so forth (some options chairs only).</li>
@@ -339,7 +344,7 @@ function searchQuickref() {
     _searchQuickrefRow("", "re:primary:fdabek:complete", "“fdabek” has completed a primary review");
     if (($r = meaningful_round_name()))
         _searchQuickrefRow("", "re:$r", "review in round “" . htmlspecialchars($r) . "”");
-    _searchQuickrefRow("", "re:words<100", "has a complete review with less than 100 words");
+    _searchQuickrefRow("", "re:auwords<100", "has a review with less than 100 words in author-visible fields");
     if ($Conf->setting("rev_ratings") != REV_RATINGS_NONE)
         _searchQuickrefRow("", "rate:+", "review was rated positively (“rate:-” and “rate:+>2” also work; can combine with “re:”)");
     _searchQuickrefRow("Comments", "has:cmt", "at least one visible reviewer comment (not including authors’ response)");
@@ -363,6 +368,7 @@ function searchQuickref() {
     _searchQuickrefRow("", "conflict:pc>2", "at least three PC members have conflicts with the paper");
     _searchQuickrefRow("", "reconflict:\"1 2 3\"", "a reviewer of paper 1, 2, or 3 has a conflict with the paper");
     _searchQuickrefRow("Preferences", "pref:fdabek>0", "“fdabek” (in name/email) has review preference &gt;&nbsp;0<br /><span class='hint'>PC members can search their own preferences; chairs can search anyone’s preferences.</span>");
+    _searchQuickrefRow("", "pref:X", "some PC member has a preference expertise of “X” (expert)");
     _searchQuickrefRow("Status", "status:sub", "paper is submitted for review", "t=all");
     _searchQuickrefRow("", "status:unsub", "paper is neither submitted nor withdrawn", "t=all");
     _searchQuickrefRow("", "status:withdrawn", "paper has been withdrawn", "t=all");
@@ -446,7 +452,7 @@ function searchQuickref() {
     _searchQuickrefRow("", "edit:#discuss", "edit the values for tag “#discuss”");
     _searchQuickrefRow("", "search1 THEN search2", "like “search1 OR search2”, but papers matching “search1” are grouped together and appear earlier in the sorting order");
     _searchQuickrefRow("", "1-5 THEN 6-10 show:compact", "display searches in compact columns");
-    _searchQuickrefRow("", "search1 HIGHLIGHT search2", "search for “search1”, but <span class=\"taghl highlighttag\">highlight</span> papers in that list that match “search2” (also try HIGHLIGHT:pink, HIGHLIGHT:green, HIGHLIGHT:blue)");
+    _searchQuickrefRow("", "search1 HIGHLIGHT search2", "search for “search1”, but <span class=\"taghl highlightmark\">highlight</span> papers in that list that match “search2” (also try HIGHLIGHT:pink, HIGHLIGHT:green, HIGHLIGHT:blue)");
 }
 
 
@@ -502,27 +508,130 @@ function tags() {
 
     _subhead("", "
 <p>PC members and administrators can attach tag names to papers.
-Papers can have many tags, and you can invent new tags on the fly.
-Tags are never shown to authors$conflictmsg1.
 It’s easy to add and remove tags and to list all papers with a given tag,
 and <em>ordered</em> tags preserve a particular paper order.
 Tags also affect color highlighting in paper lists.</p>
 
-<p><em>Twiddle tags</em>, with names like “#~tag”, are visible only
+<p>Tags are generally visible to the PC.
+They are never shown to authors$conflictmsg1.
+<em>Twiddle tags</em>, with names like “#~tag”, are visible only
 to their creators.  Tags with two twiddles, such as “#~~tag”, are
-visible only to PC chairs.  All other tags are visible to the entire PC.</p>");
+visible only to PC chairs.</p>");
+
+    _subhead("Finding tags", "
+<p>A paper’s tags are shown like this on the paper page:</p>
+
+<div class='pspcard_container' style='position:static'><div class='pspcard'><div class='pspcard_body'>
+<div class='psc psc1'>
+ <div class='pst'>
+  <span class='psfn'>Tags</span>
+  <span class='pstedit'><a class='xx'><span style='display:inline-block;position:relative;width:15px'>" . Ht::img("edit.png", "[Edit]", "bmabs") . "</span>&nbsp;<u class='x'>Edit</u></a></span>
+  <hr class='c' /></div>
+<div class='psv'><div class='taghl'>#earlyaccept</div></div></div>
+</div></div></div><hr class='c' />
+
+<p>To find all papers with tag “#discuss”:&nbsp; " . _searchForm("#discuss") . "</p>
+
+<p>You can also search with “" . _searchLink("show:tags") . "” to see each
+paper’s tags, or “" . _searchLink("show:#tagname") . "” to see a particular tag
+as a column.</p>
+
+<p>Tags are only shown to PC members and administrators.
+$conflictmsg3$setting
+Additionally, twiddle tags, which have names like “#~tag”, are
+visible only to their creators; each PC member has an independent set.
+Tags are not case sensitive.</p>");
+
+    _subhead("<a name='changing'>Changing tags</a>", "
+<p>To change a paper’s tags, go to the paper page and select the Tags box’s " . Ht::img("edit.png", "[Edit]") . "&nbsp;Edit
+link. Then enter one or more alphanumeric tags separated by spaces.</p>
+
+<p>" . Ht::img("extagsset.png", "[Tag entry on review screen]") . "</p>
+
+<p>To set tags from
+<a href='" . hoturl("search") . "'>search</a>, you can select papers and
+use the action area:</p>
+
+<p>" . Ht::img("extagssearch.png", "[Setting tags on the search page]") . "</p>
+
+<p><b>Add</b> adds tags to the selected papers, <b>Remove</b> removes tags
+from the selected papers, and <b>Define</b> adds the tag to the selected
+papers and removes it from all others.  The chair-only <b>Clear twiddle</b>
+action removes a tag and all users’ matching twiddle tags.</p></li>
+
+<p>You can also edit tags directly on the search page. Search for “"
+. _searchLink("edit:tag:tagname") . "” to
+get a column of checkboxes; checked papers are given the “#tagname” tag.
+Search for “" . _searchLink("edit:tagval:tagname") . "” to set <a
+href='#values'>tag values</a>. Or search for “" . _searchLink("edit:tags") .
+"” to edit papers’ full tag lists.</p>
+
+<p>Finally, the chair may upload tag assignments using the <a href='" .
+hoturl("bulkassign") . "'>bulk assignment page</a>.</p>
+
+<p>Although any PC member can view or search
+most tags, certain tags may be changed only by PC chairs$chairtags.  $setting</p>");
+
+    _subhead("<a id='values'>Tag values and discussion orders</a>", "
+<p>Tags have optional numeric values, which are displayed as
+“#tag#100”. Search for “" . _searchLink("order:tag") . "” to sort tagged
+papers by value. You can also search for specific values with search terms
+like “" . _searchLink("#discuss#2") . "” or “" . _searchLink("#discuss>1") .
+"”.</p>
+
+<p>It’s common to assign increasing tag values to a set of papers.  Do this
+using the <a href='" . hoturl("search") . "'>search screen</a>.  Search for the
+papers you want, sort them into the right order, select their checkboxes, and
+choose <b>Define order</b> in the tag action area.  If no sort gives what
+you want, search for the desired paper numbers in order—for instance,
+“" . _searchLink("4 1 12 9") . "”—then <b>Select all</b> and <b>Define
+order</b>. To add new papers at the end of an existing discussion order, use
+<b>Add to order</b>. To insert papers into an existing order, use <b>Add to
+order</b> with a tag value; for example, to insert starting at value 5, use
+<b>Add to order</b> with “#tag#5”.  The rest of the order is renumbered to
+accomodate the insertion.</p>
+
+<p>Even easier, you can <em>drag</em> papers into order using a search like “"
+. _searchLink("editsort:#tag") . "”.</p>
+
+<p><b>Define order</b> might assign values “#tag#1”,
+“#tag#3”, “#tag#6”, and “#tag#7”
+to adjacent papers.  The gaps make it harder to infer
+conflicted papers’ positions.  (Any given gap might or might not hold a
+conflicted paper.)  The <b>Define gapless order</b> action assigns
+strictly sequential values, like “#tag#1”,
+“#tag#2”, “#tag#3”, “#tag#4”.
+<b>Define order</b> is better for most purposes.</p>
+
+<p>The <a href=\"" . hoturl("autoassign", "a=discorder") . "\">autoassigner</a>
+has special support for creating discussion orders. It tries to group papers
+with similar PC conflicts, which can make the meeting run smoother.</p>");
+
+    _subhead("Tag colors", "
+<p>The tag names “red”, “orange”, “yellow”,
+“green”, “blue”, “purple”, and
+“gray” act as highlight colors. For example, papers tagged with
+“#red” will appear red in paper lists (for people who can see that
+tag).  Tag a paper “#~red” to make it red on your displays, but not
+others’. Other styles are available; try
+“#bold”, “#italic”, “#big”, “#small”, and “#dim”. System administrators can <a
+href='" . hoturl("settings", "group=tags") . "'>associate other tags with colors</a>
+so that, for example, “" . _searchLink("#reject") . "” papers show up as
+gray.</p>");
 
     _subhead("Using tags", "
 <p>Here are some example ways to use tags.</p>
 
 <ul>
-<li><strong>Skip low-ranked submissions at the PC meeting.</strong>
- Mark low-ranked submissions with tag “#nodiscuss”, then ask the PC to
- <a href='" . hoturl("search", "q=%23nodiscuss") . "'>search for “#nodiscuss”</a>
- (<a href='" . hoturl("search", "q=tag:nodiscuss") . "'>“tag:nodiscuss”</a> also works).
- PC members can easily check the list for controversial papers they’d like to discuss despite their ranking.
- They can email the chairs about such papers, or, even easier, add a “#discussanyway” tag.
- (You might make the “#nodiscuss” tag chair-only so an evil PC member couldn’t add it to a high-ranked paper, but it’s usually better to trust the PC.)</li>
+
+<li><strong>Skip low-ranked submissions at the PC meeting.</strong> Mark
+low-ranked submissions with tag “#nodiscuss”, then ask the PC to " .
+_searchLink("#nodiscuss", "search for “#nodiscuss”") . " (“" .
+_searchLink("tag:nodiscuss") . "” also works). PC members can check the list
+for papers they’d like to discuss anyway. They can email the chairs about
+such papers, or, even easier, add a “#discussanyway” tag. (You might make the
+“#nodiscuss” tag chair-only so an evil PC member couldn’t add it to a
+high-ranked paper, but it’s usually better to trust the PC.)</li>
 
 <li><strong>Mark controversial papers that would benefit from additional review.</strong>
  PC members could add the “#controversy” tag when the current reviewers disagree.
@@ -549,7 +658,7 @@ visible only to PC chairs.  All other tags are visible to the entire PC.</p>");
 
 <li><strong>Define a discussion order for the PC meeting.</strong>
  Publishing the order lets PC members prepare to discuss upcoming papers.
- Define an ordered tag such as “#discuss” (see below for how), then ask the PC to <a href='" . hoturl("search", "q=order:discuss") . "'>search for “order:discuss”</a>.
+ Define an ordered tag such as “#discuss”, then ask the PC to <a href='" . hoturl("search", "q=order:discuss") . "'>search for “order:discuss”</a>.
  The PC can now see the order and use quick links to go from paper to paper.$conflictmsg2</li>
 
 <li><strong>Mark tentative decisions during the PC meeting</strong> either
@@ -557,92 +666,6 @@ visible only to PC chairs.  All other tags are visible to the entire PC.</p>");
  “#reject” tags.</li>
 
 </ul>");
-
-    _subhead("Finding tags", "
-<p>A paper’s tags are shown like this:</p>
-
-<p>" . Ht::img("extagsnone.png", "[Tag list on review screen]") . "</p>
-
-<p>To find all papers with tag “#discuss”:&nbsp; " . _searchForm("#discuss") . "</p>
-
-<p>Tags are only shown to PC members and administrators.
-$conflictmsg3$setting
-Additionally, twiddle tags, which have names like “#~tag”, are
-visible only to their creators; each PC member has an independent set.
-Tags are not case sensitive.</p>");
-
-    _subhead("<a name='changing'>Changing tags</a>", "
-<p>To change a paper’s tags, click the Tags box’s " . Ht::img("edit.png", "[Edit]") . "&nbsp;Edit
-link, then enter one or more alphanumeric tags separated by spaces.</p>
-
-<p>" . Ht::img("extagsset.png", "[Tag entry on review screen]") . "</p>
-
-<p>To tag multiple papers at once, find the papers in a
-<a href='" . hoturl("search") . "'>search</a>, select
-their checkboxes, and add tags using the action area.</p>
-
-<p>" . Ht::img("extagssearch.png", "[Setting tags on the search page]") . "</p>
-
-<p><b>Add</b> adds tags to the selected papers, <b>Remove</b> removes existing
-tags from the selected papers, and <b>Define</b> adds the tag to all selected
-papers and removes it from all non-selected papers.  The chair-only <b>Clear
-twiddle</b> action removes a tag and all users’ matching twiddle tags.</p>
-
-<p>The chair may also upload tags using the <a href='" . hoturl("bulkassign") . "'>bulk
-assignment page</a>.</p>
-
-<p>Although any PC member can view or search
-most tags, certain tags may be changed only by PC chairs$chairtags.  $setting</p>");
-
-    _subhead("Tag values and discussion orders", "
-<p>Tags have optional per-paper numeric values, which are displayed as
-“tag#100”.  Searching for a tag with “<a
-href='" . hoturl("search", "q=order:tag") . "'>order:tag</a>” will
-return the papers sorted by the tag value.  This is useful, for example, for
-PC meeting discussion orders.  Change the order by editing the tag values.
-Search for specific values with search terms like “<a
-href='" . hoturl("search", "q=%23discuss%232") . "'>#discuss#2</a>”
-or “<a
-href='" . hoturl("search", "q=%23discuss%3E1") . "'>#discuss>1</a>”.</p>
-
-<p>It’s common to assign increasing tag values to a set of papers.  Do this
-using the <a href='" . hoturl("search") . "'>search screen</a>.  Search for the
-papers you want, sort them into the right order, select their checkboxes, and
-choose <b>Define order</b> in the tag action area.  If no sort gives what
-you want, search for the desired paper numbers in order&mdash;for instance,
-you might search for “<a href='" . hoturl("search", "q=4+1+12+9") . "'>4 1 12
-19</a>”&mdash;then <b>Select all</b> and <b>Define order</b>.  To add
-new papers at the end of an existing discussion order, use <b>Add to order</b>.
-To insert papers into an existing order, use <b>Add to order</b> with a tag
-value; for example, to insert starting at value 5, use <b>Add to order</b> with
-“#tag#5”.  The rest of the order is renumbered to accomodate the
-insertion.</p>
-
-<p><b>Define order</b> might assign values “#tag#1”,
-“#tag#3”, “#tag#6”, and “#tag#7”
-to adjacent papers.  The gaps make it harder to infer
-conflicted papers’ positions.  (Any given gap might or might not hold a
-conflicted paper.)  The <b>Define gapless order</b> action assigns
-strictly sequential values, like “#tag#1”,
-“#tag#2”, “#tag#3”, “#tag#4”.
-<b>Define order</b> is better for most purposes.</p>
-
-<p>The <a href=\"" . hoturl("autoassign", "a=discorder") . "\">autoassigner</a>
-has special support for creating discussion orders. It tries to group papers
-with similar PC conflicts, which can make the meeting run smoother.</p>");
-
-    _subhead("Tag colors", "
-<p>The tag names “red”, “orange”, “yellow”,
-“green”, “blue”, “purple”, and
-“gray” act as highlight colors. For example, papers tagged with
-“#red” will appear red in paper lists (for people who can see that
-tag).  Tag a paper “#~red” to make it red on your displays, but not
-others’. Other styles are available; try
-“#bold”, “#italic”, “#big”, “#small”, and “#dim”. System administrators can <a
-href='" . hoturl("settings", "group=tags") . "'>associate other tags with colors</a>
-so that, for example, “<a
-href='" . hoturl("search", "q=%23reject") . "'>#reject</a>” papers show up
-as gray.</p>");
 }
 
 
@@ -654,7 +677,7 @@ function tracks() {
 specific papers. Tracks are managed through the <a href=\"" . hoturl("help", "t=tags") . "\">tags system</a>.
 Without tracks, all PC members are treated equally.
 With tracks, PC members with different tags can have different rights to
-view or review papers, depending on the papers’ tags.</p>
+see and review papers, depending on the papers’ tags.</p>
 
 <p>Set up tracks on the <a href=\"" . hoturl("settings", "group=tracks") . "\">Settings &gt;
 Tracks</a> page.</p>");
@@ -669,7 +692,7 @@ reviewed. To set this up:</p>
 <ul>
 <li>Give external review committee members the “erc” tag.</li>
 <li>On Settings &gt; Tracks, “For papers not on other
-tracks,” select “Who can view reviews? &gt; PC members without tag: erc”
+tracks,” select “Who can see reviews? &gt; PC members without tag: erc”
 and “Who can self-assign a review? &gt; PC members without tag: erc”.</li>
 </ul>
 
@@ -879,15 +902,13 @@ the aggregated PC vote is visible in the public tag.</p>
 
 <p>For example, assume that an administrator defines a voting tag
  “". _singleVoteTag() . "” with an allotment of 10.
-To use two votes for a paper, a PC member adds the tag
-“~". _singleVoteTag() . "#2” to that paper. The “~” indicates
-that the tag is specific to that PC member, and the number following the “#”
-is the number of votes.
-The system will respond by adding the tag “". _singleVoteTag() . "#2” to that
+To use two votes for a paper, a PC member tags the paper as
+“~". _singleVoteTag() . "#2”. The system
+automatically adds the tag “". _singleVoteTag() . "#2” to that
 paper (note the
-lack of the “~”). This indicates that the paper has two total votes.
+lack of the “~”), indicating that the paper has two total votes.
 As other PC members add their votes with their own “~” tags, the system
-updates the “~”-less tag to reflect the current total.
+updates the main tag to reflect the total.
 (The system ensures no PC member exceeds their allotment.) </p>
 
 <p>
@@ -901,7 +922,7 @@ in the search results (or set up a
 <p>
 Hover to learn how the PC voted:</p>
 
-<p>" . Ht::img("extagvotehover.png", "[Hovering over a voting tag]") . "</p>");
+<p>" . Ht::img("extagvotehover.png", "[Hovering over a voting tag]", ["width" => 390, "height" => 46]) . "</p>");
 }
 
 
@@ -1072,7 +1093,7 @@ scores A, B, and D is A. For instance:</p>
         _alternateRow("", "re:#$retag", "True if reviewer has tag “#{$retag}”");
     _alternateRow("", "re:round", "Review round");
     _alternateRow("", "re:type", "Review type");
-    _alternateRow("", "re:words", "Review word count");
+    _alternateRow("", "re:auwords", "Review word count (author-visible fields only)");
     _alternateRow("Review preferences", "pref", "Review preference");
     _alternateRow("", "prefexp", "Predicted expertise");
     echo "</table>\n";
@@ -1130,11 +1151,7 @@ function chair() {
   in <b>bold</b>).</p></li>
 
 <li><p><strong><a href='" . hoturl("settings", "group=sub") . "'>Set submission
-  policies</a></strong>, including whether submission is blind, whether
-  authors check off conflicted PC members (“Collect authors’ PC conflicts
-  with checkboxes”), and whether authors must enter additional non-PC collaborators,
-  which can help detect conflicts with external reviewers (“Collect authors’
-  other collaborators as text”).</p></li>
+  policies</a></strong>, including whether submission is blind.</p></li>
 
 <li><p><strong><a href='" . hoturl("settings", "group=sub") . "'>Set submission
   deadlines.</a></strong> Authors first <em>register</em>, then <em>submit</em>
@@ -1152,30 +1169,38 @@ function chair() {
   protection against last-minute server overload and gives authors
   some slack.</p></li>
 
-<li><p><strong><a href='" . hoturl("settings", "group=opt") . "'>Define
-  submission options (optional).</a></strong>  You can add
-  additional options to the submission form, such as “Consider this
-  paper for the Best Student Paper award” or “Provide this paper to the
-  European shadow PC.”  You can
-  <a href='" . hoturl("search") . "'>search</a> for papers with or without
-  each option.</p></li>
+<li><p><strong><a href='" . hoturl("settings", "group=subform") . "'>Set up
+  the submission form</a></strong>, including whether abstracts are required,
+  whether authors check off conflicted PC members (“Collect authors’ PC
+  conflicts with checkboxes”), and whether authors must enter additional
+  non-PC collaborators, which can help detect conflicts with external
+  reviewers (“Collect authors’ other collaborators as text”). The submission
+  form also can include:</p>
 
-<li><p><strong><a href='" . hoturl("settings", "group=opt") . "'>Define paper
-  topics (optional).</a></strong> Authors can select topics, such as
-  “Applications” or “Network databases,” that characterize their
-  paper’s subject areas.  PC members express topics for which they have high,
-  medium, and low interest, improving automatic paper assignment.  Although
-  explicit preferences (see below) are better than topic-based assignments,
-  busy PC members might not specify their preferences; topic matching lets you
-  do a reasonable job at assigning papers anyway.</p></li>
+  <ul>
 
-<li><p><strong><a href='" . hoturl("settings", "group=sub") . "'>Set
-  up the automated format checker (optional).</a></strong> This adds a
-  “Check format” link to the Edit Paper screen.
-  Clicking the link checks the paper for formatting errors, such as going
-  over the page limit.  Papers with formatting errors may still be submitted,
-  since the checker itself can make mistakes, but the automated checker leaves
-  cheating authors no excuse.</p></li>
+  <li><p><strong>PDF format checker.</strong> This adds a “Check format” link
+  to the Edit Paper screen. Clicking the link checks the paper for formatting
+  errors, such as going over the page limit.  Papers with formatting errors
+  may still be submitted, since the checker itself can make mistakes, but the
+  automated checker leaves cheating authors no excuse.</p></li>
+
+  <li><p><strong>Options</strong> such as checkboxes, selectors, freeform
+  text, and uploaded attachments. Checkbox options might include “Consider
+  this paper for the Best Student Paper award” or “Provide this paper to the
+  European shadow PC.” Attachment options might include supplemental material.
+  You can <a href='" . hoturl("search") . "'>search</a> for papers with or
+  without each option.</p></li>
+
+  <li><p><strong>Topics.</strong> Authors can select topics, such as
+  “Applications” or “Network databases,” that characterize their paper’s
+  subject areas.  PC members express topics for which they have high, medium,
+  and low interest, improving automatic paper assignment.  Although explicit
+  preferences (see below) are better than topic-based assignments, busy PC
+  members might not specify their preferences; topic matching lets you do a
+  reasonable job at assigning papers anyway.</p></li>
+
+  </ul></li>
 
 <li><p>Take a look at a <a href='" . hoturl("paper", "p=new") . "'>paper
   submission page</a> to make sure it looks right.</p></li>
@@ -1415,7 +1440,7 @@ administrator’s identity.</p>");
   yourself, it can be convenient to collect final versions using HotCRP.
   Authors upload final versions just as they did submissions.  You can then <a
   href='" . hoturl("search", "q=dec:yes&amp;t=s") . "'>download
-  all final versions as a <tt>.zip</tt> archive</a>.  (The submitted
+  all final versions as a <code>.zip</code> archive</a>.  (The submitted
   versions are archived for reference.)</p></li>
 
 </ol>");

@@ -47,7 +47,7 @@ foreach ($json->contacts as $c) {
 }
 foreach ($json->papers as $p) {
     $ps = new PaperStatus(null);
-    if (!$ps->save($p))
+    if (!$ps->save_paper_json($p))
         die_hard("* failed to create paper $p->title:\n" . htmlspecialchars_decode(join("\n", $ps->error_html())) . "\n");
 }
 $assignset = new AssignmentSet($Admin, true);
@@ -249,6 +249,25 @@ function call_api($fn, $user, $qreq, $prow) {
     }
     JsonResultException::$capturing = false;
     return $result;
+}
+
+function fetch_paper($pid, $contact) {
+    global $Conf;
+    return $Conf->paperRow($pid, $contact);
+}
+
+function fetch_review($pid, $contact) {
+    global $Conf;
+    $pid = is_object($pid) ? $pid->paperId : $pid;
+    $cid = is_object($contact) ? $contact->contactId : $contact;
+    return $Conf->reviewRow(["paperId" => $pid, "contactId" => $cid]);
+}
+
+function save_review($pid, $contact, $revreq) {
+    $pid = is_object($pid) ? $pid->paperId : $pid;
+    $rf = ReviewForm::get();
+    $rf->save_review($revreq, fetch_review($pid, $contact), fetch_paper($pid, $contact), $contact);
+    return fetch_review($pid, $contact);
 }
 
 echo "* Tests initialized.\n";

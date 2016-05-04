@@ -97,7 +97,7 @@ class LoginHelper {
             foreach (array("email", "password", "action", "go", "signin") as $a)
                 if (isset($_REQUEST[$a]))
                     $url .= "&$a=" . urlencode($_REQUEST[$a]);
-            go("?" . $url);
+            Navigation::redirect("?" . $url);
         } else
             return Conf::msg_error("You appear to have disabled cookies in your browser, but this site needs to set cookies to function.  Google has <a href='http://www.google.com/cookies.html'>an informative article on how to enable them</a>.");
 
@@ -226,8 +226,7 @@ class LoginHelper {
         if (strpos($_REQUEST["email"], "@") !== false
             || strpos($_REQUEST["email"], "%40") === false)
             return false;
-        if (!$Conf->setting("bug_doubleencoding"))
-            $Conf->q("insert into Settings (name, value) values ('bug_doubleencoding', 1)");
+        error_log("double-encoded request: " . json_encode($_REQUEST));
         foreach ($_REQUEST as $k => &$v)
             $v = rawurldecode($v);
         return true;
@@ -282,7 +281,7 @@ class LoginHelper {
         global $Conf, $Opt;
         $msg .= " As the first user, you have been automatically signed in and assigned system administrator privilege.";
         if (!isset($Opt["ldapLogin"]) && !isset($Opt["httpAuthLogin"]))
-            $msg .= " Your password is “<tt>" . htmlspecialchars($user->plaintext_password()) . "</tt>”. All later users will have to sign in normally.";
+            $msg .= " Your password is “<samp>" . htmlspecialchars($user->plaintext_password()) . "</samp>”. All later users will have to sign in normally.";
         $user->save_roles(Contact::ROLE_ADMIN, null);
         $Conf->save_setting("setupPhase", null);
         $Conf->confirmMsg($msg);

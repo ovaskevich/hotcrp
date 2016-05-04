@@ -70,14 +70,12 @@ class ReviewTimes {
                 $need_contacts[] = $cid;
         if (count($need_contacts)) {
             $result = Dbl::q("select firstName, lastName, affiliation, email, contactId, roles, contactTags, disabled from ContactInfo where contactId ?a", $need_contacts);
-            while ($result && ($row = $result->fetch_object("Contact")))
+            while ($result && ($row = Contact::fetch($result)))
                 $contacts[$row->contactId] = $row;
         }
 
         $users = array();
-        $tagger = null;
-        if ($this->contact->can_view_reviewer_tags())
-            $tagger = new Tagger($this->contact);
+        $tags = $this->contact->can_view_reviewer_tags();
         foreach ($this->r as $cid => $x)
             if ($cid != "conflicts") {
                 $users[$cid] = $u = (object) array();
@@ -86,8 +84,7 @@ class ReviewTimes {
                     $u->name = Text::name_text($p);
                 if (count($x) < $heavy_boundary)
                     $u->light = true;
-                if ($p && $p->contactTags
-                    && ($t = $tagger->viewable_color_classes($p->contactTags)))
+                if ($p && $tags && ($t = $p->viewable_color_classes($this->contact)))
                     $u->color_classes = $t;
             }
 

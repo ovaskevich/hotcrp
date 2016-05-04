@@ -72,7 +72,7 @@ if ((isset($_REQUEST["pap"]) && is_array($_REQUEST["pap"]))
     // Ensure that we only select contacts we're allowed to see.
     if (($rows = $pl->rows($_REQUEST["t"]))) {
         foreach ($rows as $row)
-            $allowed_papers[$row->paperId] = true;
+            $allowed_papers[$row->contactId] = true;
     }
     $papersel = array();
     if (isset($_REQUEST["pap"])) {
@@ -90,7 +90,6 @@ if ($getaction == "nameemail" && isset($papersel) && $Me->isPC) {
     $people = edb_orows($result);
     downloadCSV($people, array("first", "last", "email", "affiliation"), "users",
                 array("selection" => true));
-    exit;
 }
 
 function urlencode_matches($m) {
@@ -171,7 +170,6 @@ if ($getaction == "pcinfo" && isset($papersel) && $Me->privChair) {
             $selection[] = "ti$id";
         }
     downloadCSV($people, $header, "pcinfo", array("selection" => $selection));
-    exit;
 }
 
 
@@ -279,7 +277,7 @@ if (isset($_REQUEST["scoresort"])
 if ($_REQUEST["t"] == "pc")
     $title = "Program committee";
 else if (str_starts_with($_REQUEST["t"], "#"))
-    $title = "Program committee &nbsp;|&nbsp; <strong>#" . substr($_REQUEST["t"], 1) . "</strong>";
+    $title = "#" . substr($_REQUEST["t"], 1) . " program committee";
 else
     $title = "Users";
 $Conf->header($title, "accounts", actionBar());

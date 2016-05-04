@@ -12,11 +12,35 @@ class TagMapItem {
     public $chair = false;
     public $vote = false;
     public $approval = false;
+    public $sitewide = false;
     public $rank = false;
+    public $order_anno = false;
+    private $order_anno_list = false;
     public $colors = null;
     public $badges = null;
     public function __construct($tag) {
         $this->tag = $tag;
+    }
+    public function order_anno_list() {
+        if ($this->order_anno_list == false) {
+            $this->order_anno_list = Dbl::fetch_objects("select * from PaperTagAnno where tag=?", $this->tag);
+            $this->order_anno_list[] = (object) ["tag" => $this->tag, "tagIndex" => TAG_INDEXBOUND, "heading" => "Untagged", "annoId" => null, "annoFormat" => 0];
+            usort($this->order_anno_list, function ($a, $b) {
+                if ($a->tagIndex != $b->tagIndex)
+                    return $a->tagIndex < $b->tagIndex ? -1 : 1;
+                else if (($x = strcasecmp($a->heading, $b->heading)) != 0)
+                    return $x;
+                else
+                    return $a->annoId < $b->annoId ? -1 : 1;
+            });
+        }
+        return $this->order_anno_list;
+    }
+    public function order_anno_entry($i) {
+        return get($this->order_anno_list(), $i);
+    }
+    public function has_order_anno() {
+        return count($this->order_anno_list()) > 1;
     }
 }
 
@@ -24,8 +48,10 @@ class TagMap implements ArrayAccess, IteratorAggregate {
     public $nchair = 0;
     public $nvote = 0;
     public $napproval = 0;
+    public $nsitewide = 0;
     public $nrank = 0;
     public $nbadge = 0;
+    public $norder_anno = 0;
     private $storage = array();
     private $sorted = false;
     public function offsetExists($offset) {
@@ -107,6 +133,16 @@ class TagInfo {
             && preg_match('{\A' . TAG_REGEX . '\z}', $tag);
     }
 
+    public static function in_list($tag, $taglist) {
+        if (is_string($taglist))
+            $taglist = explode(" ", $taglist);
+        list($base, $index) = self::split_index($tag);
+        if (is_associative_array($taglist))
+            return isset($taglist[$base]);
+        else
+            return in_array($base, $taglist);
+    }
+
     private static function make_tagmap() {
         global $Conf;
         self::$tagmap = $map = new TagMap;
@@ -122,6 +158,12 @@ class TagInfo {
             if (!$map[self::base($t)]->chair) {
                 $map[self::base($t)]->chair = true;
                 ++$map->nchair;
+            }
+        $ct = $Conf->setting_data("tag_sitewide", "");
+        foreach (preg_split('/\s+/', $ct) as $t)
+            if ($t !== "" && !$map[self::base($t)]->sitewide) {
+                $map[self::base($t)]->sitewide = true;
+                ++$map->nsitewide;
             }
         $vt = $Conf->setting_data("tag_vote", "");
         if ($vt !== "")
@@ -159,6 +201,13 @@ class TagInfo {
                                 self::canonical_color(substr($k, $p + 1)));
                     ++$map->nbadge;
                 }
+        $xt = $Conf->setting_data("tag_order_anno", "");
+        if ($xt !== "" && ($xt = json_decode($xt)))
+            foreach (get_object_vars($xt) as $t => $v)
+                if (is_object($v)) {
+                    $map[$t]->order_anno = $v;
+                    ++$map->norder_anno;
+                }
         return $map;
     }
 
@@ -171,8 +220,17 @@ class TagInfo {
         return $dt->check(self::base($tag));
     }
 
+    public static function make_defined_tag($tag) {
+        $dt = self::defined_tags();
+        return $dt[self::base($tag)];
+    }
+
     public static function invalidate_defined_tags() {
         self::$tagmap = self::$colorre = null;
+    }
+
+    public static function has_sitewide() {
+        return !!self::defined_tags()->nsitewide;
     }
 
     public static function has_vote() {
@@ -195,6 +253,10 @@ class TagInfo {
         return !!self::defined_tags()->nbadge;
     }
 
+    public static function has_order_anno() {
+        return !!self::defined_tags()->norder_anno;
+    }
+
     public static function is_chair($tag) {
         if ($tag[0] === "~")
             return $tag[1] === "~";
@@ -205,6 +267,16 @@ class TagInfo {
 
     public static function chair_tags() {
         return self::defined_tags()->tag_array("chair");
+    }
+
+    public static function is_sitewide($tag) {
+        $dt = self::defined_tags();
+        $t = $dt->check(self::base($tag));
+        return $t && $t->sitewide;
+    }
+
+    public static function sitewide_tags() {
+        return self::defined_tags()->tag_array("sitewide");
     }
 
     public static function is_votish($tag) {
@@ -260,6 +332,16 @@ class TagInfo {
     public static function rank_tags() {
         $dt = self::defined_tags();
         return $dt->nrank ? $dt->tag_array("rank") : array();
+    }
+
+    public static function unparse_anno_json($anno) {
+        $j = (object) ["annoid" => $anno->annoId === null ? null : +$anno->annoId];
+        if ($anno->tagIndex !== null)
+            $j->tagval = (float) $anno->tagIndex;
+        $j->heading = $anno->heading;
+        if (($format = Conf::check_format($anno->annoFormat, (string) $anno->heading)))
+            $j->format = +$format;
+        return $j;
     }
 
     public static function canonical_color($tag) {
@@ -366,6 +448,13 @@ class TagInfo {
             return 1;
     }
 
+
+    public static function id_index_compar($a, $b) {
+        if ($a[1] != $b[1])
+            return $a[1] < $b[1] ? -1 : 1;
+        else
+            return $a[0] - $b[0];
+    }
 }
 
 class Tagger {
@@ -397,8 +486,8 @@ class Tagger {
             $flags |= self::NOCHAIR;
         if ($tag !== "" && $tag[0] === "#")
             $tag = substr($tag, 1);
-        if ($tag === "")
-            return $this->set_error("Empty tag.");
+        if ((string) $tag === "")
+            return $this->set_error("Tag missing.");
         if (!preg_match('/\A(|~|~~|[1-9][0-9]*~)(' . TAG_REGEX_NOTWIDDLE . ')(|[#=](?:-?\d+(?:\.\d*)?|-?\.\d+|))\z/', $tag, $m))
             return $this->set_error("Format error: #" . htmlspecialchars($tag) . " is an invalid tag.");
         if (!($flags & self::ALLOWSTAR) && strpos($tag, "*") !== false)
@@ -412,7 +501,8 @@ class Tagger {
         } else {
             if ($flags & self::NOPRIVATE)
                 return $this->set_error("Twiddle tags aren’t allowed here.");
-            if ($m[1] !== "~" && !($flags & self::ALLOWCONTACTID))
+            if ($m[1] !== "~" && !($flags & self::ALLOWCONTACTID)
+                && (!$this->_contactId || $m[1] !== $this->_contactId . "~"))
                 return $this->set_error("Format error: #{$tag} is an invalid tag.");
             if ($m[1] === "~" && $this->_contactId)
                 $m[1] = $this->_contactId . "~";
@@ -447,41 +537,26 @@ class Tagger {
     }
 
 
-    public function viewable($tags) {
+    static public function strip_nonviewable($tags, Contact $user = null) {
         if (strpos($tags, "~") !== false) {
             $re = "{ (?:";
-            if ($this->_contactId)
-                $re .= "(?!" . $this->_contactId . "~)";
+            if ($user && $user->contactId)
+                $re .= "(?!" . $user->contactId . "~)";
             $re .= "\\d+~";
-            if (!($this->contact && $this->contact->privChair))
+            if (!($user && $user->privChair))
                 $re .= "|~+";
             $tags = trim(preg_replace($re . ")\\S+}", "", " $tags "));
         }
         return $tags;
     }
 
-    public function viewable_color_classes($tags) {
-        return TagInfo::color_classes($this->viewable($tags));
-    }
-
-    public function paper_editable($prow) {
-        $tags = $this->viewable($prow->all_tags_text());
-        if ($tags !== "") {
-            $privChair = $this->contact
-                && $this->contact->allow_administer($prow);
-            $dt = TagInfo::defined_tags();
-            $etags = array();
-            foreach (explode(" ", $tags) as $t)
-                if (!($t === ""
-                      || (($v = $dt->check(TagInfo::base($t)))
-                          && ($v->vote
-                              || $v->approval
-                              || ($v->chair && !$privChair)
-                              || ($v->rank && !$privChair)))))
-                    $etags[] = $t;
-            $tags = join(" ", $etags);
-        }
-        return $tags;
+    static public function strip_nonsitewide($tags, Contact $user) {
+        $x = ["\\&"];
+        foreach (TagInfo::sitewide_tags() as $t => $tinfo)
+            $x[] = preg_quote($t) . "[ #=]";
+        $re = "{ (?:(?!" . $user->contactId . "~)\\d+~|~+|(?!"
+            . join("|", $x) . ")\\S)\\S*}i";
+        return trim(preg_replace($re, "", " $tags "));
     }
 
     public function unparse($tags) {
@@ -558,21 +633,10 @@ class Tagger {
         return hoturl("search", ["q" => $q]);
     }
 
-    public function unparse_and_link($viewable, $alltags, $highlight = false,
-                                     $votereport = false) {
+    public function unparse_and_link($viewable, $alltags, $highlight = false) {
         $vtags = $this->unparse($viewable);
         if ($vtags === "")
             return "";
-
-        // track votes for vote report
-        $dt = TagInfo::defined_tags();
-        $vote = array();
-        if ($votereport && ($dt->nvote || $dt->napproval)) {
-            preg_match_all('{ (\d+)~(\S+)#(\d+)}',
-                           strtolower(" $alltags"), $m, PREG_SET_ORDER);
-            foreach ($m as $x)
-                $vote[$x[2]][$x[1]] = (int) $x[3];
-        }
 
         // decorate with URL matches
         $tt = "";
@@ -593,19 +657,9 @@ class Tagger {
             if (!($base = TagInfo::base($tag)))
                 continue;
             $lbase = strtolower($base);
-            if (($link = $this->link($tag))) {
-                $tx = '<a class="qq nw" href="' . $link . '"';
-                if (count($vote) && TagInfo::is_votish($base)) {
-                    $v = array();
-                    $limit = TagInfo::is_vote($base) ? 1 : 0;
-                    foreach (pcMembers() as $p)
-                        if (($count = get($vote[$lbase], $p->contactId, $limit - 1)) >= $limit)
-                            $v[] = Text::name_html($p) . ($count > 1 ? " ($count)" : "");
-                    if (count($v))
-                        $tx .= ' title="PC votes: ' . htmlspecialchars(join(", ", $v)) . '"';
-                }
-                $tx .= '>#' . $base . '</a>';
-            } else
+            if (($link = $this->link($tag)))
+                $tx = '<a class="qq nw" href="' . $link . '">#' . $base . '</a>';
+            else
                 $tx = "#" . $base;
             $tx .= substr($tag, strlen($base));
             if (isset($byhighlight[$lbase])) {
@@ -620,5 +674,4 @@ class Tagger {
         else
             return rtrim($tt);
     }
-
 }

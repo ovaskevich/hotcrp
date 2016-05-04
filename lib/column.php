@@ -19,7 +19,6 @@ class Column {
     public $view;
     public $comparator;
     public $minimal;
-    public $embedded_header = false;
     public $is_folded = false;
     public $has_content = false;
 

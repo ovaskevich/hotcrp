@@ -126,7 +126,7 @@ table.vbar td.quicklinks, #trackerconnect {
 
 
 /* generic horizontal styles */
-a.q, a.u {
+a.q, a.u, a.qx {
 	color: black;
 }
 a.qq, a.uu, a.maillink {
@@ -135,12 +135,12 @@ a.qq, a.uu, a.maillink {
 a.q:active, a.u:active, a.qq:active, a.uu:active, a.maillink:active {
 	color: red;
 }
-a.q, a.qq, a.x, a.xx,
+a.q, a.qq, a.qx, a.x, a.xx,
 div.papmodex > a, div.papmodex:hover > a.xx, div.leftmenu_item > a,
 a.pnum, a.ptitle, a.maillink, u.x, .noul {
 	text-decoration: none;
 }
-a.q:hover, a.qq:hover, a.x:hover, a.xx:hover u.x,
+a.q:hover, a.qq:hover, a.x:hover,
 div.papmodex:hover > a, div.leftmenu_item:hover > a,
 tr.pl:hover a.pnum, tr.pl:hover a.ptitle, a.ptitle.uu,
 .childfold:hover a.q, a.maillink:hover, a:hover u.x, .ul {
@@ -168,8 +168,11 @@ span.sep {
 span.lgsep {
 	padding-right: 2em;
 }
-.nowrap, .nw {
+.nw, .nb {
 	white-space: nowrap;
+}
+span.nb {
+	display: inline-block; /* why? */
 }
 .childfold {
 	cursor: pointer;
@@ -205,7 +208,7 @@ div.inline {
 
 
 /* body */
-div.body {
+div#body {
 	margin: 0 24px;
 	position: relative;
 	z-index: 3;
@@ -389,29 +392,27 @@ div.multimessage > div:first-child {
 
 /* Line links, as in bottom of search table */
 .linelinks1 .lll1, .linelinks2 .lll2, .linelinks3 .lll3, .linelinks4 .lll4,
-.linelinks5 .lll5 {
+.linelinks5 .lll5, .linelinks6 .lll6, .linelinks7 .lll7, .linelinks8 .lll8 {
 	font-weight: bold;
 }
-.linelinks1 .lll1 a, .linelinks2 .lll2 a,
-.linelinks3 .lll3 a, .linelinks4 .lll4 a,
-.linelinks5 .lll5 a {
+.linelinks1 .lll1 a, .linelinks2 .lll2 a, .linelinks3 .lll3 a, .linelinks4 .lll4 a,
+.linelinks5 .lll5 a, .linelinks6 .lll6 a, .linelinks7 .lll7 a, .linelinks8 .lll8 a {
 	text-decoration: none;
 	color: black;
 }
-.linelinks1 .lll1 a:hover, .linelinks2 .lll2 a:hover,
-.linelinks3 .lll3 a:hover, .linelinks4 .lll4 a:hover,
-.linelinks5 .lll5 a:hover {
+.linelinks1 .lll1 a:hover, .linelinks2 .lll2 a:hover, .linelinks3 .lll3 a:hover, .linelinks4 .lll4 a:hover,
+.linelinks5 .lll5 a:hover, .linelinks6 .lll6 a:hover, .linelinks7 .lll7 a:hover, .linelinks8 .lll8 a:hover {
 	text-decoration: underline;
 }
 .linelinks1 .lld1, .linelinks2 .lld2, .linelinks3 .lld3, .linelinks4 .lld4,
-.linelinks5 .lld5 {
+.linelinks5 .lld5, .linelinks6 .lld6, .linelinks7 .lld7, .linelinks8 .lld8 {
 	display: inline;
 }
 .linelinks1 td.lld1, .linelinks2 td.lld2, .linelinks3 td.lld3, .linelinks4 td.lld4,
-.linelinks5 td.lld5 {
+.linelinks5 td.lld5, .linelinks6 td.lld6, .linelinks7 td.lld7, .linelinks8 td.lld8 {
 	display: table-cell;
 }
-.lld1, .lld2, .lld3, .lld4, .lld5 {
+.lld1, .lld2, .lld3, .lld4, .lld5, .lld6, .lld7, .lld8 {
  	display: none;
 }
 
@@ -454,7 +455,17 @@ span.topic-2, span.topic-1 {
 span.topic4, span.topic3, span.topic2, span.topic1 {
 	font-weight: bold;
 }
-span.optvalue {
+p.topicp {
+	margin: 0;
+}
+p.topicp > span {
+	display: inline-block;
+	margin-right: 1em;
+}
+.papon {
+	color: #333333;
+}
+.papov {
 	color: #555555;
 }
 .dim {
@@ -467,7 +478,7 @@ table.center {
 	margin-right: auto;
 }
 table.pltable {
-	line-height: 125%;
+	line-height: 1.25;
 }
 body#revpref table.pltable, body#accounts table.pltable {
 	margin: 0 auto;
@@ -643,7 +654,8 @@ span.expander > span.in0 {
 	color: black;
 }
 .btn.btn-closer {
-	line-height: 85%;
+	line-height: .85;
+	border-radius: 0;
 }
 .btn.hottooltip {
 	cursor: pointer;
@@ -670,7 +682,6 @@ input.cbx {
 }
 .aa {
 	background: #f2f2f2;
-	clear: both;
 	border-radius: 5px;
 }
 div.aahc.alert .aa, div.aahc.alert .aax {
@@ -781,6 +792,9 @@ th.lcaption, td.lcaption {
 	padding: 3px 1em 3px 0;
 	font-weight: bold;
 }
+table.secondary-settings > tbody > tr > td.lcaption {
+	font-weight: normal;
+}
 th.lxcaption, td.lxcaption {
 	padding: 3px 1em 3px 0;
 }
@@ -856,6 +870,9 @@ h3.helppage:first-child {
 }
 h4.helppage {
 	margin: 0.8em 0 0;
+}
+div.helppagetext {
+	line-height: 1.25;
 }
 table#foldtag_color th {
 	text-align: left;
@@ -955,13 +972,16 @@ td.helplist_dt {
 table.helppage > tbody > tr > td:first-child {
 	padding-left: 16px;
 }
-table.helppage td.sentry form div.nowrap {
-	margin-left: -1px;
+table.helppage > tbody > tr > td:last-child {
+	padding-right: 16px;
 }
 ul.compact {
 	margin-top: 0.5em;
 	margin-bottom: 0;
 	padding-left: 1em;
+}
+dl.spaced > dt {
+	margin-top: 1em;
 }
 
 
@@ -1228,11 +1248,6 @@ span.asspref-1 {
 	-webkit-column-gap: 18px;
 	-moz-column-gap: 18px;
 	column-gap: 18px;
-}
-.ctable {
-	margin: 0 -6px;
-}
-.pc_ctable {
 	margin: 0 -12px -4px;
 }
 .ctelt {
@@ -1240,12 +1255,10 @@ span.asspref-1 {
 	page-break-inside: avoid;
 	break-inside: avoid;
 	margin: 0 6px;
+	padding: 2px 0 4px;
 }
-.pc_ctable > .ctelt {
-	padding-bottom: 4px;
-}
-.pc_ctelt {
-	padding: 2px 6px 3px;
+.ctelti {
+	padding: 0 6px;
 }
 
 /* review type/assignment blocks */
@@ -1286,7 +1299,7 @@ span.asspref-1 {
 	height: 100%;
         font-family: "Helvetica Neue", Helvetica, verdana, tahoma, sans-serif;
 	font-size: 62.5%;
-	line-height: 125%;
+	line-height: 1.25;
 	text-align: center;
 }
 
@@ -1330,7 +1343,7 @@ table.reviewers_scores {
 	margin-top: -0.5em;
 }
 table.reviewers {
-	line-height: 125%;
+	line-height: 1.25;
 	margin-left: -6px;
 }
 table.reviewers > tbody > tr > td:first-child {
@@ -1425,9 +1438,11 @@ div.aabutsep {
 }
 
 /* other list tables */
-#plact {
-	margin-top: 2px;
+#plact > table {
 	float: left;
+}
+.pl_footer_desc {
+	line-height: 2;
 }
 #plactr {
 	padding-top: 2px;
@@ -1489,7 +1504,7 @@ td.pl_name {
 }
 td.pl_uscores {
 	font-size: smaller;
-	line-height: 100%;
+	line-height: 1;
 	padding-left: 0.2em;
 	padding-right: 0.2em;
 	vertical-align: top;
@@ -1521,6 +1536,12 @@ a.row_kill {
 tr:hover > td > a.row_up, tr:hover > td > a.row_down, tr:hover > td > a.row_kill {
 	visibility: visible;
 }
+span.hoveronly {
+	display: none;
+}
+div:hover > span.hoveronly, tr:hover > td > span.hoveronly {
+	display: inline-block;
+}
 
 /* paper list tables geometry */
 .pltable_full_ctr {
@@ -1541,11 +1562,14 @@ div.plsplit_col_ctr_ctr {
 	overflow-x: hidden;
 }
 
-td.plheading {
-	text-align: center;
+td.plheading, td.plheading_spacer {
 	font-weight: bold;
 	padding: 0.5ex 0 0.2ex;
 	background: #f0f0f0;
+	border-top: 1px solid #cccccc;
+}
+tr.plheading:first-child > td.plheading, tr.plheading:first-child > td.plheading_spacer {
+	border-top: 0px none;
 }
 span.plheading_count {
 	font-weight: normal;
@@ -1555,8 +1579,6 @@ span.plheading_count {
 td.plheading_blank {
 	height: 0.7ex;
 	background: #f0f0f0;
-}
-td.plheading_middle {
 	border-top: 1px solid #cccccc;
 }
 
@@ -1564,15 +1586,14 @@ th.pl {
 	vertical-align: bottom;
 	font-size: smaller;
 	text-align: left;
-	line-height: 125%;
+	line-height: 1.25;
 }
 
 tr.plx {
 	font-size: 85%;
-	line-height: 135%;
+	line-height: 1.35;
 }
-tr.plx h6, h6.plx {
-	display: inline;
+em.plx {
 	font-size: inherit;
 	font-weight: normal;
 	font-style: italic;
@@ -1644,14 +1665,14 @@ td.pl_tag, td.pl_tagval, td.pl_formula {
 }
 
 td.plc, td.pl_revtype, td.pl_revstat, td.pl_confselector, td.pl_score,
-td.pl_uscores {
+td.pl_uscores, td.pl_edittag {
 	text-align: center;
 }
 
 td.pl_id, td.pl_sel, td.pl_confselector,
 td.pl_revtype, td.pl_assrev, td.pl_editrevpref,
 td.pl_score, td.pl_uscores, td.pl_formula,
-td.pl_tag, td.pl_tagval, td.pl_edittagval {
+td.pl_tag, td.pl_edittag, td.pl_tagval, td.pl_edittagval {
 	white-space: nowrap;
 }
 
@@ -1683,10 +1704,13 @@ td.pl_title img {
 div.pl_autoassignment > h6 {
 	font-weight: bold;
 }
-tr.pl_headrow td, tr.pl_headrow th {
+tr.pl_headrow > td, tr.pl_headrow > th {
 	border-bottom: 1px solid #999999;
 }
-tr.pl_headrow td, td.pl_footer, tr.pl_headrow th {
+tr.pl_headrow.pl_annorow > td {
+	background: #cccccc;
+}
+tr.pl_headrow > td, td.pl_footer, tr.pl_headrow > th {
 	font-size: smaller;
 }
 tr.pl_footrow > td {
@@ -1807,7 +1831,7 @@ a.pl_sort_def_rev:after {
 	font-size: 90%;
 }
 
-tbody.pltable_colored > tr.pl {
+tbody.pltable_colored > tr.pl, tbody.pltable_colored > tr.plheading {
 	border-top: 1px solid rgba(0, 0, 0, 0.05);
 }
 tbody.pltable_colored > tr:first-child {
@@ -1877,13 +1901,13 @@ tr.purpletag, tr.graytag, tr.whitetag {
 .boldtag.taghl, .boldtag .taghl {
 	font-weight: bold;
 }
-.fold5c .boldtag.conflicttag.taghl, .fold5c .boldtag.conflicttag .taghl {
+.fold5c .boldtag.conflictmark.taghl, .fold5c .boldtag.conflictmark .taghl {
 	font-weight: inherit;
 }
 .italictag.taghl, .italictag .taghl {
 	font-style: italic;
 }
-.fold5c .italictag.conflicttag.taghl, .fold5c .italictag.conflicttag .taghl {
+.fold5c .italictag.conflictmark.taghl, .fold5c .italictag.conflictmark .taghl {
 	font-style: inherit;
 }
 .underlinetag.taghl, .underlinetag .taghl {
@@ -1892,12 +1916,12 @@ tr.purpletag, tr.graytag, tr.whitetag {
 .strikethroughtag.taghl, .strikethroughtag .taghl {
 	text-decoration: line-through;
 }
-.fold5c .underlinetag.conflicttag.taghl, .fold5c .underlinetag.conflicttag .taghl,
-.fold5c .strikethroughtag.conflicttag.taghl, .fold5c .strikethroughtag.conflicttag .taghl {
+.fold5c .underlinetag.conflictmark.taghl, .fold5c .underlinetag.conflictmark .taghl,
+.fold5c .strikethroughtag.conflictmark.taghl, .fold5c .strikethroughtag.conflictmark .taghl {
 	text-decoration: inherit;
 }
-.fold5c .underlinetag.conflicttag a.taghl,
-.fold5c .strikethroughtag.conflicttag a.taghl {
+.fold5c .underlinetag.conflictmark a.taghl,
+.fold5c .strikethroughtag.conflictmark a.taghl {
 	text-decoration: underline;
 }
 .bigtag.taghl, .bigtag .taghl {
@@ -1906,50 +1930,50 @@ tr.purpletag, tr.graytag, tr.whitetag {
 .smalltag.taghl, .smalltag .taghl {
 	font-size: 80%;
 }
-.fold5c .bigtag.conflicttag.taghl, .fold5c .bigtag.conflicttag .taghl,
-.fold5c .smalltag.conflicttag.taghl, .fold5c .smalltag.conflicttag .taghl {
+.fold5c .bigtag.conflictmark.taghl, .fold5c .bigtag.conflictmark .taghl,
+.fold5c .smalltag.conflictmark.taghl, .fold5c .smalltag.conflictmark .taghl {
 	font-size: inherit;
 }
 .dimtag.taghl, .dimtag .taghl {
 	color: gray;
 }
-.fold5c .dimtag.conflicttag.taghl, .fold5c .dimtag.conflicttag .taghl {
+.fold5c .dimtag.conflictmark.taghl, .fold5c .dimtag.conflictmark .taghl {
 	color: inherit;
 }
-.highlighttag.taghl, .highlighttag .taghl,
-.yellowhighlighttag.taghl, .yellowhighlighttag .taghl {
+.highlightmark.taghl, .highlightmark .taghl,
+.yellowhighlightmark.taghl, .yellowhighlightmark .taghl {
 	background-color: #ffeb00;
 	box-shadow: -0.2em 0 0 #ffeb00, 0.2em 0 0 0 #ffeb00;
 }
-.pinkhighlighttag.taghl, .pinkhighlighttag .taghl {
+.pinkhighlightmark.taghl, .pinkhighlightmark .taghl {
 	background-color: #ff9ee5;
 	box-shadow: -0.2em 0 0 #ff9ee5, 0.2em 0 0 0 #ff9ee5;
 }
-.greenhighlighttag.taghl, .greenhighlighttag .taghl {
+.greenhighlightmark.taghl, .greenhighlightmark .taghl {
 	background-color: #70ff63;
 	box-shadow: -0.2em 0 0 #70ff63, 0.2em 0 0 0 #70ff63;
 }
-.bluehighlighttag.taghl, .bluehighlighttag .taghl {
+.bluehighlightmark.taghl, .bluehighlightmark .taghl {
 	background-color: #c4d2ff;
 	box-shadow: -0.2em 0 0 #c4d2ff, 0.2em 0 0 0 #c4d2ff;
 }
-.fold5c .highlighttag.conflicttag.taghl, .fold5c .highlighttag.conflicttag .taghl,
-.fold5c .pinkhighlighttag.conflicttag.taghl, .fold5c .pinkhighlighttag.conflicttag .taghl,
-.fold5c .yellowhighlighttag.conflicttag.taghl, .fold5c .yellowhighlighttag.conflicttag .taghl,
-.fold5c .greenhighlighttag.conflicttag.taghl, .fold5c .greenhighlighttag.conflicttag .taghl,
-.fold5c .bluehighlighttag.conflicttag.taghl, .fold5c .bluehighlighttag.conflicttag .taghl {
+.fold5c .highlightmark.conflictmark.taghl, .fold5c .highlightmark.conflictmark .taghl,
+.fold5c .pinkhighlightmark.conflictmark.taghl, .fold5c .pinkhighlightmark.conflictmark .taghl,
+.fold5c .yellowhighlightmark.conflictmark.taghl, .fold5c .yellowhighlightmark.conflictmark .taghl,
+.fold5c .greenhighlightmark.conflictmark.taghl, .fold5c .greenhighlightmark.conflictmark .taghl,
+.fold5c .bluehighlightmark.conflictmark.taghl, .fold5c .bluehighlightmark.conflictmark .taghl {
 	background-color: inherit;
 	box-shadow: none;
 }
 
-.fold5c .redtag.conflicttag,
-.fold5c .orangetag.conflicttag,
-.fold5c .yellowtag.conflicttag,
-.fold5c .greentag.conflicttag,
-.fold5c .bluetag.conflicttag,
-.fold5c .purpletag.conflicttag,
-.fold5c .graytag.conflicttag,
-.fold5c .whitetag.conflicttag {
+.fold5c .redtag.conflictmark,
+.fold5c .orangetag.conflictmark,
+.fold5c .yellowtag.conflictmark,
+.fold5c .greentag.conflictmark,
+.fold5c .bluetag.conflictmark,
+.fold5c .purpletag.conflictmark,
+.fold5c .graytag.conflictmark,
+.fold5c .whitetag.conflictmark {
 	background-image: none;
 	background-color: inherit;
 }
@@ -1957,7 +1981,7 @@ tr.purpletag, tr.graytag, tr.whitetag {
 .badge {
 	display: inline-block;
 	font-size: 69%;
-	line-height: 100%;
+	line-height: 1;
 	margin-left: 0.75em;
 	padding: 2px 0.3em 3px;
 	border-radius: 0.3em;
@@ -2071,7 +2095,7 @@ div.pspcard {
 	padding: 5px 0;
 	border-radius: 4px;
 }
-div#pspcard_body {
+div.pspcard_body {
 	padding: 0 8px;
 	background: white;
 	border-radius: 2px;
@@ -2082,7 +2106,7 @@ div.pspcard_fold {
 div#papstriptagsedit {
 	font-size: 8.7pt;
 }
-div#pspcard_body textarea, div#pspcard_body select {
+div.pspcard_body textarea, div.pspcard_body select {
 	font-size: inherit;
 }
 div.psc {
@@ -2133,6 +2157,11 @@ span.pstedit {
 }
 .foldo span.pstedit.fn {
 	display: none;
+}
+span.psteditimg {
+	display: inline-block;
+	position: relative;
+	width: 15px;
 }
 div.pshint {
 	font-size: smaller;
@@ -2246,9 +2275,13 @@ select#foldlead_d, select#foldshepherd_d, select#folddecision_d, select#foldmana
 	color: #ffffff;
 	border: 0 none;
 	font-size: 75%;
+	line-height: 1.25;
 }
 .bubble.tooltip {
 	margin: 0 8px;
+}
+.bubble.tooltip .tagcolorspan, .bubble.graphtip .tagcolorspan {
+	color: #2c2c33;
 }
 .bubble.suggest {
 	background-color: rgba(250, 250, 255, 0.95);
@@ -2269,6 +2302,7 @@ select#foldlead_d, select#foldshepherd_d, select#folddecision_d, select#foldmana
 }
 .bubble.tooltip > .bubcontent {
 	max-width: 560px;
+	overflow-x: auto;
 }
 .bubtail {
 	position: absolute;
@@ -2287,7 +2321,6 @@ select#foldlead_d, select#foldshepherd_d, select#folddecision_d, select#foldmana
 }
 .bubcontent > p {
 	max-width: 280px;
-	overflow-x: scroll;
 }
 .bubcontent > p:first-child {
 	margin-top: 0;
@@ -2478,6 +2511,12 @@ div.paphint, div.revhint {
 	max-width: 640px;
 	margin: 2px 0;
 }
+div.paphint > p:first-child, div.revhint > p:first-child {
+	margin-top: 0;
+}
+div.paphint > p:last-child, div.revhint > p:last-child {
+	margin-bottom: 0;
+}
 div.rvl, div.rvr {
 	width: 50%;
 	float: left;
@@ -2549,6 +2588,17 @@ div.cmtg {
 }
 div.cmtg:first-child {
 	border-top: 0 none;
+}
+div.cmtcard_link {
+	font-size: 69%;
+	font-weight: bold;
+	color: #666666;
+}
+div.cmtcard_link:first-child {
+	padding: 0 12px 4px;
+}
+div.cmtcard_link:last-child {
+	padding: 4px 12px 0;
 }
 span.cmtfn > span.barsep {
 	color: #eadeb7;
@@ -2628,7 +2678,7 @@ div.aahc.alert div.aab {
 }
 div.paptext, div.revtext, div.cmttext {
 	position: relative;
-	line-height: 125%;
+	line-height: 1.25;
 }
 div.revpreview, div.cmtpreview {
 	margin: 0.5em -12px 1em;
@@ -2739,7 +2789,7 @@ div.aabut .words {
 }
 #tracker .trackerinfo {
 	margin-left: 48px;
-	line-height: 125%;
+	line-height: 1.25;
 }
 #trackerlogo {
 	float: left;
@@ -2800,7 +2850,7 @@ div.aabut .words {
 }
 
 #trackertable {
-	line-height: 125%;
+	line-height: 1.25;
 	font-size: larger;
 	margin: 0 -24px;
 }
@@ -2864,6 +2914,9 @@ td.mhcb {
 	background-color: #ffffff;
 	padding: 4px 8px;
 	display: table-cell;
+}
+.mail tbody.pltable {
+	background-color: #ffffff;
 }
 .mhdp {
 	font-size: smaller;
@@ -2945,6 +2998,15 @@ a.help {
 }
 
 /* popup dialogs */
+div.popupbg {
+	background-color: rgba(0, 0, 0, 0.4);
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	z-index: 59;
+}
 div.popupc, div.popupo {
 	border: 3px solid red;
 	padding: 0.5em;
@@ -2952,7 +3014,12 @@ div.popupc, div.popupo {
 	position: absolute;
 	min-width: 15em;
 	max-width: 32em;
-	z-index: 6;
+	z-index: 60;
+}
+div.popupo.popupcenter {
+	max-width: 64em;
+	max-height: 70%;
+	overflow-y: auto;
 }
 div.popupc {
 	display: none;
@@ -2961,10 +3028,17 @@ div.popupc p:first-child, div.popupo p:first-child {
 	margin-top: 0;
 }
 div.popup_actions {
+	margin-top: 8px;
 	text-align: right;
 }
-div.popup_actions button, div.popup_actions input {
+div.popup_actions > button:first-child {
+	margin-left: 0;
+}
+div.popup_actions > button, div.popup_actions > input {
 	margin-left: 1em;
+}
+div.popup_actions > button.popup_space {
+	margin-right: 2em;
 }
 
 /* scores */

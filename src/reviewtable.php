@@ -5,7 +5,7 @@
 
 function _review_table_actas($rr) {
     global $Me;
-    if (!@$rr->contactId || $rr->contactId == $Me->contactId)
+    if (!get($rr, "contactId") || $rr->contactId == $Me->contactId)
         return "";
     return ' <a href="' . selfHref(array("actas" => $rr->email)) . '">'
         . Ht::img("viewas.png", "[Act as]", array("title" => "Act as " . Text::name_text($rr)))
@@ -16,7 +16,7 @@ function _review_table_round_selector($prow, $rr) {
     global $Conf;
     $sel = $Conf->round_selector_options($rr->reviewRound);
     if (count($sel) <= 1) {
-        if (@$sel["unnamed"] || count($sel) == 0)
+        if (get($sel, "unnamed") || count($sel) == 0)
             return "";
         reset($sel);
         return '&nbsp;<span class="revround" title="Review round">'
@@ -132,9 +132,10 @@ function reviewTable($prow, $rrows, $crows, $rrow, $mode, $proposals = null) {
                 $n .= _review_table_actas($rr);
             $t .= '<td class="rl"><span class="taghl">' . $n . '</span>'
                 . ($rtype ? " $rtype" : "") . "</td>";
-            if ($show_colors && (@$rr->contactRoles || @$rr->contactTags)) {
-                $tags = Contact::roles_all_contact_tags(@$rr->contactRoles, @$rr->contactTags);
-                if ($tags && ($color = $tagger->viewable_color_classes($tags)))
+            if ($show_colors && (get($rr, "contactRoles") || get($rr, "contactTags"))) {
+                $tags = Contact::roles_all_contact_tags(get($rr, "contactRoles"), get($rr, "contactTags"));
+                $tags = Tagger::strip_nonviewable($tags, $Me);
+                if ($tags && ($color = TagInfo::color_classes($tags)))
                     $tclass = $color;
             }
         }
@@ -175,12 +176,12 @@ function reviewTable($prow, $rrows, $crows, $rrow, $mode, $proposals = null) {
                     || ($f->round_mask && !$f->is_round_visible($rr)))
                     /* do nothing */;
                 else if ($rr->$fid) {
-                    if (!@$score_header[$fid])
+                    if (!get($score_header, $fid))
                         $score_header[$fid] = "<th>" . $f->web_abbreviation() . "</th>";
                     $scores[$fid] = '<td class="revscore" data-rf="' . $f->uid . '">'
                         . $f->unparse_value($rr->$fid, ReviewField::VALUE_SC)
                         . '</td>';
-                } else if (@$score_header[$fid] === null)
+                } else if (get($score_header, $fid) === null)
                     $score_header[$fid] = "";
             }
         }
@@ -276,10 +277,10 @@ function reviewTable($prow, $rrows, $crows, $rrow, $mode, $proposals = null) {
                 . $score_header_text . "</tr>\n";
         foreach (array_merge($subrev, $nonsubrev) as $r) {
             $t .= '<tr class="rl' . ($r[0] ? " $r[0]" : "") . '">' . $r[1];
-            if (@$r[2]) {
+            if (get($r, 2)) {
                 foreach ($score_header as $fid => $header_needed)
                     if ($header_needed) {
-                        $x = @$r[2][$fid];
+                        $x = get($r[2], $fid);
                         $t .= $x ? : "<td class=\"revscore rs_$fid\"></td>";
                     }
             } else if (count($score_header))
@@ -299,6 +300,7 @@ function reviewLinks($prow, $rrows, $crows, $rrow, $mode, &$allreviewslink) {
     global $Conf, $Me;
     $conflictType = $Me->view_conflict_type($prow);
     $allow_admin = $Me->allow_administer($prow);
+    $any_comments = false;
     $admin = $Me->can_administer($prow);
     $xsep = ' <span class="barsep">·</span> ';
 
@@ -340,7 +342,7 @@ function reviewLinks($prow, $rrows, $crows, $rrow, $mode, &$allreviewslink) {
                 $cids[] = $cid = CommentInfo::unparse_html_id($cr);
                 $tclass = "cmtlink";
                 if ($cr->commentTags
-                    && ($tags = $tagger->viewable($cr->commentTags))
+                    && ($tags = Tagger::strip_nonviewable($cr->commentTags, $Me))
                     && $Me->can_view_comment_tags($prow, $cr, null)
                     && ($color = TagInfo::color_classes($tags))) {
                     if (TagInfo::classes_have_colors($color))
@@ -349,8 +351,10 @@ function reviewLinks($prow, $rrows, $crows, $rrow, $mode, &$allreviewslink) {
                 }
                 $cnames[] = '<a class="' . $tclass . '" href="#' . $cid . '">' . $n . '</a>';
             }
-        if (count($cids) > 0)
-            $pret = '<div class="revnotes"><a href="#' . $cids[0] . '"><strong>' . plural(count($cids), "Comment") . '</strong></a>: <span class="nw">' . join(',</span> <span class="nw">', $cnames) . "</span></div>";
+        if (count($cids) > 0) {
+            $pret = '<div class="revnotes"><a href="#' . $cids[0] . '"><strong>' . plural(count($cids), "Comment") . '</strong></a>: <span class="nb">' . join(',</span> <span class="nb">', $cnames) . "</span></div>";
+            $any_comments = true;
+        }
     }
 
     $t = "";
@@ -404,6 +408,7 @@ function reviewLinks($prow, $rrows, $crows, $rrow, $mode, &$allreviewslink) {
         $x = '<a href="#cnew" onclick="return papercomment.edit_new()" class="xx">'
             . Ht::img("comment24.png", "[Add comment]", "dlimg") . "&nbsp;<u>Add comment</u></a>";
         $t .= ($t === "" ? "" : $xsep) . $x;
+        $any_comments = true;
     }
 
     // new response
@@ -425,6 +430,7 @@ function reviewLinks($prow, $rrows, $crows, $rrow, $mode, &$allreviewslink) {
                 . ($conflictType >= CONFLICT_AUTHOR ? '<u style="font-weight:bold">' : '<u>')
                 . $what . ($i ? " $rname" : "") . ' response</u></a>';
             $t .= ($t === "" ? "" : $xsep) . $x;
+            $any_comments = true;
         }
 
     // override conflict
@@ -436,6 +442,9 @@ function reviewLinks($prow, $rrows, $crows, $rrow, $mode, &$allreviewslink) {
         $x = "You can’t override your conflict because this paper has an administrator.";
         $t .= ($t === "" ? "" : $xsep) . $x;
     }
+
+    if ($any_comments)
+        CommentInfo::echo_script($prow);
 
     if (($list = SessionList::active()) && ($pret || $t))
         return '<div class="has_hotcrp_list" data-hotcrp-list="' . $list->listno . '">'

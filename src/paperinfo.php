@@ -111,10 +111,17 @@ class PaperInfo {
     private $_prefs_array = null;
     private $_review_id_array = null;
     private $_topics_array = null;
+    private $_topic_interest_score_array = null;
+    private $_option_array = null;
+    private $_all_option_array = null;
     private $_conflicts;
     private $_conflicts_email;
 
     function __construct($p = null, $contact = null) {
+        $this->merge($p, $contact);
+    }
+
+    private function merge($p, $contact) {
         if ($p)
             foreach ($p as $k => $v)
                 $this->$k = $v;
@@ -134,7 +141,10 @@ class PaperInfo {
     }
 
     static public function fetch($result, $contact) {
-        return $result ? $result->fetch_object("PaperInfo", array(null, $contact)) : null;
+        $prow = $result ? $result->fetch_object("PaperInfo", [null, $contact]) : null;
+        if ($prow && !is_int($prow->paperId))
+            $prow->merge(null, $contact);
+        return $prow;
     }
 
     static public function table_name() {
@@ -149,25 +159,35 @@ class PaperInfo {
         return "PaperComment";
     }
 
+    public function initial_whynot() {
+        return ["fail" => true, "paperId" => $this->paperId];
+    }
+
+
+    static private function contact_to_cid($contact) {
+        global $Me;
+        if ($contact && is_object($contact))
+            return $contact->contactId;
+        else
+            return $contact ? : $Me->contactId;
+    }
 
     public function contact_info($contact = null) {
         global $Me;
-        if (!$contact)
-            $contact = $Me;
         $rev_tokens = null;
-        if (is_object($contact)) {
+        if (!$contact || is_object($contact)) {
+            $contact = $contact ? : $Me;
             $rev_tokens = $contact->review_tokens();
-            $contact = $contact->contactId;
         }
+        $cid = self::contact_to_cid($contact);
         if ($this->_contact_info_rights_version !== Contact::$rights_version) {
             $this->_contact_info = array();
             $this->_contact_info_rights_version = Contact::$rights_version;
         }
-        $ci = get($this->_contact_info, $contact);
-        if (!$ci)
-            $ci = $this->_contact_info[$contact] =
-                PaperContactInfo::load($this->paperId, $contact, $rev_tokens);
-        return $ci;
+        if (!array_key_exists($cid, $this->_contact_info))
+            $this->_contact_info[$cid] =
+                PaperContactInfo::load($this->paperId, $cid, $rev_tokens);
+        return $this->_contact_info[$cid];
     }
 
     public function replace_contact_info_map($cimap) {
@@ -194,15 +214,7 @@ class PaperInfo {
     }
 
     public function format_of($text, $check_simple = false) {
-        $format = $this->paperFormat;
-        if ($format === null)
-            $format = Conf::$gDefaultFormat;
-        if ($format && ($f = Conf::format_info($format))
-            && $check_simple
-            && ($simple_regex = get($f, "simple_regex"))
-            && preg_match($simple_regex, $text))
-            $format = 0;
-        return $format;
+        return Conf::check_format($this->paperFormat, $check_simple ? $text : null);
     }
 
     public function title_format() {
@@ -217,6 +229,13 @@ class PaperInfo {
                     $this->_author_array[] = new PaperInfo_Author($line);
         }
         return $this->_author_array;
+    }
+
+    public function author_by_email($email) {
+        foreach ($this->author_list() as $a)
+            if (strcasecmp($a, $email) == 0)
+                return $a;
+        return null;
     }
 
     public function parse_author_list() {
@@ -251,13 +270,20 @@ class PaperInfo {
     }
 
     public function review_type($contact = null) {
-        $ci = $this->contact_info($contact);
-        return $ci ? $ci->review_type : 0;
+        $cid = self::contact_to_cid($contact);
+        if ($this->_contact_info_rights_version === Contact::$rights_version
+            && array_key_exists($cid, $this->_contact_info)) {
+            $ci = $this->_contact_info[$cid];
+            return $ci ? $ci->review_type : 0;
+        }
+        if (!isset($this->allReviewTypes) && isset($this->reviewTypes)
+            && ($x = get($this->submitted_review_types())) !== null)
+            return $x;
+        return get($this->all_review_types(), $cid);
     }
 
     public function has_review($contact = null) {
-        $ci = $this->contact_info($contact);
-        return $ci && $ci->review_type > 0;
+        return $this->review_type($contact) > 0;
     }
 
     public function review_not_incomplete($contact = null) {
@@ -308,12 +334,17 @@ class PaperInfo {
         return false;
     }
 
+    public function has_viewable_tag($tag, $user) {
+        $tags = $this->viewable_tags($user);
+        return $tags !== "" && stripos(" " . $tags, " $tag#") !== false;
+    }
+
     public function tag_value($tag) {
         if (!property_exists($this, "paperTags"))
             $this->load_tags();
         if ($this->paperTags !== ""
             && ($pos = stripos($this->paperTags, " $tag#")) !== false)
-            return (int) substr($this->paperTags, $pos + strlen($tag) + 2);
+            return (float) substr($this->paperTags, $pos + strlen($tag) + 2);
         else
             return false;
     }
@@ -324,17 +355,47 @@ class PaperInfo {
         return $this->paperTags;
     }
 
-    public function tag_info_json(Contact $user) {
+    public function viewable_tags(Contact $user, $forceShow = null) {
+        // see also Contact::can_view_tag()
+        if ($user->can_view_most_tags($this, $forceShow))
+            return Tagger::strip_nonviewable($this->all_tags_text(), $user);
+        else if ($user->privChair && $user->can_view_tags($this, $forceShow))
+            return Tagger::strip_nonsitewide($this->all_tags_text(), $user);
+        else
+            return "";
+    }
+
+    public function editable_tags(Contact $user) {
+        $tags = $this->viewable_tags($user);
+        if ($tags !== "") {
+            $privChair = $user->allow_administer($this);
+            $dt = TagInfo::defined_tags();
+            $etags = array();
+            foreach (explode(" ", $tags) as $t)
+                if (!($t === ""
+                      || (($v = $dt->check(TagInfo::base($t)))
+                          && ($v->vote
+                              || $v->approval
+                              || (!$privChair
+                                  && (!$user->privChair || !$v->sitewide)
+                                  && ($v->chair || $v->rank))))))
+                    $etags[] = $t;
+            $tags = join(" ", $etags);
+        }
+        return $tags;
+    }
+
+    public function add_tag_info_json($pj, Contact $user) {
         if (!property_exists($this, "paperTags"))
             $this->load_tags();
         $tagger = new Tagger($user);
-        $editable = $tagger->paper_editable($this);
-        $viewable = $tagger->viewable($this->paperTags);
-        $tags_view_html = $tagger->unparse_and_link($viewable, $this->paperTags, false, !$this->has_conflict($user));
-        return (object) array("tags" => TagInfo::split($viewable),
-                              "tags_edit_text" => $tagger->unparse($editable),
-                              "tags_view_html" => $tags_view_html,
-                              "color_classes" => TagInfo::color_classes($viewable));
+        $editable = $this->editable_tags($user);
+        $viewable = $this->viewable_tags($user);
+        $tags_view_html = $tagger->unparse_and_link($viewable, $this->paperTags, false);
+        $pj->tags = TagInfo::split($viewable);
+        $pj->tags_edit_text = $tagger->unparse($editable);
+        $pj->tags_view_html = $tags_view_html;
+        $pj->color_classes = TagInfo::color_classes($viewable);
     }
 
     private function load_topics() {
@@ -342,6 +403,10 @@ class PaperInfo {
         $row = edb_row($result);
         $this->topicIds = $row ? $row[0] : "";
         Dbl::free($result);
+    }
+
+    public function has_topics() {
+        return count($this->topics()) > 0;
     }
 
     public function topics() {
@@ -352,15 +417,66 @@ class PaperInfo {
                 $this->_topics_array = $this->topicIds;
             else {
                 $this->_topics_array = array();
-                if ($this->topicIds !== "" && $this->topicIds !== null)
-                    foreach (explode(",", $this->topicIds) as $topic)
-                        $this->_topics_array[] = (int) $topic;
+                if ($this->topicIds !== "" && $this->topicIds !== null) {
+                    global $Conf;
+                    foreach (explode(",", $this->topicIds) as $t)
+                        $this->_topics_array[] = (int) $t;
+                    $tomap = $Conf->topic_order_map();
+                    usort($this->_topics_array, function ($a, $b) use ($tomap) {
+                        return $tomap[$a] - $tomap[$b];
+                    });
+                }
             }
         }
         return $this->_topics_array;
     }
 
-    public static function unparse_topics($topicIds, $interests, $comma) {
+    public function unparse_topics_text() {
+        global $Conf;
+        $tarr = $this->topics();
+        if (!$tarr)
+            return "";
+        $out = [];
+        $tmap = $Conf->topic_map();
+        foreach ($tarr as $t)
+            $out[] = $tmap[$t];
+        return join($Conf->topic_separator(), $out);
+    }
+
+    private static function render_topic($t, $i, $tmap, &$long) {
+        $s = '<span class="topic' . ($i ? : 0);
+        $tname = $tmap[$t];
+        if (strlen($tname) <= 50)
+            $s .= ' nw';
+        else
+            $long = true;
+        return $s . '">' . htmlspecialchars($tname) . '</span>';
+    }
+
+    private static function render_topic_list($out, $comma, $long) {
+        global $Conf;
+        if ($comma)
+            return join($Conf->topic_separator(), $out);
+        else if ($long)
+            return '<p class="od">' . join('</p><p class="od">', $out) . '</p>';
+        else
+            return '<p class="topicp">' . join(' ', $out) . '</p>';
+    }
+
+    public function unparse_topics_html($comma, Contact $interests_user = null) {
+        global $Conf;
+        if (!($topics = $this->topics()))
+            return "";
+        $out = array();
+        $tmap = $Conf->topic_map();
+        $interests = $interests_user ? $interests_user->topic_interest_map() : array();
+        $long = false;
+        foreach ($topics as $t)
+            $out[] = self::render_topic($t, get($interests, $t), $tmap, $long);
+        return self::render_topic_list($out, $comma, $long);
+    }
+
+    public static function unparse_topic_list_html($topicIds, $interests, $comma) {
         global $Conf;
         if (!$topicIds)
             return "";
@@ -372,24 +488,10 @@ class PaperInfo {
         $tmap = $Conf->topic_map();
         $tomap = $Conf->topic_order_map();
         $long = false;
-        for ($i = 0; $i < count($topicIds); $i++) {
-            $s = '<span class="topic' . ($interests ? $interests[$i] : 0);
-            $tn = $tmap[$topicIds[$i]];
-            if (strlen($tn) <= 50)
-                $s .= ' nw">' . htmlspecialchars($tn);
-            else {
-                $long = true;
-                $s .= '">' . htmlspecialchars($tn);
-            }
-            $out[$tomap[$topicIds[$i]]] = $s . "</span>";
-        }
+        for ($i = 0; $i < count($topicIds); $i++)
+            $out[$tomap[$topicIds[$i]]] = self::render_topic($topicIds[$i], $interests ? $interests[$i] : 0, $tmap, $long);
         ksort($out);
-        if ($comma)
-            return join($Conf->topic_separator(), $out);
-        else if ($long)
-            return '<p class="od">' . join('</p><p class="od">', $out) . '</p>';
-        else
-            return join(' <span class="sep">&nbsp;</span> ', $out);
+        return self::render_topic_list($out, $comma, $long);
     }
 
     static public function make_topic_map($pids) {
@@ -404,36 +506,41 @@ class PaperInfo {
     }
 
     public function topic_interest_score($contact) {
-        if (is_int($contact)) {
-            $pcm = pcMembers();
-            $contact = get($pcm, $contact);
-        }
         $score = 0;
+        if (is_int($contact))
+            $contact = get(pcMembers(), $contact);
         if ($contact) {
-            $interests = $contact->topic_interest_map();
-            foreach ($this->topics() as $t)
-                $score += (int) get($interests, $t);
+            if ($this->_topic_interest_score_array === null)
+                $this->_topic_interest_score_array = array();
+            if (isset($this->_topic_interest_score_array[$contact->contactId]))
+                $score = $this->_topic_interest_score_array[$contact->contactId];
+            else {
+                $interests = $contact->topic_interest_map();
+                foreach ($this->topics() as $t)
+                    $score += (int) get($interests, $t);
+                $this->_topic_interest_score_array[$contact->contactId] = $score;
+            }
         }
         return $score;
     }
 
     public function conflicts($email = false) {
-        if ($email ? !@$this->_conflicts_email : !isset($this->_conflicts)) {
+        if ($email ? !$this->_conflicts_email : !isset($this->_conflicts)) {
             $this->_conflicts = array();
             if (!$email && isset($this->allConflictType)) {
                 $vals = array();
                 foreach (explode(",", $this->allConflictType) as $x)
                     $vals[] = explode(" ", $x);
             } else if (!$email)
-                $vals = edb_rows(Dbl::qe("select contactId, conflictType from PaperConflict where paperId=$this->paperId"));
+                $vals = Dbl::fetch_rows("select contactId, conflictType from PaperConflict where paperId=$this->paperId");
             else {
-                $vals = edb_rows(Dbl::qe("select ContactInfo.contactId, conflictType, email from PaperConflict join ContactInfo using (contactId) where paperId=$this->paperId"));
+                $vals = Dbl::fetch_rows("select ContactInfo.contactId, conflictType, email from PaperConflict join ContactInfo using (contactId) where paperId=$this->paperId");
                 $this->_conflicts_email = true;
             }
             foreach ($vals as $v)
                 if ($v[1] > 0) {
                     $row = (object) array("contactId" => (int) $v[0], "conflictType" => (int) $v[1]);
-                    if (@$v[2])
+                    if (isset($v[2]) && $v[2])
                         $row->email = $v[2];
                     $this->_conflicts[$row->contactId] = $row;
                 }
@@ -454,7 +561,7 @@ class PaperInfo {
     }
 
     public function named_contacts() {
-        $vals = edb_orows(Dbl::qe("select ContactInfo.contactId, conflictType, email, firstName, lastName, affiliation from PaperConflict join ContactInfo using (contactId) where paperId=$this->paperId and conflictType>=" . CONFLICT_AUTHOR));
+        $vals = Dbl::fetch_objects("select ContactInfo.contactId, conflictType, email, firstName, lastName, affiliation from PaperConflict join ContactInfo using (contactId) where paperId=$this->paperId and conflictType>=" . CONFLICT_AUTHOR);
         foreach ($vals as $v) {
             $v->contactId = (int) $v->contactId;
             $v->conflictType = (int) $v->conflictType;
@@ -464,9 +571,7 @@ class PaperInfo {
 
     private function load_reviewer_preferences() {
         global $Conf;
-        $result = Dbl::qe("select " . $Conf->query_all_reviewer_preference() . " from PaperReviewPreference where paperId=$this->paperId");
-        $row = edb_row($result);
-        $this->allReviewerPreference = $row ? $row[0] : null;
+        $this->allReviewerPreference = Dbl::fetch_value("select " . $Conf->query_all_reviewer_preference() . " from PaperReviewPreference where paperId=$this->paperId");
         $this->_prefs_array = null;
     }
 
@@ -477,10 +582,9 @@ class PaperInfo {
             $x = array();
             if ($this->allReviewerPreference !== "" && $this->allReviewerPreference !== null) {
                 $p = preg_split('/[ ,]/', $this->allReviewerPreference);
-                for ($i = 0; $i < count($p); $i += 3) {
-                    if (@$p[$i+1] != "0" || @$p[$i+2] != ".")
-                        $x[(int) $p[$i]] = array((int) @$p[$i+1],
-                                                 @$p[$i+2] == "." ? null : (int) @$p[$i+2]);
+                for ($i = 0; $i + 2 < count($p); $i += 3) {
+                    if ($p[$i+1] != "0" || $p[$i+2] != ".")
+                        $x[(int) $p[$i]] = array((int) $p[$i+1], $p[$i+2] == "." ? null : (int) $p[$i+2]);
                 }
             }
             $this->_prefs_array = $x;
@@ -488,16 +592,29 @@ class PaperInfo {
         return $this->_prefs_array;
     }
 
+    public function reviewer_preference($contact) {
+        $pref = get($this->reviewer_preferences(), $contact->contactId);
+        return $pref ? : [0, null];
+    }
+
     public function options() {
-        if (!property_exists($this, "option_array"))
-            PaperOption::parse_paper_options($this);
-        return $this->option_array;
+        if ($this->_option_array === null)
+            $this->_option_array = PaperOption::parse_paper_options($this, false);
+        return $this->_option_array;
     }
 
     public function option($id) {
-        if (!property_exists($this, "option_array"))
-            PaperOption::parse_paper_options($this);
-        return get($this->option_array, $id);
+        return get($this->options(), $id);
+    }
+
+    public function all_options() {
+        if ($this->_all_option_array === null)
+            $this->_all_option_array = PaperOption::parse_paper_options($this, true);
+        return $this->_all_option_array;
+    }
+
+    public function all_option($id) {
+        return get($this->all_options(), $id);
     }
 
     public function document($dtype, $did = 0) {
@@ -534,12 +651,10 @@ class PaperInfo {
 
     public function num_reviews_in_progress() {
         if (!property_exists($this, "inProgressReviewCount")) {
-            if (@$this->reviewCount !== null && $this->reviewCount === @$this->startedReviewCount)
+            if (isset($this->reviewCount) && isset($this->startedReviewCount) && $this->reviewCount === $this->startedReviewCount)
                 $this->inProgressReviewCount = $this->reviewCount;
-            else {
-                $rows = edb_rows(Dbl::qe("select count(*) from PaperReview where paperId=$this->paperId and reviewSubmitted is null and reviewModified>0"));
-                $this->inProgressReviewCount = @$rows[0][0];
-            }
+            else
+                $this->inProgressReviewCount = Dbl::fetch_ivalue("select count(*) from PaperReview where paperId=$this->paperId and reviewSubmitted is null and reviewModified>0");
         }
         return (int) $this->inProgressReviewCount;
     }
@@ -551,23 +666,43 @@ class PaperInfo {
             return $this->num_reviews_in_progress();
     }
 
-    private function load_scores(/* args */) {
-        $args = func_get_args();
-        $args = (count($args) == 1 ? $args[0] : $args);
+    private function load_score_array($restriction, $args) {
         $req = array();
         for ($i = 0; $i < count($args); $i += 2)
             $req[] = "group_concat(" . $args[$i] . " order by reviewId) " . $args[$i + 1];
-        $result = Dbl::qe("select " . join(", ", $req) . " from PaperReview where paperId=$this->paperId and reviewSubmitted>0");
+        $result = Dbl::qe("select " . join(", ", $req) . " from PaperReview where paperId=$this->paperId and " . ($restriction ? "reviewSubmitted>0" : "true"));
         $row = $result ? $result->fetch_assoc() : null;
         foreach ($row ? : array() as $k => $v)
             $this->$k = $v;
         Dbl::free($result);
     }
 
+    private function load_scores(/* args */) {
+        $args = func_get_args();
+        $this->load_score_array(true, count($args) == 1 ? $args[0] : $args);
+    }
+
+    private function review_cid_int_array($restriction, $basek, $k) {
+        $ck = $restriction ? "reviewContactIds" : "allReviewContactIds";
+        if (property_exists($this, $ck) && !$this->$ck)
+            return array();
+        if (!property_exists($this, $k) || !property_exists($this, $ck))
+            $this->load_score_array($restriction, [$basek, $k, "contactId", $ck]);
+        $ka = explode(",", $this->$ck);
+        $va = json_decode("[" . $this->$k . "]", true);
+        return count($ka) == count($va) ? array_combine($ka, $va) : false;
+    }
+
+    public function all_reviewers() {
+        if (!property_exists($this, "allReviewContactIds"))
+            $this->load_score_array(false, ["contactId", "allReviewContactIds"]);
+        return json_decode("[" . ($this->allReviewContactIds ? : "") . "]");
+    }
+
     public function submitted_reviewers() {
         if (!property_exists($this, "reviewContactIds"))
-            $this->load_scores("contactId", "reviewContactIds");
-        return $this->reviewContactIds ? explode(",", $this->reviewContactIds) : array();
+            $this->load_score_array(true, ["contactId", "reviewContactIds"]);
+        return json_decode("[" . ($this->allReviewContactIds ? : "") . "]");
     }
 
     public function viewable_submitted_reviewers($contact, $forceShow) {
@@ -575,64 +710,90 @@ class PaperInfo {
             $this->load_scores("contactId", "reviewContactIds");
         if ($this->reviewContactIds) {
             if ($contact->can_view_review($this, null, $forceShow))
-                return explode(",", $this->reviewContactIds);
+                return json_decode("[" . $this->reviewContactIds . "]");
             else if ($this->review_type($contact))
                 return array($contact->contactId);
         }
         return array();
     }
 
-    private function review_cid_int_array($basek, $k) {
-        if (!property_exists($this, $k) || !property_exists($this, "reviewContactIds"))
-            $this->load_scores($basek, $k, "contactId", "reviewContactIds");
-        if ($this->$k) {
-            $x = array();
-            foreach (explode(",", $this->$k) as $v)
-                $x[] = $v === "" ? null : (int) $v;
-            return array_combine(explode(",", $this->reviewContactIds), $x);
-        } else
-            return array();
+    public function all_review_ids() {
+        return $this->review_cid_int_array(false, "reviewId", "allReviewIds");
     }
 
     public function review_ordinals() {
-        return $this->review_cid_int_array("reviewOrdinal", "reviewOrdinals");
+        return $this->review_cid_int_array(true, "reviewOrdinal", "reviewOrdinals");
     }
 
     public function review_ordinal($cid) {
-        $o = $this->review_ordinals();
-        return @$o[$cid];
+        return get($this->review_ordinals(), $cid);
+    }
+
+    public function all_review_types() {
+        return $this->review_cid_int_array(false, "reviewType", "allReviewTypes");
     }
 
     public function submitted_review_types() {
-        return $this->review_cid_int_array("reviewType", "reviewTypes");
+        return $this->review_cid_int_array(true, "reviewType", "reviewTypes");
+    }
+
+    private function _review_word_counts($restriction, $basek, $k, $count) {
+        $a = $this->review_cid_int_array($restriction, $basek, $k);
+        if ($a !== false || $count)
+            return $a;
+        $result = Dbl::qe("select * from PaperReview where reviewWordCount is null and paperId=$this->paperId");
+        $rf = ReviewForm::get();
+        $qs = [];
+        while (($rrow = edb_orow($result)))
+            $qs[] = "update PaperReview set reviewWordCount=" . $rf->word_count($rrow) . " where reviewId=" . $rrow->reviewId;
+        Dbl::free($result);
+        if (count($qs)) {
+            $mresult = Dbl::multi_qe(join(";", $qs));
+            while (($result = $mresult->next()))
+                Dbl::free($result);
+            unset($this->reviewWordCounts, $this->allReviewWordCounts);
+        }
+        return $this->_review_word_counts($restriction, $basek, $k, $count + 1);
     }
 
     public function submitted_review_word_counts() {
-        return $this->review_cid_int_array("reviewWordCount", "reviewWordCounts");
+        return $this->_review_word_counts(true, "reviewWordCount", "reviewWordCounts", 0);
     }
 
-    public function review_word_count($cid) {
-        $wc = $this->submitted_review_word_counts();
-        return @$wc[$cid];
+    public function all_review_word_counts() {
+        return $this->_review_word_counts(false, "reviewWordCount", "allReviewWordCounts", 0);
+    }
+
+    public function submitted_review_word_count($cid) {
+        return get($this->submitted_review_word_counts(), $cid);
+    }
+
+    public function all_review_rounds() {
+        return $this->review_cid_int_array(false, "reviewRound", "allReviewRounds");
     }
 
     public function submitted_review_rounds() {
-        return $this->review_cid_int_array("reviewRound", "reviewRounds");
+        return $this->review_cid_int_array(true, "reviewRound", "reviewRounds");
+    }
+
+    public function submitted_review_round($cid) {
+        return get($this->submitted_review_rounds());
     }
 
     public function review_round($cid) {
-        $rr = $this->submitted_review_rounds();
-        return @$rr[$cid];
+        if (!isset($this->allReviewRounds) && isset($this->reviewRounds)
+            && ($x = get($this->submitted_review_rounds())) !== null)
+            return $x;
+        return get($this->all_review_rounds(), $cid);
     }
 
     public function scores($fid) {
         $fid = is_object($fid) ? $fid->id : $fid;
-        return $this->review_cid_int_array($fid, "{$fid}Scores");
+        return $this->review_cid_int_array(true, $fid, "{$fid}Scores");
     }
 
     public function score($fid, $cid) {
-        $s = $this->scores($fid);
-        return @$s[$cid];
+        return get($this->scores($fid), $cid);
     }
 
     public function may_have_viewable_scores($field, $contact, $forceShow) {
@@ -648,7 +809,7 @@ class PaperInfo {
             $s = $this->scores($field->id);
             if ($view)
                 return $s;
-            else if (($my_score = @$s[$contact->contactId]) !== null)
+            else if (($my_score = get($s, $contact->contactId)) !== null)
                 return array($contact->contactId => $my_score);
         }
         return null;
@@ -689,7 +850,7 @@ class PaperInfo {
             }
         }
         // call contact
-        return ($rrow = @$this->_review_id_array[$cid])
+        return ($rrow = get($this->_review_id_array, $cid))
             && $contact->can_view_review_identity($this, $rrow, $forceShow);
     }
 
@@ -740,7 +901,7 @@ class PaperInfo {
         $result = Dbl::qe_raw($q);
         $watchers = array();
         $lastContactId = 0;
-        while ($result && ($row = $result->fetch_object("Contact"))) {
+        while ($result && ($row = Contact::fetch($result))) {
             if ($row->contactId == $lastContactId
                 || ($contact && $row->contactId == $contact->contactId)
                 || Contact::is_anonymous_email($row->email))

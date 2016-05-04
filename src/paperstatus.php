@@ -13,15 +13,17 @@ class PaperStatus {
     private $allow_error = array();
     private $forceShow = null;
     private $export_ids = false;
-    private $export_docids = false;
+    private $hide_docids = false;
     private $export_content = false;
     private $disable_users = false;
+    private $prow;
+    private $paperid;
     private $document_callbacks = array();
 
     function __construct($contact, $options = array()) {
         $this->contact = $contact;
         foreach (array("no_email", "allow_error",
-                       "forceShow", "export_ids", "export_docids",
+                       "forceShow", "export_ids", "hide_docids",
                        "export_content", "disable_users") as $k)
             if (array_key_exists($k, $options))
                 $this->$k = $options[$k];
@@ -33,24 +35,21 @@ class PaperStatus {
         $this->errf = array();
         $this->errmsg = array();
         $this->nerrors = 0;
+        $this->prow = null;
     }
 
     function add_document_callback($cb) {
         $this->document_callbacks[] = $cb;
     }
 
-    function load($pid, $args = array()) {
-        global $Conf;
-        $prow = $Conf->paperRow(array("paperId" => $pid,
-                                      "topics" => true, "options" => true),
-                                $this->contact);
-        return $prow ? $this->row_to_json($prow, $args) : null;
+    function paper_row() {
+        return $this->prow;
     }
 
-    private function document_to_json($prow, $dtype, $docid, $args) {
+    public function document_to_json($dtype, $docid) {
         global $Conf;
         if (!is_object($docid)) {
-            $dresult = $Conf->document_result($prow, $dtype, $docid);
+            $dresult = $Conf->document_result($this->paperid, $dtype, $docid);
             $drow = $Conf->document_row($dresult, $dtype);
             Dbl::free($dresult);
         } else {
@@ -58,7 +57,7 @@ class PaperStatus {
             $docid = $drow ? $drow->paperStorageId : null;
         }
         $d = (object) array();
-        if ($docid && (@$args["docids"] || $this->export_docids))
+        if ($docid && !$this->hide_docids)
             $d->docid = $docid;
         if ($drow) {
             if ($drow->mimetype)
@@ -67,38 +66,48 @@ class PaperStatus {
                 $d->sha1 = bin2hex($drow->sha1);
             if ($drow->timestamp)
                 $d->timestamp = (int) $drow->timestamp;
-            if (@$drow->filename)
+            if (get($drow, "filename"))
                 $d->filename = $drow->filename;
-            if (@$drow->infoJson
-                && ($meta = json_decode($drow->infoJson)))
+            $meta = null;
+            if (isset($drow->infoJson) && is_object($drow->infoJson))
+                $meta = $drow->infoJson;
+            else if (isset($drow->infoJson) && is_string($drow->infoJson))
+                $meta = json_decode($drow->infoJson);
+            if ($meta)
                 $d->metadata = $meta;
             if ($this->export_content
                 && $drow->docclass->load($drow))
                 $d->content_base64 = base64_encode(Filer::content($drow));
         }
         foreach ($this->document_callbacks as $cb)
-            call_user_func($cb, $d, $prow, $dtype, $drow);
-        return count(get_object_vars($d)) ? $d : null;
+            call_user_func($cb, $d, $this->prow, $dtype, $drow);
+        if (!count(get_object_vars($d)))
+            $d = null;
+        return $d;
     }
 
-    function row_to_json($prow, $args = array()) {
+    function paper_json($prow, $args = array()) {
         global $Conf;
+        if (is_int($prow))
+            $prow = $Conf->paperRow(["paperId" => $prow, "topics" => true, "options" => true], $this->contact);
         $contact = $this->contact;
         if (get($args, "forceShow"))
             $contact = null;
 
         if (!$prow || ($contact && !$contact->can_view_paper($prow)))
             return null;
+        $this->prow = $prow;
+        $this->paperid = $prow->paperId;
 
         $pj = (object) array();
-        $pj->id = (int) $prow->paperId;
+        $pj->pid = (int) $prow->paperId;
         $pj->title = $prow->title;
 
         if ($prow->timeWithdrawn > 0) {
             $pj->status = "withdrawn";
             $pj->withdrawn = true;
             $pj->withdrawn_at = (int) $prow->timeWithdrawn;
-            if (@$prow->withdrawReason)
+            if (get($prow, "withdrawReason"))
                 $pj->withdrawn_reason = $prow->withdrawReason;
         } else if ($prow->timeSubmitted > 0) {
             $pj->status = "submitted";
@@ -130,8 +139,8 @@ class PaperStatus {
                     $aux->last = $au->lastName;
                 if ($au->affiliation)
                     $aux->affiliation = $au->affiliation;
-                $lemail = @strtolower($aux->email);
-                if ($lemail && ($conf = @$contacts[$lemail])
+                $lemail = strtolower((string) $au->email);
+                if ($lemail && ($conf = get($contacts, $lemail))
                     && $conf->conflictType >= CONFLICT_AUTHOR) {
                     $aux->contact = true;
                     unset($contacts[$lemail]);
@@ -151,7 +160,7 @@ class PaperStatus {
                         $aux->affiliation = $conf->affiliation;
                     $other_contacts[] = $aux;
                 }
-            if (count($other_contacts))
+            if (!empty($other_contacts))
                 $pj->contacts = $other_contacts;
         }
 
@@ -163,21 +172,17 @@ class PaperStatus {
         $topics = array();
         foreach (array_intersect_key($Conf->topic_map(), array_flip($prow->topics())) as $tid => $tname)
             $topics[$this->export_ids ? $tid : $tname] = true;
-        if (count($topics))
+        if (!empty($topics))
             $pj->topics = (object) $topics;
 
         if ($prow->paperStorageId > 1
             && (!$contact || $contact->can_view_pdf($prow))
-            && ($doc = $this->document_to_json($prow, DTYPE_SUBMISSION,
-                                               (int) $prow->paperStorageId,
-                                               $args)))
+            && ($doc = $this->document_to_json(DTYPE_SUBMISSION, (int) $prow->paperStorageId)))
             $pj->submission = $doc;
 
         if ($prow->finalPaperStorageId > 1
             && (!$contact || $contact->can_view_pdf($prow))
-            && ($doc = $this->document_to_json($prow, DTYPE_FINAL,
-                                               (int) $prow->finalPaperStorageId,
-                                               $args)))
+            && ($doc = $this->document_to_json(DTYPE_FINAL, (int) $prow->finalPaperStorageId)))
             $pj->final = $doc;
         if ($prow->timeFinalSubmitted > 0) {
             $pj->final_submitted = true;
@@ -186,43 +191,24 @@ class PaperStatus {
 
         if (count($prow->options())) {
             $options = array();
-            foreach ($prow->options() as $oa) {
-                $o = $oa->option;
+            foreach (PaperOption::option_list() as $o) {
                 if ($contact && !$contact->can_view_paper_option($prow, $o, $this->forceShow))
                     continue;
-                $okey = $this->export_ids ? $o->id : $o->abbr;
-                if ($o->type == "checkbox" && $oa->value)
-                    $options[$okey] = true;
-                else if ($o->has_selector()
-                         && @($otext = $o->selector[$oa->value]))
-                    $options[$okey] = $otext;
-                else if ($o->type == "numeric" && $oa->value != ""
-                         && $oa->value != "0")
-                    $options[$okey] = $oa->value;
-                else if ($o->type == "text" && $oa->data != "")
-                    $options[$okey] = $oa->data;
-                else if ($o->type == "attachments") {
-                    $attachments = array();
-                    foreach ($oa->documents($prow) as $doc)
-                        if (($doc = $this->document_to_json($prow, $o->id, $doc, $args)))
-                            $attachments[] = $doc;
-                    if (count($attachments))
-                        $options[$okey] = $attachments;
-                } else if ($o->is_document() && $oa->value
-                           && ($doc = $this->document_to_json($prow, $o->id, $oa->value, $args)))
-                    $options[$okey] = $doc;
+                $ov = $prow->option($o->id) ? : new PaperOptionValue($o->id, $o);
+                $options[$this->export_ids ? $o->id : $o->abbr] =
+                    $o->unparse_json($ov, $this, $contact);
             }
-            if (count($options))
+            if (!empty($options))
                 $pj->options = (object) $options;
         }
 
         if ($can_view_authors) {
             $pcconflicts = array();
             foreach ($prow->pc_conflicts(true) as $id => $conf) {
-                if (@($ctname = Conflict::$type_names[$conf->conflictType]))
+                if (($ctname = get(Conflict::$type_names, $conf->conflictType)))
                     $pcconflicts[$conf->email] = $ctname;
             }
-            if (count($pcconflicts))
+            if (!empty($pcconflicts))
                 $pj->pc_conflicts = (object) $pcconflicts;
         }
 
@@ -230,6 +216,23 @@ class PaperStatus {
             $pj->collaborators = $prow->collaborators;
 
         return $pj;
+    }
+
+
+    static public function clone_json($pj) {
+        $x = (object) [];
+        foreach ($pj ? get_object_vars($pj) : [] as $k => $v)
+            if (is_object($v))
+                $x->$k = self::clone_json($v);
+            else
+                $x->$k = $v;
+        return $x;
+    }
+
+
+    public function set_option_error_html($o, $html) {
+        $this->set_error_html($o->id <= 0 ? $o->abbr : "opt$o->id",
+                              htmlspecialchars($o->name) . ": " . $html);
     }
 
     public function set_error_html($field, $html) {
@@ -248,60 +251,57 @@ class PaperStatus {
         $this->errmsg[] = $html;
     }
 
-    private function upload_document($docj, $paperid, $dtype) {
+    public function upload_document($docj, PaperOption $o) {
         global $Conf;
-        if (!$paperid)
-            $paperid = -1;
-
         // look for an existing document with same sha1;
         // check existing docid's sha1
-        $docid = @$docj->docid;
+        $docid = get($docj, "docid");
         if ($docid) {
-            $oldj = $this->document_to_json($paperid, $dtype, $docid, array("docids" => true));
-            if (@$docj->sha1 && @$oldj->sha1 !== $docj->sha1)
+            $oldj = $this->document_to_json($o->id, $docid);
+            if (get($docj, "sha1") && get($oldj, "sha1") !== $docj->sha1)
                 $docid = null;
-        } else if (!$docid && $paperid && @$docj->sha1) {
-            $result = Dbl::qe("select paperStorageId from PaperStorage where paperId=? and documentType=? and sha1=?", $paperid, $dtype, $docj->sha1);
+        } else if (!$docid && $this->paperid > 0 && get($docj, "sha1")) {
+            $result = Dbl::qe("select paperStorageId from PaperStorage where paperId=? and documentType=? and sha1=?", $this->paperid, $o->id, $docj->sha1);
             if (($row = edb_row($result)))
                 $docid = $row[0];
         }
+        if ($docid) {
+            $docj->docid = $docid;
+            return;
+        }
 
         // check filter
-        if (!$docid && @$docj->filter && is_int($docj->filter)) {
-            if (is_int(@$docj->original_id))
+        if (get($docj, "filter") && is_int($docj->filter)) {
+            if (is_int(get($docj, "original_id")))
                 $result = Dbl::qe("select paperStorageId, timestamp, sha1 from PaperStorage where paperStorageId=?", $docj->original_id);
-            else if (is_string(@$docj->original_sha1))
-                $result = Dbl::qe("select paperStorageId, timestamp, sha1 from PaperStorage where paperId=? and sha1=?", $paperid, $docj->original_sha1);
-            else if ($dtype == DTYPE_SUBMISSION || $dtype == DTYPE_FINAL)
-                $result = Dbl::qe("select PaperStorage.paperStorageId, PaperStorage.timestamp, PaperStorage.sha1 from PaperStorage join Paper on (Paper.paperId=PaperStorage.paperId and Paper." . ($dtype == DTYPE_SUBMISSION ? "paperStorageId" : "finalPaperStorageId") . "=PaperStorage.paperStorageId) where Paper.paperId=?", $paperid);
+            else if (is_string(get($docj, "original_sha1")))
+                $result = Dbl::qe("select paperStorageId, timestamp, sha1 from PaperStorage where paperId=? and sha1=?", $this->paperid, $docj->original_sha1);
+            else if ($o->id == DTYPE_SUBMISSION || $o->id == DTYPE_FINAL)
+                $result = Dbl::qe("select PaperStorage.paperStorageId, PaperStorage.timestamp, PaperStorage.sha1 from PaperStorage join Paper on (Paper.paperId=PaperStorage.paperId and Paper." . ($o->id == DTYPE_SUBMISSION ? "paperStorageId" : "finalPaperStorageId") . "=PaperStorage.paperStorageId) where Paper.paperId=?", $this->paperid);
             else
                 $result = null;
             if (($row = edb_orow($result))) {
                 $docj->original_id = (int) $row->paperStorageId;
                 $docj->original_timestamp = (int) $row->timestamp;
                 $docj->original_sha1 = $row->sha1;
-                if (@$docj->preserve_timestamp)
+                if (get($docj, "preserve_timestamp"))
                     $docj->timestamp = (int) $docj->original_timestamp;
             } else
                 unset($docj->original_id);
         }
 
         // if no sha1 match, upload
-        $docclass = new HotCRPDocument($dtype);
+        $docclass = new HotCRPDocument($o->id);
         $upload = null;
-        if (!$docid && $docclass->load($docj))
-            $upload = $docclass->upload($docj, (object) array("paperId" => $paperid));
-        if ($docid)
-            $docj->docid = $docid;
-        else if ($upload && @$upload->paperStorageId > 1) {
+        if ($docclass->load($docj))
+            $upload = $docclass->upload($docj, (object) array("paperId" => $this->paperid));
+        if ($upload && get($upload, "paperStorageId") > 1) {
             foreach (array("size", "sha1", "mimetype", "timestamp") as $k)
                 $docj->$k = $upload->$k;
             $this->uploaded_documents[] = $docj->docid = $upload->paperStorageId;
         } else {
-            $opt = PaperOption::find_document($dtype);
             $docj->docid = 1;
-            $this->set_error_html($opt->abbr, htmlspecialchars($opt->name) . ": "
-                                  . ($upload ? $upload->error_html : "empty document"));
+            $this->set_option_error_html($o, $upload ? $upload->error_html : "empty document");
         }
     }
 
@@ -334,7 +334,7 @@ class PaperStatus {
             foreach ($topics as $k => $v)
                 if (!$v)
                     /* skip */;
-                else if (@$topic_map[$k])
+                else if (get($topic_map, $k))
                     $pj->topics->$k = true;
                 else if (($x = array_search($k, $topic_map, true)) !== false)
                     $pj->topics->$x = true;
@@ -345,57 +345,38 @@ class PaperStatus {
     }
 
     private function normalize_options($pj) {
-        $options = @$pj->options;
+        $options = $pj->options;
         $pj->options = (object) array();
-        $option_list = PaperOption::option_list();
+        $pj->parsed_options = array();
 
-        // canonicalize option values to use IDs, not abbreviations
-        foreach ($options as $id => $oa) {
+        // - canonicalize option values to use IDs, not abbreviations
+        // - parse options into SQL
+        foreach ($options as $id => $oj) {
             $omatches = PaperOption::search($id);
-            if (count($omatches) == 1) {
-                $id = current($omatches)->id;
-                $pj->options->$id = $oa;
-            } else
+            if (count($omatches) != 1) {
                 $pj->bad_options[$id] = true;
+                continue;
+            }
+            $o = current($omatches);
+            // XXX setting decision in JSON?
+            if ($o->final && (!$this->prow || $this->prow->outcome <= 0))
+                continue;
+            $result = null;
+            if ($oj !== null)
+                $result = $o->parse_json($oj, $this);
+            if ($result === null)
+                $result = [];
+            if (!is_array($result))
+                $result = [[$result]];
+            else if (count($result) == 2 && is_string($result[1]))
+                $result = [$result];
+            $pj->parsed_options[$o->id] = $result;
         }
-
-        // check values
-        foreach ($pj->options as $id => $oa) {
-            $o = $option_list[$id];
-            if ($o->type == "checkbox") {
-                if (!is_bool($oa))
-                    $this->set_error_html("opt$id", htmlspecialchars($o->name) . ": Option should be “true” or “false”.");
-            } else if ($o->has_selector()) {
-                if (is_int($oa) && isset($o->selector[$oa]))
-                    /* OK */;
-                else if (is_string($oa)
-                         && ($ov = array_search($oa, $o->selector)) !== false)
-                    $pj->options->$id = $ov;
-                else
-                    $this->set_error_html("opt$id", htmlspecialchars($o->name) . ": Option " . htmlspecialchars(json_encode($oa)) . " doesn’t match any of the selectors.");
-            } else if ($o->type == "numeric") {
-                if (!is_int($oa))
-                    $this->set_error_html("opt$id", htmlspecialchars($o->name) . ": Option should be an integer.");
-            } else if ($o->type == "text") {
-                if (!is_string($oa))
-                    $this->set_error_html("opt$id", htmlspecialchars($o->name) . ": Option should be a text string.");
-            } else if ($o->has_document()) {
-                if ($o->is_document() && !is_object($oa))
-                    $oa = null;
-                $oa = $oa && !is_array($oa) ? array($oa) : $oa;
-                if (!is_array($oa))
-                    $this->set_error_html("opt$id", htmlspecialchars($o->name) . ": Option format error.");
-                else
-                    foreach ($oa as $ov)
-                        if (!is_object($ov))
-                            $this->set_error_html("opt$id", htmlspecialchars($o->name) . ": Option format error.");
-            } else
-                unset($pj->options->$id);
-        }
+        ksort($pj->parsed_options);
     }
 
     private function normalize_pc_conflicts($pj) {
-        $conflicts = @$pj->pc_conflicts;
+        $conflicts = get($pj, "pc_conflicts");
         $pj->pc_conflicts = (object) array();
         if (is_object($conflicts))
             $conflicts = (array) $conflicts;
@@ -427,7 +408,7 @@ class PaperStatus {
     private function valid_contact($lemail, $old_contacts) {
         global $Me;
         return $lemail
-            && (@$old_contacts[$lemail] || validate_email($lemail)
+            && (get($old_contacts, $lemail) || validate_email($lemail)
                 || strcasecmp($lemail, $Me->email) == 0);
     }
 
@@ -443,9 +424,9 @@ class PaperStatus {
             $collab = [];
             foreach (preg_split('/[\r\n]+/', $pj->collaborators) as $line)
                 $collab[] = preg_replace('/[,;\s]+\z/', '', $line);
-            while (count($collab) && $collab[count($collab) - 1] === "")
+            while (!empty($collab) && $collab[count($collab) - 1] === "")
                 array_pop($collab);
-            if (count($collab))
+            if (!empty($collab))
                 $pj->collaborators = join("\n", $collab) . "\n";
             else
                 $pj->collaborators = "";
@@ -476,11 +457,11 @@ class PaperStatus {
                     $aux->affiliation = simplify_whitespace($aux->affiliation);
                     // borrow from old author information
                     if ($aux->email && $aux->first === "" && $aux->last === ""
-                        && ($old_au = @$old_au_by_email[strtolower($aux->email)])) {
-                        $aux->first = $old_au->first;
-                        $aux->last = $old_au->last;
+                        && ($old_au = get($old_au_by_email, strtolower($aux->email)))) {
+                        $aux->first = get($old_au, "first", "");
+                        $aux->last = get($old_au, "last", "");
                         if ($aux->affiliation === "")
-                            $aux->affiliation = $old_au->affiliation;
+                            $aux->affiliation = get($old_au, "affiliation", "");
                     }
                     if ($aux->first !== "" || $aux->last !== ""
                         || $aux->email !== "" || $aux->affiliation !== "")
@@ -490,7 +471,7 @@ class PaperStatus {
                     $aux->index = count($pj->authors) + count($pj->bad_authors);
                     if (is_object($au) && isset($au->contact))
                         $aux->contact = !!$au->contact;
-                    if (@$aux->email)
+                    if (get($aux, "email"))
                         $au_by_email[strtolower($aux->email)] = $aux;
                 } else
                     $this->set_error_html("author", "Format error [authors]");
@@ -519,47 +500,48 @@ class PaperStatus {
 
         // Topics
         $pj->bad_topics = array();
-        if (@$pj->topics !== null)
+        if (get($pj, "topics") !== null)
             $this->normalize_topics($pj);
 
         // Options
         $pj->bad_options = array();
-        if (@$pj->options && is_object($pj->options))
+        if (get($pj, "options") && is_object($pj->options))
             $this->normalize_options($pj);
-        else if (@$pj->options === false)
+        else if (get($pj, "options") === false)
             $pj->options = (object) array();
-        else if (@$pj->options !== null)
+        else if (get($pj, "options") !== null)
             $this->set_error_html("options", "Format error [options]");
 
         // PC conflicts
         $pj->bad_pc_conflicts = (object) array();
-        if (@$pj->pc_conflicts && (is_object($pj->pc_conflicts) || is_array($pj->pc_conflicts)))
+        if (get($pj, "pc_conflicts")
+            && (is_object($pj->pc_conflicts) || is_array($pj->pc_conflicts)))
             $this->normalize_pc_conflicts($pj);
-        else if (@$pj->pc_conflicts === false)
+        else if (get($pj, "pc_conflicts") === false)
             $pj->pc_conflicts = (object) array();
-        else if (@$pj->pc_conflicts !== null)
+        else if (get($pj, "pc_conflicts") !== null)
             $this->set_error_html("pc_conflicts", "Format error [PC conflicts]");
 
         // Old contacts (to avoid validate_email errors on unchanged contacts)
         $old_contacts = array();
-        if ($old_pj && @$old_pj->authors)
+        if ($old_pj && get($old_pj, "authors"))
             foreach ($old_pj->authors as $au)
-                if (@$au->contact)
+                if (get($au, "contact"))
                     $old_contacts[strtolower($au->email)] = true;
-        if ($old_pj && @$old_pj->contacts)
+        if ($old_pj && get($old_pj, "contacts"))
             foreach ($old_pj->contacts as $conf)
                 $old_contacts[strtolower($conf->email)] = true;
 
         // verify emails on authors marked as contacts
         $pj->bad_contacts = array();
-        foreach (@$pj->authors ? : array() as $au)
-            if (@$au->contact
-                && (!@$au->email
+        foreach (get($pj, "authors") ? : array() as $au)
+            if (get($au, "contact")
+                && (!get($au, "email")
                     || !$this->valid_contact(strtolower($au->email), $old_contacts)))
                 $pj->bad_contacts[] = $au;
 
         // Contacts
-        $contacts = @$pj->contacts;
+        $contacts = get($pj, "contacts");
         if ($contacts !== null) {
             if (is_object($contacts) || is_array($contacts))
                 $contacts = (array) $contacts;
@@ -581,12 +563,12 @@ class PaperStatus {
                     else
                         $v = Text::analyze_name($v);
                 }
-                if (is_object($v) && !@$v->email && is_string($k))
+                if (is_object($v) && !get($v, "email") && is_string($k))
                     $v->email = $k;
-                if (is_object($v) && @$v->email) {
+                if (is_object($v) && get($v, "email")) {
                     $lemail = strtolower($v->email);
                     if ($this->valid_contact($lemail, $old_contacts))
-                        $pj->contacts[] = (object) array_merge((array) @$au_by_email[$lemail], (array) $v);
+                        $pj->contacts[] = (object) array_merge((array) get($au_by_email, $lemail), (array) $v);
                     else
                         $pj->bad_contacts[] = $v;
                 } else
@@ -597,34 +579,37 @@ class PaperStatus {
         // Inherit contactness
         if (isset($pj->authors) && $old_pj && isset($old_pj->authors)) {
             foreach ($old_pj->authors as $au)
-                if (@$au->contact && $au->email
-                    && ($aux = @$au_by_email[strtolower($au->email)])
+                if (get($au, "contact") && $au->email
+                    && ($aux = get($au_by_email, strtolower($au->email)))
                     && !isset($aux->contact))
                     $aux->contact = true;
         }
         if (isset($pj->authors) && $old_pj && isset($old_pj->contacts)) {
             foreach ($old_pj->contacts as $au)
-                if (($aux = @$au_by_email[strtolower($au->email)])
+                if (($aux = get($au_by_email, strtolower($au->email)))
                     && !isset($aux->contact))
                     $aux->contact = true;
         }
     }
 
-    private function check_invariants($pj, $old_pj, $prow) {
+    private function check_invariants($pj, $old_pj) {
+        global $Opt;
         // Errors don't prevent saving
-        if (@$pj->title === ""
-            || (@$pj->title === null && (!$old_pj || !$old_pj->title)))
+        if (get($pj, "title") === ""
+            || (get($pj, "title") === null && (!$old_pj || !$old_pj->title)))
             $this->set_error_html("title", "Each paper must have a title.");
-        if (@$pj->abstract === ""
-            || (@$pj->abstract === null && (!$old_pj || !$old_pj->abstract)))
-            $this->set_error_html("abstract", "Each paper must have an abstract.");
-        if ((is_array(@$pj->authors) && !count($pj->authors))
-            || (@$pj->authors === null && (!$old_pj || !count($old_pj->authors))))
+        if (get($pj, "abstract") === ""
+            || (get($pj, "abstract") === null && (!$old_pj || !$old_pj->abstract))) {
+            if (!get($Opt, "noAbstract"))
+                $this->set_error_html("abstract", "Each paper must have an abstract.");
+        }
+        if ((is_array(get($pj, "authors")) && empty($pj->authors))
+            || (get($pj, "authors") === null && (!$old_pj || empty($old_pj->authors))))
             $this->set_error_html("author", "Each paper must have at least one author.");
-        if (count($pj->bad_authors))
+        if (!empty($pj->bad_authors))
             $this->set_error_html("author", "Some authors ignored.");
         $ncontacts = 0;
-        foreach ($this->conflicts_array($pj, $old_pj, $prow) as $c)
+        foreach ($this->conflicts_array($pj, $old_pj) as $c)
             if ($c >= CONFLICT_CONTACTAUTHOR)
                 ++$ncontacts;
         if (!$ncontacts && $old_pj && self::contacts_array($old_pj))
@@ -634,99 +619,92 @@ class PaperStatus {
                 $this->set_error_html("contacts", "Contact " . Text::user_html($reg) . " has no associated email.");
             else
                 $this->set_error_html("contacts", "Contact email " . htmlspecialchars($reg->email) . " is invalid.");
-        if (count($pj->bad_topics))
+        if (!empty($pj->bad_topics))
             $this->set_warning_html("topics", "Unknown topics ignored (" . htmlspecialchars(commajoin($pj->bad_topics)) . ").");
-        if (count($pj->bad_options))
+        if (!empty($pj->bad_options))
             $this->set_warning_html("options", "Unknown options ignored (" . htmlspecialchars(commajoin(array_keys($pj->bad_options))) . ").");
     }
 
     static private function author_information($pj) {
         $x = "";
-        foreach (($pj && @$pj->authors ? $pj->authors : array()) as $au)
-            $x .= (@$au->first ? $au->first : (@$au->firstName ? $au->firstName : "")) . "\t"
-                . (@$au->last ? $au->last : (@$au->lastName ? $au->lastName : "")) . "\t"
-                . (@$au->email ? $au->email : "") . "\t"
-                . (@$au->affiliation ? $au->affiliation : "") . "\n";
+        foreach (($pj && get($pj, "authors") ? $pj->authors : array()) as $au) {
+            $x .= get($au, "first", get($au, "firstName", "")) . "\t"
+                . get($au, "last", get($au, "lastName", "")) . "\t"
+                . get($au, "email", "") . "\t"
+                . get($au, "affiliation", "") . "\n";
+        }
         return $x;
     }
 
     static function topics_sql($pj, $paperid) {
         $x = array();
-        foreach (($pj ? (array) @$pj->topics : array()) as $id => $v)
+        foreach (($pj ? (array) get($pj, "topics") : array()) as $id => $v)
             $x[] = "($id,$paperid)";
         sort($x);
         return join(",", $x);
     }
 
     static function options_sql($pj, $paperid) {
-        $x = array();
-        $option_list = PaperOption::option_list();
-        foreach ((array) ($pj ? @$pj->options : null) as $id => $oa) {
-            $o = $option_list[$id];
-            if ($o->type == "text") {
-                if ((string) $oa !== "")
-                    $x[] = "($paperid,$o->id,1,'" . sqlq($oa) . "')";
-            } else if ($o->is_document())
-                $x[] = "($paperid,$o->id,$oa->docid,null)";
-            else if ($o->type == "attachments") {
-                $oa = is_array($oa) ? $oa : array($oa);
-                foreach ($oa as $ord => $ov)
-                    $x[] = "($paperid,$o->id,$ov->docid,'" . ($ord + 1) . "')";
-            } else if ($o->type != "checkbox" || $oa)
-                $x[] = "($paperid,$o->id,$oa,null)";
-        }
-        sort($x);
-        return join(",", $x);
+        $q = [];
+        foreach (get($pj, "parsed_options", []) as $id => $ovs)
+            foreach ($ovs as $ov) {
+                if (is_int($ov))
+                    $q[] = "($paperid,$id,$ov,null)";
+                else
+                    $q[] = Dbl::format_query("($paperid,$id,?,?)", $ov[0], get($ov, 1));
+            }
+        sort($q);
+        return join(",", $q);
     }
 
     static private function contacts_array($pj) {
         $contacts = array();
-        foreach (@$pj->authors ? : array() as $au)
-            if (@$au->email && validate_email($au->email)) {
+        foreach (get($pj, "authors") ? : array() as $au)
+            if (get($au, "email") && validate_email($au->email)) {
                 $c = clone $au;
                 $contacts[strtolower($c->email)] = $c;
             }
-        foreach (@$pj->contacts ? : array() as $v) {
+        foreach (get($pj, "contacts") ? : array() as $v) {
             $lemail = strtolower($v->email);
-            $c = (object) array_merge((array) @$contacts[$lemail], (array) $v);
+            $c = (object) array_merge((array) get($contacts, $lemail), (array) $v);
             $c->contact = true;
             $contacts[$lemail] = $c;
         }
         return $contacts;
     }
 
-    function conflicts_array($pj, $old_pj, $prow) {
+    function conflicts_array($pj, $old_pj) {
         $x = array();
 
-        if ($pj && @$pj->pc_conflicts !== null)
+        if ($pj && get($pj, "pc_conflicts") !== null)
             $c = $pj->pc_conflicts;
         else
-            $c = ($old_pj ? @$old_pj->pc_conflicts : null) ? : array();
+            $c = ($old_pj ? get($old_pj, "pc_conflicts") : null) ? : array();
         foreach ((array) $c as $email => $type)
             $x[strtolower($email)] = $type;
 
-        if ($pj && @$pj->authors !== null)
+        if ($pj && get($pj, "authors") !== null)
             $c = $pj->authors;
         else
             $c = $old_pj ? $old_pj->authors : array();
         foreach ($c as $au)
-            if (@$au->email) {
+            if (get($au, "email")) {
                 $lemail = strtolower($au->email);
-                $x[$lemail] = @$au->contact ? CONFLICT_CONTACTAUTHOR : CONFLICT_AUTHOR;
+                $x[$lemail] = get($au, "contact") ? CONFLICT_CONTACTAUTHOR : CONFLICT_AUTHOR;
             }
 
-        if ($pj && @$pj->contacts !== null)
+        if ($pj && get($pj, "contacts") !== null)
             $c = $pj->contacts;
         else
-            $c = $old_pj ? (@$old_pj->contacts ? : []) : [];
+            $c = $old_pj ? (get($old_pj, "contacts") ? : []) : [];
         foreach ($c as $v) {
             $lemail = strtolower($v->email);
-            $x[$lemail] = max((int) @$x[$lemail], CONFLICT_CONTACTAUTHOR);
+            $x[$lemail] = max((int) get($x, $lemail), CONFLICT_CONTACTAUTHOR);
         }
 
-        if ($old_pj && @$old_pj->pc_conflicts) {
+        if ($old_pj && get($old_pj, "pc_conflicts")) {
             $can_administer = !$this->contact
-                || $this->contact->can_administer($prow, $this->forceShow);
+                || $this->contact->can_administer($this->prow, $this->forceShow);
             foreach ($old_pj->pc_conflicts as $email => $type)
                 if ($type == CONFLICT_CHAIRMARK) {
                     $lemail = strtolower($email);
@@ -740,25 +718,34 @@ class PaperStatus {
         return $x;
     }
 
-    function save($pj) {
+    function save_paper_json($pj) {
         global $Conf, $Now;
+        assert(!$this->hide_docids);
 
         $paperid = null;
-        if (isset($pj->id) && is_int($pj->id) && $pj->id > 0)
+        if (isset($pj->pid) && is_int($pj->pid) && $pj->pid > 0)
+            $paperid = $pj->pid;
+        else if (!isset($pj->pid) && isset($pj->id) && is_int($pj->id) && $pj->id > 0)
             $paperid = $pj->id;
-        else if (isset($pj->id)) {
-            $this->set_error_html("id", "Format error [id]");
+        else if (isset($pj->pid) || isset($pj->id)) {
+            $key = isset($pj->pid) ? "pid" : "id";
+            $this->set_error_html($key, "Format error [$key]");
             return false;
         }
 
-        $prow = $old_pj = null;
+        if (get($pj, "error") || get($pj, "error_html")) {
+            $this->set_error_html("error", "Refusing to save paper with error");
+            return false;
+        }
+
+        $this->prow = $old_pj = null;
+        $this->paperid = $paperid ? : -1;
         if ($paperid)
-            $prow = $Conf->paperRow(["paperId" => $paperid, "topics" => true, "options" => true],
-                                    $this->contact);
-        if ($prow)
-            $old_pj = $this->row_to_json($prow, ["forceShow" => true, "docids" => true]);
-        if ($pj && $old_pj && $paperid != $old_pj->id) {
-            $this->set_error_html("id", "Saving paper with different ID");
+            $this->prow = $Conf->paperRow(["paperId" => $paperid, "topics" => true, "options" => true], $this->contact);
+        if ($this->prow)
+            $old_pj = $this->paper_json($this->prow, ["forceShow" => true]);
+        if ($pj && $old_pj && $paperid != $old_pj->pid) {
+            $this->set_error_html("pid", "Saving paper with different ID");
             return false;
         }
 
@@ -767,31 +754,20 @@ class PaperStatus {
             $this->normalize($old_pj, null);
         if ($this->nerrors)
             return false;
-        $this->check_invariants($pj, $old_pj, $prow);
+        $this->check_invariants($pj, $old_pj);
 
-        // store all documents
+        // store documents (options already stored)
         if (isset($pj->submission) && $pj->submission)
-            $this->upload_document($pj->submission, $paperid, DTYPE_SUBMISSION);
+            $this->upload_document($pj->submission, PaperOption::find_document(DTYPE_SUBMISSION));
         if (isset($pj->final) && $pj->final)
-            $this->upload_document($pj->final, $paperid, DTYPE_FINAL);
-        if (isset($pj->options) && $pj->options) {
-            $option_list = PaperOption::option_list();
-            foreach ($pj->options as $id => $oa) {
-                $o = $option_list[$id];
-                if ($o->type == "attachments" || $o->is_document()) {
-                    $oa = is_array($oa) ? $oa : array($oa);
-                    foreach ($oa as $x)
-                        $this->upload_document($x, $paperid, $id);
-                }
-            }
-        }
+            $this->upload_document($pj->final, PaperOption::find_document(DTYPE_FINAL));
 
         // create contacts
         foreach (self::contacts_array($pj) as $c) {
-            $c->only_if_contactdb = !@$c->contact;
+            $c->only_if_contactdb = !get($c, "contact");
             $c->disabled = !!$this->disable_users;
             if (!Contact::create($c, !$this->no_email)
-                && @$c->contact)
+                && get($c, "contact"))
                 $this->set_error_html("contacts", "Could not create an account for contact " . Text::user_html($c) . ".");
         }
 
@@ -802,12 +778,12 @@ class PaperStatus {
         // update Paper table
         $q = array();
         foreach (array("title", "abstract", "collaborators") as $k) {
-            $v = convert_to_utf8((string) @$pj->$k);
-            if (!$old_pj || (@$pj->$k !== null && $v !== (string) @$old_pj->$k))
+            $v = convert_to_utf8((string) get($pj, $k));
+            if (!$old_pj || (get($pj, $k) !== null && $v !== (string) get($old_pj, $k)))
                 $q[] = "$k='" . sqlq($v) . "'";
         }
 
-        if (!$old_pj || @$pj->authors !== null) {
+        if (!$old_pj || get($pj, "authors") !== null) {
             $autext = convert_to_utf8(self::author_information($pj));
             $old_autext = self::author_information($old_pj);
             if ($autext !== $old_autext || !$old_pj)
@@ -815,78 +791,78 @@ class PaperStatus {
         }
 
         if ($Conf->submission_blindness() == Conf::BLIND_OPTIONAL
-            && (!$old_pj || (@$pj->nonblind !== null
+            && (!$old_pj || (get($pj, "nonblind") !== null
                              && !$pj->nonblind != !$old_pj->nonblind)))
-            $q[] = "blind=" . (@$pj->nonblind ? 0 : 1);
+            $q[] = "blind=" . (get($pj, "nonblind") ? 0 : 1);
 
-        if (!$old_pj || @$pj->submission !== null) {
-            $new_id = @$pj->submission ? $pj->submission->docid : 1;
-            $old_id = $old_pj && @$old_pj->submission ? $old_pj->submission->docid : 1;
+        if (!$old_pj || get($pj, "submission") !== null) {
+            $new_id = get($pj, "submission") ? $pj->submission->docid : 1;
+            $old_id = $old_pj && get($old_pj, "submission") ? $old_pj->submission->docid : 1;
             if (!$old_pj || $new_id != $old_id)
                 $q[] = "paperStorageId=$new_id";
         }
 
-        if (!$old_pj || @$pj->final !== null) {
-            $new_id = @$pj->final ? $pj->final->docid : 0;
-            $old_id = $old_pj && @$old_pj->final ? $old_pj->final->docid : 0;
+        if (!$old_pj || get($pj, "final") !== null) {
+            $new_id = get($pj, "final") ? $pj->final->docid : 0;
+            $old_id = $old_pj && get($old_pj, "final") ? $old_pj->final->docid : 0;
             if (!$old_pj || $new_id != $old_id)
                 $q[] = "finalPaperStorageId=$new_id";
         }
 
-        if (@$pj->withdrawn !== null
-            || @$pj->submitted !== null
-            || @$pj->draft !== null) {
-            if (@$pj->submitted !== null)
+        if (get($pj, "withdrawn") !== null
+            || get($pj, "submitted") !== null
+            || get($pj, "draft") !== null) {
+            if (get($pj, "submitted") !== null)
                 $submitted = $pj->submitted;
-            else if (@$pj->draft !== null)
+            else if (get($pj, "draft") !== null)
                 $submitted = !$pj->draft;
             else if ($old_pj)
-                $submitted = @$old_pj->submitted_at > 0;
+                $submitted = get($old_pj, "submitted_at") > 0;
             else
                 $submitted = false;
-            if (@$pj->withdrawn) {
-                if (!$old_pj || !@$old_pj->withdrawn) {
-                    $q[] = "timeWithdrawn=" . (@$pj->withdrawn_at ? : $Now);
+            if (get($pj, "withdrawn")) {
+                if (!$old_pj || !get($old_pj, "withdrawn")) {
+                    $q[] = "timeWithdrawn=" . (get($pj, "withdrawn_at") ? : $Now);
                     $q[] = "timeSubmitted=" . ($submitted ? -100 : 0);
-                } else if ((@$old_pj->submitted_at > 0) !== $submitted)
+                } else if ((get($old_pj, "submitted_at") > 0) !== $submitted)
                     $q[] = "timeSubmitted=" . ($submitted ? -100 : 0);
             } else if ($submitted) {
-                if (!$old_pj || !@$old_pj->submitted)
-                    $q[] = "timeSubmitted=" . (@$pj->submitted_at ? : $Now);
-                if ($old_pj && @$old_pj->withdrawn)
+                if (!$old_pj || !get($old_pj, "submitted"))
+                    $q[] = "timeSubmitted=" . (get($pj, "submitted_at") ? : $Now);
+                if ($old_pj && get($old_pj, "withdrawn"))
                     $q[] = "timeWithdrawn=0";
-            } else if ($old_pj && (@$old_pj->withdrawn || @$old_pj->submitted)) {
+            } else if ($old_pj && (get($old_pj, "withdrawn") || get($old_pj, "submitted"))) {
                 $q[] = "timeSubmitted=0";
                 $q[] = "timeWithdrawn=0";
             }
         }
 
-        if (@$pj->final_submitted !== null) {
+        if (get($pj, "final_submitted") !== null) {
             if ($pj->final_submitted)
-                $time = @$pj->final_submitted_at ? : $Now;
+                $time = get($pj, "final_submitted_at") ? : $Now;
             else
                 $time = 0;
-            if (!$old_pj || @$old_pj->final_submitted_at != $time)
+            if (!$old_pj || get($old_pj, "final_submitted_at") != $time)
                 $q[] = "timeFinalSubmitted=$time";
         }
 
-        if (count($q)) {
+        if (!empty($q)) {
             if ($Conf->submission_blindness() == Conf::BLIND_NEVER)
                 $q[] = "blind=0";
             else if ($Conf->submission_blindness() != Conf::BLIND_OPTIONAL)
                 $q[] = "blind=1";
 
             $joindoc = $old_joindoc = null;
-            if (@$pj->final) {
+            if (get($pj, "final")) {
                 $joindoc = $pj->final;
-                $old_joindoc = $old_pj ? @$old_pj->final : null;
-            } else if (@$pj->submission) {
+                $old_joindoc = $old_pj ? get($old_pj, "final") : null;
+            } else if (get($pj, "submission")) {
                 $joindoc = $pj->submission;
-                $old_joindoc = $old_pj ? @$old_pj->submission : null;
+                $old_joindoc = $old_pj ? get($old_pj, "submission") : null;
             }
             if ($joindoc
                 && (!$old_joindoc || $old_joindoc->docid != $joindoc->docid)
-                && @$joindoc->size && @$joindoc->timestamp) {
+                && get($joindoc, "size") && get($joindoc, "timestamp")) {
                 $q[] = "size=" . $joindoc->size;
                 $q[] = "mimetype='" . sqlq($joindoc->mimetype) . "'";
                 $q[] = "sha1='" . sqlq($joindoc->sha1) . "'";
@@ -903,21 +879,21 @@ class PaperStatus {
             } else {
                 $result = Dbl::qe_raw("insert into Paper set " . join(",", $q));
                 if (!$result
-                    || !($paperid = $pj->id = $result->insert_id))
+                    || !($paperid = $pj->pid = $result->insert_id))
                     return $this->set_error_html(false, "Could not create paper.");
-                if (count($this->uploaded_documents))
+                if (!empty($this->uploaded_documents))
                     Dbl::qe_raw("update PaperStorage set paperId=$paperid where paperStorageId in (" . join(",", $this->uploaded_documents) . ")");
             }
 
             // maybe update `papersub` settings
-            $is_submitted = !@$pj->withdrawn && @$pj->submitted;
-            $was_submitted = $old_pj && !@$old_pj->withdrawn && @$old_pj->submitted;
+            $is_submitted = !get($pj, "withdrawn") && get($pj, "submitted");
+            $was_submitted = $old_pj && !get($old_pj, "withdrawn") && get($old_pj, "submitted");
             if ($is_submitted != $was_submitted)
                 $Conf->update_papersub_setting($is_submitted);
         }
 
         // update PaperTopics
-        if (@$pj->topics) {
+        if (get($pj, "topics")) {
             $topics = self::topics_sql($pj, $paperid);
             $old_topics = self::topics_sql($old_pj, $paperid);
             if ($topics !== $old_topics) {
@@ -928,32 +904,32 @@ class PaperStatus {
         }
 
         // update PaperOption
-        if (@$pj->options) {
+        if (get($pj, "options")) {
             $options = convert_to_utf8(self::options_sql($pj, $paperid));
             $old_options = self::options_sql($old_pj, $paperid);
             if ($options !== $old_options) {
-                $result = Dbl::qe_raw("delete from PaperOption where paperId=$paperid");
+                $result = Dbl::qe("delete from PaperOption where paperId=$paperid and optionId?a", array_keys($pj->parsed_options));
                 if ($options)
                     $result = Dbl::qe_raw("insert into PaperOption (paperId,optionId,value,data) values $options");
             }
         }
 
         // update PaperConflict
-        $conflict = $this->conflicts_array($pj, $old_pj, $prow);
-        $old_conflict = $this->conflicts_array($old_pj, null, null);
+        $conflict = $this->conflicts_array($pj, $old_pj);
+        $old_conflict = $this->conflicts_array($old_pj, null);
         if (join(",", array_keys($conflict)) !== join(",", array_keys($old_conflict))
             || join(",", array_values($conflict)) !== join(",", array_values($old_conflict))) {
             $q = array();
             foreach ($conflict as $email => $type)
                 $q[] = "'" . sqlq($email) . "'";
             $ins = array();
-            if (count($q)) {
+            if (!empty($q)) {
                 $result = Dbl::qe_raw("select contactId, email from ContactInfo where email in (" . join(",", $q) . ")");
                 while (($row = edb_row($result)))
                     $ins[] = "($paperid,$row[0]," . $conflict[strtolower($row[1])] . ")";
             }
             $result = Dbl::qe_raw("delete from PaperConflict where paperId=$paperid");
-            if (count($ins))
+            if (!empty($ins))
                 $result = Dbl::qe_raw("insert into PaperConflict (paperId,contactId,conflictType) values " . join(",", $ins));
         }
 

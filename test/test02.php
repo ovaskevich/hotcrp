@@ -64,7 +64,10 @@ xassert_array_eqq(CsvParser::split_lines("\na\r\nb\rc\n"),
                   array("\n", "a\r\n", "b\r", "c\n"));
 
 // random PHP behavior tests
-xassert_eqq(substr("", 0, 1), false);
+if (PHP_MAJOR_VERSION >= 7)
+    xassert_eqq(substr("", 0, 1), ""); // UGH
+else
+    xassert_eqq(substr("", 0, 1), false);
 $s = "";
 xassert_eqq(@$s[0], "");
 
@@ -138,6 +141,16 @@ xassert_eqq(prefix_word_wrap("+ ", "This\nis\na thing\nto\nbe wrapped.", "- ", 9
 
 xassert_eqq(!!preg_match('/\A\pZ\z/u', ' '), true);
 
+// deaccent tests
+xassert_eqq(UnicodeHelper::deaccent("Á é î ç ø U"), "A e i c o U");
+$do = UnicodeHelper::deaccent_offsets("Á é î ç ø U .\xE2\x84\xAA");
+xassert_eqq($do[0], "A e i c o U .K");
+xassert_eqq(json_encode($do[1]), "[[0,0],[1,2],[3,5],[5,8],[7,11],[9,14],[14,21]]");
+$regex = (object) ["preg_raw" => Text::word_regex("foo"), "preg_utf8" => Text::utf8_word_regex("foo")];
+xassert_eqq(Text::highlight("Is foo bar føo bar fóó bar highlit right? foö", $regex),
+            "Is <span class=\"match\">foo</span> bar <span class=\"match\">føo</span> bar <span class=\"match\">fóó</span> bar highlit right? <span class=\"match\">foö</span>");
+
+
 // Qobject tests
 $q = new Qobject(["a" => 1, "b" => 2]);
 xassert_eqq($q->a, 1);
@@ -177,5 +190,18 @@ xassert(!Mailer::allow_send("ass@Example.net"));
 $Opt["sendEmail"] = false;
 xassert(!Mailer::allow_send("ass@butt.com"));
 xassert(!Mailer::allow_send("ass@example.edu"));
+
+// NavigationState tests
+$ns = new NavigationState(["SERVER_PORT" => 80, "SCRIPT_FILENAME" => __FILE__,
+                           "SCRIPT_NAME" => __FILE__, "REQUEST_URI" => "/fart/barf/?butt",
+                           "HTTP_HOST" => "butt.com", "SERVER_SOFTWARE" => "nginx"]);
+xassert_eqq($ns->host, "butt.com");
+xassert_eqq($ns->make_absolute("https://foo/bar/baz"), "https://foo/bar/baz");
+xassert_eqq($ns->make_absolute("http://fooxxx/bar/baz"), "http://fooxxx/bar/baz");
+xassert_eqq($ns->make_absolute("//foo/bar/baz"), "http://foo/bar/baz");
+xassert_eqq($ns->make_absolute("/foo/bar/baz"), "http://butt.com/foo/bar/baz");
+xassert_eqq($ns->make_absolute("after/path"), "http://butt.com/fart/barf/after/path");
+xassert_eqq($ns->make_absolute("../after/path"), "http://butt.com/fart/after/path");
+xassert_eqq($ns->make_absolute("?confusion=20"), "http://butt.com/fart/barf/?confusion=20");
 
 xassert_exit();
