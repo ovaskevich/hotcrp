@@ -1,0 +1,105 @@
+[
+    {
+        "name": "administrator", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::manager_api",
+        "synonym": ["manager"]
+    },
+    {
+        "name": "alltags", "get": true, "function": "PaperApi::alltags_api"
+    },
+    {
+        "name": "checkformat", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::checkformat_api"
+    },
+    {
+        "name": "clickthrough", "post": true,
+        "function": "User_API::clickthrough"
+    },
+    {
+        "name": "decision", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::decision_api"
+    },
+    {
+        "name": "fieldhtml", "get": true,
+        "function": "Search_API::fieldhtml"
+    },
+    {
+        "name": "follow", "paper": true, "post": true, "xxx": true,
+        "function": "PaperApi::follow_api"
+    },
+    {
+        "name": "lead", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::lead_api"
+    },
+    {
+        "name": "viewoptions", "get": true, "post": true,
+        "function": "SearchConfig_API::viewoptions",
+        "synonym": ["listreport"]
+    },
+    {
+        "name": "namedformula", "get": true,
+        "function": "SearchConfig_API::namedformula"
+    },
+    {
+        "name": "namedformula", "post": true,
+        "function": "SearchConfig_API::save_namedformula"
+    },
+    {
+        "name": "mentioncompletion", "get": true, "post": true,
+        "function": "PaperApi::mentioncompletion_api"
+    },
+    {
+        "name": "review", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::review_api"
+    },
+    {
+        "name": "reviewrating", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::reviewrating_api"
+    },
+    {
+        "name": "reviewround", "paper": true, "post": true, "xxx": true,
+        "function": "PaperApi::reviewround_api"
+    },
+    {
+        "name": "revpref", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::pref_api",
+        "synonym": ["pref"]
+    },
+    {
+        "name": "search", "get": true,
+        "function": "Search_API::search"
+    },
+    {
+        "name": "settags", "post": true,
+        "function": "PaperApi::settags_api"
+    },
+    {
+        "name": "shepherd", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::shepherd_api"
+    },
+    {
+        "name": "taganno", "get": true,
+        "function": "TagAnno_API::get"
+    },
+    {
+        "name": "taganno", "post": true,
+        "function": "TagAnno_API::set",
+        "synonym": ["settaganno"]
+    },
+    {
+        "name": "tagreport", "paper": true, "get": true,
+        "function": "PaperApi::tagreport_api"
+    },
+    {
+        "name": "trackerstatus", "get": true, "post": true,
+        "function": "MeetingTracker::trackerstatus_api"
+    },
+    {
+        "name": "votereport", "paper": true, "get": true, "post": true,
+        "function": "PaperApi::votereport_api"
+    },
+    {
+        "name": "whoami", "get": true,
+        "function": "User_API::whoami"
+    }
+]

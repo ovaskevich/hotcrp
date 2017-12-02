@@ -1,12 +1,18 @@
 <?php
 // api.php -- HotCRP JSON API access page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 // argument cleaning
 require_once("lib/navigation.php");
 if (!isset($_GET["fn"])) {
-    if (($fn = Navigation::path_component(0, true)))
+    $fn = Navigation::path_component(0, true);
+    if ($fn && ctype_digit($fn)) {
+        if (!isset($_GET["p"]))
+            $_GET["p"] = $fn;
+        $fn = Navigation::path_component(1, true);
+    }
+    if ($fn)
         $_GET["fn"] = $fn;
     else if (isset($_GET["track"]))
         $_GET["fn"] = "track";
@@ -25,7 +31,7 @@ global $Me;
 if ($_GET["fn"] === "trackerstatus") {
     $Me = false;
     require_once("src/initweb.php");
-    MeetingTracker::trackerstatus_api();
+    MeetingTracker::trackerstatus_api(new Contact(null, $Conf));
     exit;
 }
 
@@ -37,7 +43,7 @@ if ($qreq->base !== null)
     $Conf->set_siteurl($qreq->base);
 if (!$Me->has_database_account()
     && ($key = $Me->capability("tracker_kiosk"))) {
-    $kiosks = setting_json("__tracker_kiosk") ? : (object) array();
+    $kiosks = $Conf->setting_json("__tracker_kiosk") ? : (object) array();
     if (isset($kiosks->$key) && $kiosks->$key->update_at >= $Now - 172800) {
         if ($kiosks->$key->update_at < $Now - 3600) {
             $kiosks->$key->update_at = $Now;
@@ -53,13 +59,11 @@ if ($qreq->p && ctype_digit($qreq->p)) {
 }
 
 // requests
-if (isset(SiteLoader::$api_map[$qreq->fn])) {
-    SiteLoader::call_api($qreq->fn, $Me, $qreq, $Conf->paper);
-    json_exit(["ok" => false, "error" => "Internal error."]);
-}
+if ($Conf->has_api($qreq->fn))
+    $Conf->call_api_exit($qreq->fn, $Me, $qreq, $Conf->paper);
 
 if ($qreq->fn === "jserror") {
-    $url = $qreq->url;
+    $url = (string) $qreq->url;
     if (preg_match(',[/=]((?:script|jquery)[^/&;]*[.]js),', $url, $m))
         $url = $m[1];
     if (($n = $qreq->lineno))
@@ -97,11 +101,16 @@ if ($qreq->fn === "jserror") {
 }
 
 if ($qreq->fn === "setsession") {
-    if (preg_match('/\A(foldpaper[abpt]|foldpscollab|foldhomeactivity|(?:pl|pf|ul)display)(|\.[a-zA-Z0-9_]+)\z/', (string) $qreq->var, $m)) {
+    if (preg_match('/\A(foldpaper[abpt]|foldpscollab|foldhomeactivity|(?:pl|pf|ul)display|scoresort)(|\..*)\z/', (string) $qreq->var, $m)) {
         $val = $qreq->val;
         if ($m[2]) {
             $on = !($val !== null && intval($val) > 0);
-            displayOptionsSet($m[1], substr($m[2], 1), $on);
+            if ($m[1] === "pldisplay" || $m[1] === "pfdisplay")
+                PaperList::change_display($Me, substr($m[1], 0, 2), substr($m[2], 1), $on);
+            else if (preg_match('/\A\.[-a-zA-Z0-9_:]+\z/', $m[2]))
+                displayOptionsSet($m[1], substr($m[2], 1), $on);
+            else
+                json_exit(["ok" => false]);
         } else
             $Conf->save_session($m[1], $val !== null ? intval($val) : null);
         json_exit(["ok" => true]);
@@ -113,18 +122,17 @@ if ($qreq->fn === "events" && $Me->is_reviewer()) {
     $from = $qreq->from;
     if (!$from || !ctype_digit($from))
         $from = $Now;
-    $entries = $Conf->reviewerActivity($Me, $from, 10);
     $when = $from;
-    $rows = array();
-    $rf = ReviewForm::get();
-    foreach ($entries as $which => $xr)
-        if ($xr->isComment) {
-            $rows[] = CommentInfo::unparse_flow_entry($xr, $Me, "");
-            $when = $xr->timeModified;
-        } else {
-            $rows[] = $rf->reviewFlowEntry($Me, $xr, "");
-            $when = $xr->reviewSubmitted;
-        }
+    $rf = $Conf->review_form();
+    $events = new PaperEvents($Me, false);
+    $rows = [];
+    foreach ($events->events($when, 10) as $xr) {
+        if ($xr->crow)
+            $rows[] = $xr->crow->unparse_flow_entry($Me);
+        else
+            $rows[] = $rf->unparse_flow_entry($xr->prow, $xr->rrow, $Me);
+        $when = $xr->eventTime;
+    }
     json_exit(["ok" => true, "from" => (int) $from, "to" => (int) $when - 1,
                "rows" => $rows]);
 } else if ($qreq->fn === "events")
@@ -132,13 +140,13 @@ if ($qreq->fn === "events" && $Me->is_reviewer()) {
 
 if ($qreq->fn === "searchcompletion") {
     $s = new PaperSearch($Me, "");
-    $Conf->ajaxExit(array("ok" => true, "searchcompletion" => $s->search_completion()));
+    json_exit(["ok" => true, "searchcompletion" => $s->search_completion()]);
 }
 
 
 // from here on: `status` and `track` requests
 if ($qreq->fn === "track")
-    MeetingTracker::track_api($qreq, $Me); // may fall through to act like `status`
+    MeetingTracker::track_api($Me, $qreq); // may fall through to act like `status`
 
 $j = $Me->my_deadlines($Conf->paper);
 
@@ -154,11 +162,12 @@ if ($qreq->conflist && $Me->has_email() && ($cdb = Contact::contactdb())) {
     }
 }
 
-$pj = (object) array();
-if ($Conf->paper && $Me->can_view_tags($Conf->paper))
+if ($Conf->paper && $Me->can_view_tags($Conf->paper)) {
+    $pj = (object) ["pid" => $Conf->paper->paperId];
     $Conf->paper->add_tag_info_json($pj, $Me);
-if (count((array) $pj))
-    $j->p = [$Conf->paper->paperId => $pj];
+    if (count((array) $pj) > 1)
+        $j->p = [$Conf->paper->paperId => $pj];
+}
 
 $j->ok = true;
-$Conf->ajaxExit($j);
+json_exit($j);

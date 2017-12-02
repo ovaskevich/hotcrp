@@ -1,6 +1,6 @@
 <?php
 // users.php -- HotCRP people listing/editing page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 require_once("src/initweb.php");
@@ -14,15 +14,16 @@ else if (isset($_REQUEST["getgo"]) && isset($_REQUEST["getaction"]))
 
 // list type
 $tOpt = array();
-$tOpt["pc"] = "Program committee";
-if ($Me->isPC && count($pctags = pcTags())) {
+if ($Me->can_view_pc())
+    $tOpt["pc"] = "Program committee";
+if ($Me->can_view_contact_tags() && count($pctags = $Conf->pc_tags())) {
     foreach ($pctags as $t)
         if ($t != "pc")
             $tOpt["#$t"] = "#$t program committee";
 }
 if ($Me->isPC)
     $tOpt["admin"] = "System administrators";
-if ($Me->privChair || ($Me->isPC && $Conf->timePCViewAllReviews())) {
+if ($Me->privChair || ($Me->isPC && $Conf->setting("pc_seeallrev"))) {
     $tOpt["re"] = "All reviewers";
     $tOpt["ext"] = "External reviewers";
     $tOpt["extsub"] = "External reviewers who completed a review";
@@ -41,6 +42,8 @@ if ($Me->privChair) {
     $tOpt["auuns"] = "Contact authors of non-submitted papers";
     $tOpt["all"] = "All users";
 }
+if (empty($tOpt))
+    $Me->escape();
 if (isset($_REQUEST["t"]) && !isset($tOpt[$_REQUEST["t"]])) {
     if (str_starts_with($_REQUEST["t"], "pc:")
         && isset($tOpt["#" . substr($_REQUEST["t"], 3)]))
@@ -86,7 +89,7 @@ if ((isset($_REQUEST["pap"]) && is_array($_REQUEST["pap"]))
 }
 
 if ($getaction == "nameemail" && isset($papersel) && $Me->isPC) {
-    $result = $Conf->qe("select firstName first, lastName last, email, affiliation from ContactInfo where " . paperselPredicate($papersel) . " order by lastName, firstName, email");
+    $result = $Conf->qe_raw("select firstName first, lastName last, email, affiliation from ContactInfo where " . paperselPredicate($papersel) . " order by lastName, firstName, email");
     $people = edb_orows($result);
     downloadCSV($people, array("first", "last", "email", "affiliation"), "users",
                 array("selection" => true));
@@ -97,78 +100,77 @@ function urlencode_matches($m) {
 }
 
 if ($getaction == "pcinfo" && isset($papersel) && $Me->privChair) {
-    assert($Conf->sversion >= 73);
-    $result = $Conf->qe("select firstName first, lastName last, email,
-        preferredEmail preferred_email, affiliation,
-        voicePhoneNumber phone,
-        collaborators, defaultWatch, roles, disabled, contactTags tags, data,
-        group_concat(concat(topicId,':'," . $Conf->query_topic_interest() . ")) topic_interest
-        from ContactInfo
-        left join TopicInterest on (TopicInterest.contactId=ContactInfo.contactId and TopicInterest.interest is not null)
-        where " . paperselPredicate($papersel) . "
-        group by ContactInfo.contactId order by lastName, firstName, email");
+    $users = [];
+    $result = $Conf->qe_raw("select ContactInfo.* from ContactInfo where " . paperselPredicate($papersel));
+    while (($user = Contact::fetch($result, $Conf)))
+        $users[] = $user;
+    Dbl::free($result);
+
+    usort($users, "Contact::compare");
+    Contact::load_topic_interests($users);
 
     // NB This format is expected to be parsed by profile.php's bulk upload.
-    $topics = $Conf->topic_map();
-    $people = array();
-    $has = (object) array("topics" => array());
-    while (($row = edb_orow($result))) {
-        if ($row->phone)
-            $has->phone = true;
-        if ($row->preferred_email && $row->preferred_email != $row->email)
-            $has->preferred_email = true;
-        if ($row->disabled)
-            $has->disabled = true;
-        if ($row->tags && ($row->tags = trim($row->tags)))
-            $has->tags = true;
-        if ($row->topic_interest
-            && preg_match_all('|(\d+):(-?\d+)|', $row->topic_interest, $m, PREG_SET_ORDER)) {
-            foreach ($m as $x)
-                if (($tn = @$topics[$x[1]]) && $x[2]) {
-                    $k = "ti$x[1]";
-                    $row->$k = (int) $x[2];
-                    @($has->topics[$x[1]] = true);
-                }
+    $tagger = new Tagger($Me);
+    $people = [];
+    $has = (object) [];
+    foreach ($users as $user) {
+        $row = (object) ["first" => $user->firstName, "last" => $user->lastName,
+            "email" => $user->email, "phone" => $user->voicePhoneNumber,
+            "disabled" => !!$user->disabled, "affiliation" => $user->affiliation,
+            "collaborators" => rtrim($user->collaborators)];
+        if ($user->preferredEmail && $user->preferredEmail !== $user->email)
+            $row->preferred_email = $user->preferredEmail;
+        if ($user->contactTags)
+            $row->tags = $tagger->unparse($user->contactTags);
+        foreach ($user->topic_interest_map() as $t => $i) {
+            $k = "topic$t";
+            $row->$k = $i;
         }
-        $row->follow = array();
-        if ($row->defaultWatch & WATCH_COMMENT)
-            $row->follow[] = "reviews";
-        if (($row->defaultWatch & WATCH_ALLCOMMENTS)
-            && ($row->roles & Contact::ROLE_PCLIKE))
-            $row->follow[] = "allreviews";
-        if (($row->defaultWatch & (WATCHTYPE_FINAL_SUBMIT << WATCHSHIFT_ALL))
-            && ($row->roles & (Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)))
-            $row->follow[] = "allfinal";
-        $row->follow = join(",", $row->follow);
-        if ($row->roles & (Contact::ROLE_PC | Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) {
+        $f = array();
+        if ($user->defaultWatch & (WATCHTYPE_COMMENT << WATCHSHIFT_ON))
+            $f[] = "reviews";
+        if (($user->defaultWatch & (WATCHTYPE_COMMENT << WATCHSHIFT_ALLON))
+            && ($user->roles & Contact::ROLE_PCLIKE))
+            $f[] = "allreviews";
+        if (($user->defaultWatch & (WATCHTYPE_FINAL_SUBMIT << WATCHSHIFT_ALLON))
+            && ($user->roles & (Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)))
+            $f[] = "allfinal";
+        $row->follow = join(",", $f);
+        if ($user->roles & (Contact::ROLE_PC | Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) {
             $r = array();
-            if ($row->roles & Contact::ROLE_CHAIR)
+            if ($user->roles & Contact::ROLE_CHAIR)
                 $r[] = "chair";
-            if ($row->roles & Contact::ROLE_PC)
+            if ($user->roles & Contact::ROLE_PC)
                 $r[] = "pc";
-            if ($row->roles & Contact::ROLE_ADMIN)
+            if ($user->roles & Contact::ROLE_ADMIN)
                 $r[] = "sysadmin";
             $row->roles = join(",", $r);
         } else
             $row->roles = "";
         $people[] = $row;
+
+        foreach ((array) $row as $k => $v)
+            if ($v !== null && $v !== false && $v !== "")
+                $has->$k = true;
     }
 
     $header = array("first", "last", "email");
-    if (@$has->preferred_email)
+    if (isset($has->preferred_email))
         $header[] = "preferred_email";
     $header[] = "roles";
-    if (@$has->tags)
+    if (isset($has->tags))
         $header[] = "tags";
     array_push($header, "affiliation", "collaborators", "follow");
-    if (@$has->phone)
+    if (isset($has->phone))
         $header[] = "phone";
     $selection = $header;
-    foreach ($topics as $id => $tn)
-        if (isset($has->topics[$id])) {
+    foreach ($Conf->topic_map() as $t => $tn) {
+        $k = "topic$t";
+        if (isset($has->$k)) {
             $header[] = "topic: " . $tn;
-            $selection[] = "ti$id";
+            $selection[] = $k;
         }
+    }
     downloadCSV($people, $header, "pcinfo", array("selection" => $selection));
 }
 
@@ -176,9 +178,9 @@ if ($getaction == "pcinfo" && isset($papersel) && $Me->privChair) {
 // modifications
 function modify_confirm($j, $ok_message, $ok_message_optional) {
     global $Conf;
-    if (@$j->ok && @$j->warnings)
+    if (get($j, "ok") && get($j, "warnings"))
         $Conf->warnMsg("<div>" . join("</div><div style='margin-top:0.5em'>", $j->warnings) . "</div>");
-    if (@$j->ok && $ok_message && (!$ok_message_optional || !@$j->warnings))
+    if (get($j, "ok") && $ok_message && (!$ok_message_optional || !get($j, "warnings")))
         $Conf->confirmMsg($ok_message);
 }
 
@@ -223,7 +225,7 @@ function do_tags() {
         $likes = array();
         $removes = array();
         foreach ($t1 as $t) {
-            list($tag, $index) = TagInfo::split_index($t);
+            list($tag, $index) = TagInfo::unpack($t);
             $removes[] = $t;
             $likes[] = "contactTags like " . Dbl::utf8ci("'% " . sqlq_for_like($tag) . "#%'");
         }
@@ -241,11 +243,11 @@ function do_tags() {
     foreach ($users as $cid => $cj) {
         $us = new UserStatus(array("send_email" => false));
         if (!$us->save($cj))
-            $errors = array_merge($errors, $us->error_messages());
+            $errors = array_merge($errors, $us->errors());
     }
     Dbl::qe("unlock tables");
     Conf::$no_invalidate_caches = false;
-    $Conf->invalidateCaches(["pc" => true]);
+    $Conf->invalidate_caches(["pc" => true]);
     // report
     if (!count($errors)) {
         $Conf->confirmMsg("Tags saved.");
@@ -264,13 +266,13 @@ if (isset($_REQUEST["redisplay"])) {
     $Conf->save_session("uldisplay", "");
     foreach (ContactList::$folds as $key)
         displayOptionsSet("uldisplay", $key, defval($_REQUEST, "show$key", 0));
-    foreach (ReviewForm::all_fields() as $f)
+    foreach ($Conf->all_review_fields() as $f)
         if ($f->has_options)
             displayOptionsSet("uldisplay", $f->id, defval($_REQUEST, "show{$f->id}", 0));
 }
-if (isset($_REQUEST["scoresort"])
-    && ($_REQUEST["scoresort"] == "A" || $_REQUEST["scoresort"] == "V"
-        || $_REQUEST["scoresort"] == "D"))
+if (isset($_REQUEST["scoresort"]))
+    $_REQUEST["scoresort"] = ListSorter::canonical_short_score_sort($_REQUEST["scoresort"]);
+if (isset($_REQUEST["scoresort"]))
     $Conf->save_session("scoresort", $_REQUEST["scoresort"]);
 
 
@@ -285,7 +287,7 @@ $Conf->header($title, "accounts", actionBar());
 
 $pl = new ContactList($Me, true);
 $pl_text = $pl->table_html($_REQUEST["t"], hoturl("users", ["t" => $_REQUEST["t"]]),
-                     $tOpt[$_REQUEST["t"]], 'uldisplay.$');
+                     $tOpt[$_REQUEST["t"]], 'uldisplay.');
 
 
 // form
@@ -297,7 +299,7 @@ if (count($tOpt) > 1) {
     echo Ht::form_div(hoturl("users"), array("method" => "get"));
     if (isset($_REQUEST["sort"]))
         echo Ht::hidden("sort", $_REQUEST["sort"]);
-    echo Ht::select("t", $tOpt, $_REQUEST["t"], array("id" => "contactsform1_d")),
+    echo Ht::select("t", $tOpt, $_REQUEST["t"], ["class" => "want-focus"]),
         " &nbsp;", Ht::submit("Go"), "</div></form>";
 
     echo "</div><div class='tld2'>";
@@ -310,19 +312,20 @@ if (count($tOpt) > 1) {
 
     echo "<table><tr><td><strong>Show:</strong> &nbsp;</td>
   <td class='pad'>";
-    $Conf->footerScript('foldmap.ul={"aff":2,"tags":3,"topics":1};');
-    foreach (array("aff" => "Affiliations", "collab" => "Collaborators",
-                   "tags" => "Tags", "topics" => "Topics") as $fold => $text)
-        if (@$pl->have_folds[$fold] !== null) {
+    foreach (array("tags" => "Tags",
+                   "aff" => "Affiliations", "collab" => "Collaborators",
+                   "topics" => "Topics") as $fold => $text)
+        if (get($pl->have_folds, $fold) !== null) {
+            $k = array_search($fold, ContactList::$folds) + 1;
             echo Ht::checkbox("show$fold", 1, $pl->have_folds[$fold],
-                               array("onchange" => "fold('ul',!this.checked,'$fold')")),
+                              ["data-fold-target" => "foldul#$k", "class" => "js-foldup"]),
                 "&nbsp;", Ht::label($text), "<br />\n";
         }
     echo "</td>";
     if (isset($pl->scoreMax)) {
         echo "<td class='pad'>";
         $revViewScore = $Me->aggregated_view_score_bound();
-        foreach (ReviewForm::all_fields() as $f)
+        foreach ($Conf->all_review_fields() as $f)
             if ($f->view_score > $revViewScore && $f->has_options) {
                 $checked = strpos(displayOptionsSet("uldisplay"), $f->id) !== false;
                 echo Ht::checkbox("show{$f->id}", 1, $checked),
@@ -332,12 +335,13 @@ if (count($tOpt) > 1) {
     }
     echo "<td>", Ht::submit("redisplay", "Redisplay"), "</td></tr>\n";
     if (isset($pl->scoreMax)) {
-        $ss = array();
-        foreach (array("A", "V", "D") as $k) /* ghetto array_intersect_key */
-            if (isset(ListSorter::$score_sorts[$k]))
-                $ss[$k] = ListSorter::$score_sorts[$k];
+        $ss = [];
+        foreach (ListSorter::score_sort_selector_options() as $k => $v)
+            if (in_array($k, ["average", "variance", "maxmin"]))
+                $ss[$k] = $v;
         echo "<tr><td colspan='3'><div class='g'></div><b>Sort scores by:</b> &nbsp;",
-            Ht::select("scoresort", $ss, $Conf->session("scoresort", "A")),
+            Ht::select("scoresort", $ss,
+                       ListSorter::canonical_long_score_sort($Conf->session("scoresort", "A"))),
             "</td></tr>";
     }
     echo "</table></div></form>";
@@ -346,17 +350,17 @@ if (count($tOpt) > 1) {
 
     // Tab selectors
     echo "<tr><td class='tllx'><table><tr>
-  <td><div class='tll1'><a class='tla' onclick='return crpfocus(\"contactsform\", 1)' href=''>User selection</a></div></td>
-  <td><div class='tll2'><a class='tla' onclick='return crpfocus(\"contactsform\", 2)' href=''>Display options</a></div></td>
+  <td><div class='tll1'><a class='ui tla' href=''>User selection</a></div></td>
+  <td><div class='tll2'><a class='ui tla' href=''>Display options</a></div></td>
 </tr></table></td></tr>
 </table>\n\n";
 }
 
 
 if ($Me->privChair && $_REQUEST["t"] == "pc")
-    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new&amp;role=pc") . "' class='button'>Add PC member</a></p><p>Select a PC member’s name to edit their profile or remove them from the PC.</p>");
+    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new&amp;role=pc") . "' class='btn'>Add PC member</a></p><p>Select a PC member’s name to edit their profile or remove them from the PC.</p>");
 else if ($Me->privChair && $_REQUEST["t"] == "all")
-    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new") . "' class='button'>Create account</a></p><p>Select a user to edit their profile.  Select " . Ht::img("viewas.png", "[Act as]") . " to view the site as that user would see it.</p>");
+    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new") . "' class='btn'>Create account</a></p><p>Select a user to edit their profile.  Select " . Ht::img("viewas.png", "[Act as]") . " to view the site as that user would see it.</p>");
 
 
 if (isset($pl->any->sel)) {

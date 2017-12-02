@@ -1,6 +1,6 @@
 <?php
 // formulagraph.php -- HotCRP class for drawing graphs
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class FormulaGraph {
@@ -12,27 +12,34 @@ class FormulaGraph {
 
     const REVIEWER_COLOR = 1;
 
-    public $type = 0;
-    public $fx;
-    public $fy;
-    public $fx_query = false;
-    private $queries = array();
-    private $query_styles = array();
-    private $papermap = array();
-    private $reviewers = array();
-    private $reviewer_color = false;
-    private $remapped_rounds = array();
-    public $error_html = array();
-    public $errf = array();
+    const X_QUERY = 1;
+    const X_TAG = 2;
 
-    public function __construct($fx, $fy) {
-        $fx = simplify_whitespace($fx);
+    public $conf;
+    public $user;
+    public $type = 0;
+    private $fx;
+    private $fxs;
+    private $fx_expression;
+    public $fy;
+    public $fx_type = 0;
+    private $queries = [];
+    private $query_styles = [];
+    private $papermap = [];
+    private $reviewers = [];
+    private $reviewer_color = false;
+    private $remapped_rounds = [];
+    private $tags = [];
+    private $_data;
+    public $error_html = [];
+    public $errf = [];
+
+    function __construct(Contact $user, $fx, $fy) {
+        $this->conf = $user->conf;
+        $this->user = $user;
+
+        // Y axis expression
         $fy = simplify_whitespace($fy);
-        if (strcasecmp($fx, "query") == 0 || strcasecmp($fx, "search") == 0) {
-            $this->fx = new Formula("0", true);
-            $this->fx_query = true;
-        } else
-            $this->fx = new Formula($fx, true);
         if (strcasecmp($fy, "cdf") == 0) {
             $this->type = self::CDF;
             $this->fy = new Formula("0", true);
@@ -54,12 +61,44 @@ class FormulaGraph {
                 $fy = $m[1];
             }
             $this->fy = new Formula($fy, true);
-            if (!$this->type)
-                $this->type = $this->fy->datatypes() ? self::SCATTER : self::BARCHART;
         }
 
-        if ($this->fx->error_html()) {
-            $this->error_html[] = "X axis formula: " . $this->fx->error_html();
+        $this->fy->check($this->user);
+        if (!$this->type) {
+            $this->type = self::SCATTER;
+            if (!$this->fy->datatypes() && $this->fy->can_combine())
+                $this->type = self::BARCHART;
+        }
+
+        // X axis expression(s)
+        $this->fx_expression = $fx = simplify_whitespace($fx);
+        if (strcasecmp($fx, "query") == 0 || strcasecmp($fx, "search") == 0) {
+            $this->fx = new Formula("0", true);
+            $this->fx_type = self::X_QUERY;
+        } else if (strcasecmp($fx, "tag") == 0) {
+            $this->fx = new Formula("0", true);
+            $this->fx_type = self::X_TAG;
+        } else
+            $this->fx = new Formula($fx, true);
+
+        $fx = $this->fx;
+        if ($this->type !== self::CDF) {
+            $fx->check($this->user);
+        } else {
+            while (1) {
+                $rest = $fx->check_prefix($this->user);
+                if ($rest === false)
+                    break;
+                $this->fxs[] = $fx;
+                $rest = preg_replace('/\A\s*;*\s*/', '', $rest);
+                if ($rest === "")
+                    break;
+                $fx = new Formula($rest, true);
+            }
+        }
+
+        if ($fx->error_html()) {
+            $this->error_html[] = "X axis formula: " . $fx->error_html();
             $this->errf["fx"] = true;
         }
         if ($this->fy->error_html()) {
@@ -69,53 +108,47 @@ class FormulaGraph {
             $this->error_html[] = "Y axis formula “" . htmlspecialchars($fy) . "” is unsuitable for bar charts, use an aggregate function like “sum(" . htmlspecialchars($fy) . ")”.";
             $this->errf["fy"] = true;
             $this->fy = new Formula("sum(0)", true);
+            $this->fy->check($this->user);
+        } else if ($this->type === self::CDF && $this->fx_type === self::X_TAG) {
+            $this->error_html[] = "CDFs by tag don’t make sense.";
+            $this->errf["fy"] = true;
         }
     }
 
-    public function add_query($q, $style, $fieldname = false) {
-        global $Me;
+    function add_query($q, $style, $fieldname = false) {
         $qn = count($this->queries);
         $this->queries[] = $q;
         if ($style === "by-tag" || $style === "default")
             $style = "";
         $this->query_styles[] = $style;
-        $psearch = new PaperSearch($Me, array("q" => $q));
-        foreach ($psearch->paperList() as $pid)
+        $psearch = new PaperSearch($this->user, array("q" => $q));
+        foreach ($psearch->paper_ids() as $pid)
             $this->papermap[$pid][] = $qn;
-        if (count($psearch->warnings)) {
+        if (!empty($psearch->warnings)) {
             $this->error_html = array_merge($this->error_html, $psearch->warnings);
             if ($fieldname)
                 $this->errf[$fieldname] = true;
         }
     }
 
-    private function _cdf_data($result) {
-        global $Me;
+    function fx_expression() {
+        return $this->fx_expression;
+    }
+
+    private function _cdf_data_one_fx($fx, $qcolors, $dashp, PaperInfoSet $rowset) {
         $data = [];
-        $query_color_classes = [];
 
-        $fxf = $this->fx->compile_function($Me);
+        $fxf = $fx->compile_function();
         $reviewf = null;
-        if ($this->fx->needs_review())
-            $reviewf = Formula::compile_indexes_function($Me, $this->fx->datatypes);
+        if ($fx->is_indexed())
+            $reviewf = Formula::compile_indexes_function($this->user, $this->fx->datatypes());
 
-        while (($prow = PaperInfo::fetch($result, $Me))) {
-            if (!$Me->can_view_paper($prow))
-                continue;
-            $revs = $reviewf ? $reviewf($prow, $Me) : [null];
+        foreach ($rowset->all() as $prow) {
+            $revs = $reviewf ? $reviewf($prow, $this->user) : [null];
             $queries = get($this->papermap, $prow->paperId);
-            foreach ($queries as $q)
-                if (get($query_color_classes, $q) !== "") {
-                    $c = "";
-                    if ($prow->paperTags)
-                        $c = TagInfo::color_classes($prow->viewable_tags($Me), 2);
-                    if ($c !== "" && (get($query_color_classes, $q) ? : $c) !== $c)
-                        $c = "";
-                    $query_color_classes[$q] = $c;
-                }
             foreach ($revs as $rcid)
-                if (($x = $fxf($prow, $rcid, $Me)) !== null) {
-                    if ($this->fx_query) {
+                if (($x = $fxf($prow, $rcid, $this->user)) !== null) {
+                    if ($this->fx_type === self::X_QUERY) {
                         foreach ($queries as $q)
                             $data[0][] = $q;
                     } else {
@@ -125,83 +158,144 @@ class FormulaGraph {
                 }
         }
 
+        $fxlabel = count($this->fxs) > 1 ? $fx->expression : "";
         foreach ($data as $q => &$d) {
             $d = (object) ["d" => $d];
-            $s = get($this->query_styles, $q);
+            $s = $qcolors[$q];
             if ($s && $s !== "plain")
                 $d->className = $s;
-            else if ($s && get($query_color_classes, $style))
-                $d->className = $query_color_classes[$style];
-            if (get($this->queries, $q))
-                $d->label = $this->queries[$q];
+            $dlabel = "";
+            if (get($this->queries, $q) && count($this->queries) > 1)
+                $dlabel = $this->queries[$q];
+            if ($dlabel || $fxlabel)
+                $d->label = rtrim("$fxlabel $dlabel");
+            if ($dashp)
+                $d->dashpattern = $dashp;
         }
         unset($d);
         return $data;
     }
+    private function _cdf_data(PaperInfoSet $rowset) {
+        // calculate query styles
+        $qcolors = $this->query_styles;
+        $need_anal = array_fill(0, count($qcolors), false);
+        $nneed_anal = 0;
+        foreach ($qcolors as $qi => $q) {
+            if ($qcolors[$qi] === "" || $qcolors[$qi] === "plain") {
+                $qcolors[$qi] = null;
+                $need_anal[$qi] = true;
+                ++$nneed_anal;
+            }
+        }
+        foreach ($rowset->all() as $prow) {
+            if ($nneed_anal === 0)
+                break;
+            foreach (get($this->papermap, $prow->paperId) as $qi) {
+                if ($need_anal[$qi]) {
+                    $c = [];
+                    if ($prow->paperTags)
+                        $c = $this->conf->tags()->styles($prow->viewable_tags($this->user), TagMap::STYLE_BG);
+                    if ($qcolors[$qi] !== null)
+                        $c = array_values(array_intersect($qcolors[$qi], $c));
+                    if (empty($c)) {
+                        $qcolors[$qi] = "";
+                        $need_anal[$qi] = false;
+                        --$nneed_anal;
+                    } else
+                        $qcolors[$qi] = $c;
+                }
+            }
+        }
+        if ($nneed_anal !== 0) {
+            foreach ($need_anal as $qi => $na) {
+                if ($na)
+                    $qcolors[$qi] = join(" ", $qcolors[$qi]);
+            }
+        }
+
+        // compute data
+        $this->_data = [];
+        $dashps = [null, [10,5], [5,5], [1,1]];
+        foreach ($this->fxs as $i => $fx) {
+            $dashp = $dashps[$i % count($dashps)];
+            $this->_data = array_merge($this->_data,
+                $this->_cdf_data_one_fx($fx, $qcolors, $dashp, $rowset));
+        }
+    }
 
     private function _prepare_reviewer_color(Contact $user) {
         $this->reviewer_color = array();
-        foreach (pcMembers() as $p)
-            $this->reviewer_color[$p->contactId] = TagInfo::color_classes($p->viewable_tags($user));
+        foreach ($this->conf->pc_members() as $p)
+            $this->reviewer_color[$p->contactId] = $this->conf->tags()->color_classes($p->viewable_tags($user), true);
     }
 
     private function _paper_style(PaperInfo $prow) {
-        global $Me;
         $qnum = $this->papermap[$prow->paperId][0];
         $s = get($this->query_styles, (int) $qnum);
-        if (!$s && $this->reviewer_color && $Me->can_view_reviewer_tags($prow))
+        if (!$s && $this->reviewer_color && $this->user->can_view_reviewer_tags($prow))
             return self::REVIEWER_COLOR;
-        else if (!$s && $prow->paperTags && ($c = $prow->viewable_tags($Me)))
-            return $c;
+        else if (!$s && $prow->paperTags && ($c = $prow->viewable_tags($this->user)))
+            return trim($prow->conf->tags()->color_classes($c), true);
         else if ($s === "plain")
             return "";
         else
             return $s;
     }
 
-    private function _scatter_data($result) {
-        global $Me;
+    private function _add_tag_data(&$data, $d, PaperInfo $prow) {
+        assert($this->fx_type === self::X_TAG);
+        $tags = TagInfo::split_unpack($prow->viewable_tags($this->user));
+        foreach ($tags as $ti) {
+            if (!isset($this->tags[$ti[0]]))
+                $this->tags[$ti[0]] = count($this->tags);
+            $d[0] = $this->tags[$ti[0]];
+            $data[] = $d;
+        }
+    }
+
+    private function _scatter_data(PaperInfoSet $rowset) {
         $data = [];
         if ($this->fx->result_format() === Fexpr::FREVIEWER && ($this->type & self::BOXPLOT))
-            $this->_prepare_reviewer_color($Me);
+            $this->_prepare_reviewer_color($this->user);
 
-        $fxf = $this->fx->compile_function($Me);
-        $fyf = $this->fy->compile_function($Me);
+        $fxf = $this->fx->compile_function();
+        $fyf = $this->fy->compile_function();
         $reviewf = null;
-        if ($this->fx->needs_review() || $this->fy->needs_review())
-            $reviewf = Formula::compile_indexes_function($Me, $this->fx->datatypes | $this->fy->datatypes);
+        if ($this->fx->is_indexed() || $this->fy->is_indexed())
+            $reviewf = Formula::compile_indexes_function($this->user, $this->fx->datatypes() | $this->fy->datatypes());
 
-        while (($prow = PaperInfo::fetch($result, $Me))) {
-            if (!$Me->can_view_paper($prow))
-                continue;
+        foreach ($rowset->all() as $prow) {
             $s = $ps = $this->_paper_style($prow);
             $d = [0, 0, 0];
-            $revs = $reviewf ? $reviewf($prow, $Me) : [null];
+            $revs = $reviewf ? $reviewf($prow, $this->user) : [null];
             foreach ($revs as $rcid) {
-                $d[0] = $fxf($prow, $rcid, $Me);
-                $d[1] = $fyf($prow, $rcid, $Me);
+                $rrow = $rcid ? $prow->review_of_user($rcid) : null;
+                $d[0] = $fxf($prow, $rcid, $this->user);
+                $d[1] = $fyf($prow, $rcid, $this->user);
                 if ($d[0] === null || $d[1] === null)
                     continue;
                 $d[2] = $prow->paperId;
-                if ($rcid && ($o = $prow->review_ordinal($rcid)))
-                    $d[2] .= unparseReviewOrdinal($o);
+                if ($rrow && $rrow->reviewOrdinal)
+                    $d[2] .= unparseReviewOrdinal($rrow->reviewOrdinal);
                 if ($ps === self::REVIEWER_COLOR)
                     $s = get($this->reviewer_color, $d[0]) ? : "";
-                if ($this->fx_query) {
+                if ($this->fx_type === self::X_QUERY) {
                     foreach ($this->papermap[$prow->paperId] as $q) {
                         $d[0] = $q;
                         $data[$s][] = $d;
                     }
-                } else
+                } else if ($this->fx_type === self::X_TAG)
+                    $this->_add_tag_data($data[$s], $d, $prow);
+                else
                     $data[$s][] = $d;
             }
         }
-        return $data;
+        $this->_data = $data;
     }
 
     // combine data: [x, y, pids, style, [query]]
 
-    public static function barchart_compare($a, $b) {
+    static function barchart_compare($a, $b) {
         if (get_i($a, 4) != get_i($b, 4))
             return get_i($a, 4) - get_i($b, 4);
         if ($a[0] != $b[0])
@@ -209,35 +303,36 @@ class FormulaGraph {
         return strcmp($a[3], $b[3]);
     }
 
-    private function _combine_data($result) {
-        global $Me;
+    private function _combine_data(PaperInfoSet $rowset) {
         $data = [];
         if ($this->fx->result_format() === Fexpr::FREVIEWER)
-            $this->_prepare_reviewer_color($Me);
+            $this->_prepare_reviewer_color($this->user);
 
-        $fxf = $this->fx->compile_function($Me);
-        list($fytrack, $fycombine) = $this->fy->compile_combine_functions($Me);
+        $fxf = $this->fx->compile_function();
+        list($fytrack, $fycombine) = $this->fy->compile_combine_functions();
         $reviewf = null;
-        if ($this->fx->needs_review() || $this->fy->datatypes)
-            $reviewf = Formula::compile_indexes_function($Me, ($this->fx->needs_review() ? $this->fx->datatypes : 0) | $this->fy->datatypes);
+        if ($this->fx->is_indexed() || $this->fy->datatypes())
+            $reviewf = Formula::compile_indexes_function($this->user, ($this->fx->is_indexed() ? $this->fx->datatypes() : 0) | $this->fy->datatypes());
 
-        while (($prow = PaperInfo::fetch($result, $Me))) {
-            if (!$Me->can_view_paper($prow))
-                continue;
+        foreach ($rowset->all() as $prow) {
             $queries = $this->papermap[$prow->paperId];
             $s = $ps = $this->_paper_style($prow);
-            $revs = $reviewf ? $reviewf($prow, $Me) : [null];
+            $revs = $reviewf ? $reviewf($prow, $this->user) : [null];
             foreach ($revs as $rcid) {
-                if (($x = $fxf($prow, $rcid, $Me)) === null)
+                if (($x = $fxf($prow, $rcid, $this->user)) === null)
                     continue;
+                $rrow = $rcid ? $prow->review_of_user($rcid) : null;
                 if ($ps === self::REVIEWER_COLOR)
                     $s = get($this->reviewer_color, $d[0]) ? : "";
-                $d = [$x, $fytrack($prow, $rcid, $Me), $prow->paperId, $s];
-                if ($rcid && ($o = $prow->review_ordinal($rcid)))
-                    $d[2] .= unparseReviewOrdinal($o);
+                $d = [$x, $fytrack($prow, $rcid, $this->user), $prow->paperId, $s];
+                if ($rrow && $rrow->reviewOrdinal)
+                    $d[2] .= unparseReviewOrdinal($rrow->reviewOrdinal);
                 foreach ($queries as $q) {
                     $q && ($d[4] = $q);
-                    $data[] = $d;
+                    if ($this->fx_type === self::X_TAG)
+                        $this->_add_tag_data($data, $d, $prow);
+                    else
+                        $data[] = $d;
                 }
             }
         }
@@ -265,32 +360,33 @@ class FormulaGraph {
             }
             $ndata[] = $d;
         }
-        return $ndata;
+        $this->_data = $ndata;
     }
 
     private function _valuemap_axes($format) {
         $axes = 0;
-        if (!$this->fx_query && $this->fx->result_format() === $format)
+        if ((!$this->fx_type && $this->fx->result_format() === $format)
+            || ($this->fx_type == self::X_TAG && $format === Fexpr::FTAG))
             $axes |= 1;
         if ($this->type != self::CDF && $this->fy->result_format() === $format)
             $axes |= 2;
         return $axes;
     }
 
-    private function _valuemap_collect($data, $axes) {
+    private function _valuemap_collect($axes) {
         assert(!!$axes);
         $vs = [];
         if ($this->type == self::CDF) {
-            foreach ($data as $dx)
+            foreach ($this->_data as $dx)
                 foreach ($dx->d as $d)
                     $vs[$d] = true;
         } else if ($this->type & self::BARCHART) {
-            foreach ($data as $d) {
+            foreach ($this->_data as $d) {
                 ($axes & 1) && $d[0] !== null && ($vs[$d[0]] = true);
                 ($axes & 2) && $d[1] !== null && ($vs[$d[1]] = true);
             }
         } else {
-            foreach ($data as $dx)
+            foreach ($this->_data as $dx)
                 foreach ($dx as $d) {
                     ($axes & 1) && $d[0] !== null && ($vs[$d[0]] = true);
                     ($axes & 2) && $d[1] !== null && ($vs[$d[1]] = true);
@@ -299,21 +395,21 @@ class FormulaGraph {
         return $vs;
     }
 
-    private function _valuemap_rewrite(&$data, $axes, $m) {
+    private function _valuemap_rewrite($axes, $m) {
         assert(!!$axes);
         if ($this->type == self::CDF) {
-            foreach ($data as $dx) {
+            foreach ($this->_data as $dx) {
                 foreach ($dx->d as &$d)
                     array_key_exists($d, $m) && ($d = $m[$d]);
                 unset($d);
             }
         } else if ($this->type & self::BARCHART) {
-            foreach ($data as &$d) {
+            foreach ($this->_data as &$d) {
                 ($axes & 1) && array_key_exists($d[0], $m) && ($d[0] = $m[$d[0]]);
                 ($axes & 2) && array_key_exists($d[1], $m) && ($d[1] = $m[$d[1]]);
             }
         } else {
-            foreach ($data as &$dx) {
+            foreach ($this->_data as &$dx) {
                 foreach ($dx as &$d) {
                     ($axes & 1) && array_key_exists($d[0], $m) && ($d[0] = $m[$d[0]]);
                     ($axes & 2) && array_key_exists($d[1], $m) && ($d[1] = $m[$d[1]]);
@@ -323,9 +419,9 @@ class FormulaGraph {
         }
     }
 
-    private function _reviewer_reformat(&$data) {
+    private function _reviewer_reformat() {
         if (!($axes = $this->_valuemap_axes(Fexpr::FREVIEWER))
-            || !($cids = $this->_valuemap_collect($data, $axes)))
+            || !($cids = $this->_valuemap_collect($axes)))
             return;
         $cids = array_filter(array_keys($cids), "is_numeric");
         $result = Dbl::qe("select contactId, firstName, lastName, email, roles, contactTags from ContactInfo where contactId ?a", $cids);
@@ -340,96 +436,143 @@ class FormulaGraph {
             $c->sort_position = ++$i;
             $m[$c->contactId] = $i;
         }
-        $this->_valuemap_rewrite($data, $axes, $m);
+        $this->_valuemap_rewrite($axes, $m);
     }
 
-    private function _revround_reformat(&$data) {
-        global $Conf;
+    private function _revround_reformat() {
         if (!($axes = $this->_valuemap_axes(Fexpr::FROUND))
-            || !($rs = $this->_valuemap_collect($data, $axes)))
+            || !($rs = $this->_valuemap_collect($axes)))
             return;
         $i = 0;
         $m = [];
-        foreach ($Conf->defined_round_list() as $n => $rname)
+        foreach ($this->conf->defined_round_list() as $n => $rname)
             if (get($rs, $n)) {
                 $this->remapped_rounds[++$i] = $rname;
                 $m[$n] = $i;
             }
-        $this->_valuemap_rewrite($data, $axes, $m);
+        $this->_valuemap_rewrite($axes, $m);
     }
 
-    public function data() {
-        global $Conf, $Me;
+    private function _tag_reformat() {
+        if (!($axes = $this->_valuemap_axes(Fexpr::FTAG))
+            || !($rs = $this->_valuemap_collect($axes)))
+            return;
+        $tagger = new Tagger($this->user);
+        uksort($this->tags, [$tagger, "tag_compare"]);
+        $i = -1;
+        $m = [];
+        foreach ($this->tags as $tag => $ri)
+            $m[$ri] = ++$i;
+        $this->_valuemap_rewrite($axes, $m);
+    }
+
+    function data() {
+        if ($this->_data !== null)
+            return $this->_data;
+
         // load data
         $paperIds = array_keys($this->papermap);
         $queryOptions = array("paperId" => $paperIds, "tags" => true);
-        $this->fx->add_query_options($queryOptions, $Me);
-        $this->fy->add_query_options($queryOptions, $Me);
-        if ($this->fx->needs_review() || $this->fy->needs_review())
-            $queryOptions["reviewOrdinals"] = true;
-        $result = Dbl::qe_raw($Conf->paperQuery($Me, $queryOptions));
+        $this->fx->add_query_options($queryOptions);
+        $this->fy->add_query_options($queryOptions);
+        if ($this->fx->is_indexed() || $this->fy->is_indexed())
+            $queryOptions["reviewSignatures"] = true;
+
+        $result = $this->user->paper_result($queryOptions);
+        $rowset = new PaperInfoSet;
+        while (($prow = PaperInfo::fetch($result, $this->user)))
+            if ($this->user->can_view_paper($prow))
+                $rowset->add($prow);
+        Dbl::free($result);
 
         if ($this->type == self::CDF)
-            $data = $this->_cdf_data($result);
+            $this->_cdf_data($rowset);
         else if ($this->type & self::BARCHART)
-            $data = $this->_combine_data($result);
+            $this->_combine_data($rowset);
         else
-            $data = $this->_scatter_data($result);
-        $this->_reviewer_reformat($data);
-        $this->_revround_reformat($data);
+            $this->_scatter_data($rowset);
+        $this->_reviewer_reformat();
+        $this->_revround_reformat();
+        $this->_tag_reformat();
 
-        Dbl::free($result);
-        return $data;
+        return $this->_data;
     }
 
-    public function axis_info_settings($axis) {
-        global $Conf, $Me;
-        $f = $axis == "x" ? $this->fx : $this->fy;
-        $t = array();
-        $counttype = $this->fx->needs_review() ? "reviews" : "papers";
-        if ($axis == "y" && $this->type == self::FBARCHART)
-            $t[] = "label:\"fraction of $counttype\",fraction:true";
-        else if ($axis == "y" && $this->type == self::BARCHART
-                 && $f->expression === "sum(1)")
-            $t[] = "label:\"# $counttype\"";
-        else if ($axis == "y" && $this->type == self::CDF)
-            $t[] = "label:\"CDF of $counttype\"";
-        else if ($axis != "x" || !$this->fx_query)
-            $t[] = "label:" . json_encode($f->expression);
+    function axis_json($axis) {
+        $isx = $axis === "x";
+        $f = $isx ? $this->fx : $this->fy;
+        $j = array();
+
+        $counttype = $this->fx->is_indexed() ? "reviews" : "papers";
+        if ($isx) {
+            $j["label"] = $this->fx_expression;
+        } else if ($this->type === self::FBARCHART) {
+            $j["label"] = "fraction of $counttype";
+            $j["fraction"] = true;
+        } else if ($this->type === self::BARCHART
+                   && $f->expression === "sum(1)") {
+            $j["label"] = "# $counttype";
+        } else if ($this->type === self::CDF) {
+            $j["label"] = "CDF of $counttype";
+        } else if (!$this->fx_type) {
+            $j["label"] = $f->expression;
+        }
+
         $format = $f->result_format();
-        $rticks = ($axis == "y" ? ",axis_setup:hotcrp_graphs.rotate_ticks(-90)" : "");
-        if ($axis == "x" && $this->fx_query) {
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks(" . json_encode($this->queries) . ")";
+        if ($isx && $this->fxs && $format) {
+            foreach ($this->fxs as $fx)
+                if ($fx->result_format() !== $format) {
+                    $format = 0;
+                    break;
+                }
+        }
+        if ($isx && $this->fx_type == self::X_QUERY) {
+            $j["ticks"] = ["named", $this->queries];
+        } else if ($isx && $this->fx_type == self::X_TAG) {
+            $tagger = new Tagger($this->user);
+            $j["ticks"] = ["named", array_map(function ($t) use ($tagger) {
+                return $tagger->unparse($t);
+            }, array_keys($this->tags))];
         } else if ($format instanceof ReviewField) {
-            if ($format->option_letter)
-                $t[] = "flip:true";
             $n = count($format->options);
             $ol = $format->option_letter ? chr($format->option_letter - $n) : null;
-            $t[] = "ticks:hotcrp_graphs.option_letter_ticks("
-                    . $n . "," . json_encode($ol) . "," . json_encode($format->option_class_prefix) . ")";
-        } else if ($format === Fexpr::FREVIEWER) {
-            $x = [];
-            foreach ($this->reviewers as $r) {
-                $rd = ["text" => $Me->name_text_for($r),
-                       "search" => "re:" . $r->email];
-                if ($Me->can_view_reviewer_tags()
-                    && ($colors = $r->viewable_color_classes($Me)))
-                    $rd["color_classes"] = $colors;
-                $x[$r->sort_position] = $rd;
+            $j["ticks"] = ["option_letter", $n, $ol, $format->option_class_prefix];
+            if ($format->option_letter)
+                $j["flip"] = true;
+        } else {
+            if ($format === Fexpr::FREVIEWER) {
+                $x = [];
+                foreach ($this->reviewers as $r) {
+                    $rd = ["text" => $this->user->name_text_for($r),
+                           "search" => "re:" . $r->email];
+                    if ($this->user->can_view_reviewer_tags()
+                        && ($colors = $r->viewable_color_classes($this->user)))
+                        $rd["color_classes"] = $colors;
+                    $x[$r->sort_position] = $rd;
+                }
+                $j["ticks"] = ["named", $x];
+            } else if ($format === Fexpr::FDECISION) {
+                $j["ticks"] = ["named", $this->conf->decision_map()];
+            } else if ($format === Fexpr::FBOOL) {
+                $j["ticks"] = ["named", ["no", "yes"]];
+            } else if ($format instanceof PaperOption && $format->has_selector()) {
+                $j["ticks"] = ["named", $format->selector];
+            } else if ($format === Fexpr::FROUND) {
+                $j["ticks"] = ["named", $this->remapped_rounds];
+            } else if ($format === Fexpr::FREVTYPE) {
+                $j["ticks"] = ["named", ReviewForm::$revtype_names];
             }
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks("
-                    . json_encode($x) . ")" . $rticks;
-        } else if ($format === Fexpr::FDECISION)
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks("
-                    . json_encode($Conf->decision_map()) . ")" . $rticks;
-        else if ($format === Fexpr::FBOOL)
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks({0:\"no\",1:\"yes\"})" . $rticks;
-        else if ($format instanceof PaperOption && $format->has_selector())
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks(" . json_encode($format->selector) . ")" . $rticks;
-        else if ($format === Fexpr::FROUND)
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks(" . json_encode($this->remapped_rounds) . ")" . $rticks;
-        else if ($format === Fexpr::FREVTYPE)
-            $t[] = "ticks:hotcrp_graphs.named_integer_ticks(" . json_encode(ReviewForm::$revtype_names) . ")" . $rticks;
-        return "\"{$axis}\":{" . join(",", $t) . "}";
+            if (!$isx && isset($j["ticks"]))
+                $j["rotate_ticks"] = -90;
+        }
+
+        return $j;
+    }
+
+    function graph_json() {
+        $j = ["data" => $this->data(), "x" => $this->axis_json("x"), "y" => $this->axis_json("y")];
+        if ($this->type === self::CDF)
+            $j["cdf_tooltip_position"] = true;
+        return $j;
     }
 }

@@ -1,6 +1,6 @@
 <?php
 // useractions.php -- HotCRP helpers for user actions
-// HotCRP is Copyright (c) 2008-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2008-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class UserActions {
@@ -20,18 +20,18 @@ class UserActions {
 
     static function disable($ids, $contact) {
         global $Conf;
-        $old_logged_errors = Dbl::$logged_errors;
+        $old_nerrors = Dbl::$nerrors;
         $enabled_cids = Dbl::fetch_first_columns("select contactId from ContactInfo where contactId ?a and disabled=0 and contactId!=?", $ids, $contact->contactId);
         if ($enabled_cids)
             Dbl::qe("update ContactInfo set disabled=1 where contactId ?a", $enabled_cids);
-        if (Dbl::$logged_errors > $old_logged_errors)
+        if (Dbl::$nerrors > $old_nerrors)
             return (object) ["error" => true];
         else if (!count($enabled_cids))
             return (object) ["ok" => true, "warnings" => ["Those accounts were already disabled."]];
         else {
             $Conf->save_logs(true);
             foreach ($enabled_cids as $cid)
-                $Conf->log("Account disabled by $contact->email", $cid);
+                $Conf->log_for($contact, $cid, "Account disabled");
             $Conf->save_logs(false);
             return (object) ["ok" => true];
         }
@@ -39,19 +39,19 @@ class UserActions {
 
     static function enable($ids, $contact) {
         global $Conf;
-        $old_logged_errors = Dbl::$logged_errors;
+        $old_nerrors = Dbl::$nerrors;
         Dbl::qe("update ContactInfo set disabled=1 where contactId ?a and password='' and contactId!=?", $ids, $contact->contactId);
         $disabled_cids = Dbl::fetch_first_columns("select contactId from ContactInfo where contactId ?a and disabled=1 and contactId!=?", $ids, $contact->contactId);
         if ($disabled_cids)
             Dbl::qe("update ContactInfo set disabled=0 where contactId ?a", $disabled_cids);
-        if (Dbl::$logged_errors > $old_logged_errors)
+        if (Dbl::$nerrors > $old_nerrors)
             return (object) ["error" => true];
         else if (!count($disabled_cids))
             return (object) ["ok" => true, "warnings" => ["Those accounts were already enabled."]];
         else {
             $Conf->save_logs(true);
             foreach ($disabled_cids as $cid)
-                $Conf->log("Account enabled by $contact->email", $cid);
+                $Conf->log_for($contact, $cid, "Account enabled");
             $Conf->save_logs(false);
             return self::modify_password_mail("password='' and contactId!=" . $contact->contactId, true, "create", $disabled_cids);
         }
@@ -67,19 +67,5 @@ class UserActions {
         global $Conf;
         return self::modify_password_mail("true", false, "send", $ids);
         $Conf->confirmMsg("Account information sent.");
-    }
-
-    static function save_clickthrough($user) {
-        global $Conf, $Now;
-        $confirmed = false;
-        if (@$_REQUEST["clickthrough_accept"]
-            && @$_REQUEST["clickthrough_sha1"]) {
-            $user->merge_and_save_data(array("clickthrough" => array($_REQUEST["clickthrough_sha1"] => $Now)));
-            $confirmed = true;
-        } else if (@$_REQUEST["clickthrough_decline"])
-            Conf::msg_error("You can’t continue until you accept these terms.");
-        if (@$_REQUEST["ajax"])
-            $Conf->ajaxExit(array("ok" => $confirmed));
-        redirectSelf();
     }
 }

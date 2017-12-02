@@ -1,18 +1,19 @@
 <?php
 // init.php -- HotCRP initialization (test or site)
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
-define("HOTCRP_VERSION", "2.99");
+define("HOTCRP_VERSION", "2.101");
 
 // All review types must be 1 digit
+define("REVIEW_META", 5);
 define("REVIEW_PRIMARY", 4);
 define("REVIEW_SECONDARY", 3);
 define("REVIEW_PC", 2);
 define("REVIEW_EXTERNAL", 1);
 
 define("CONFLICT_NONE", 0);
-define("CONFLICT_PCMARK", 1);
+define("CONFLICT_PCMARK", 1); /* unused */
 define("CONFLICT_AUTHORMARK", 2);
 define("CONFLICT_MAXAUTHORMARK", 7);
 define("CONFLICT_CHAIRMARK", 8);
@@ -20,19 +21,14 @@ define("CONFLICT_AUTHOR", 9);
 define("CONFLICT_CONTACTAUTHOR", 10);
 
 // User explicitly set notification preference (only in PaperWatch.watch)
-define("WATCHSHIFT_EXPLICIT", 0);
+define("WATCHSHIFT_ISSET", 0);
 // Notify if author, reviewer, commenter
-define("WATCHSHIFT_NORMAL", 1);
+define("WATCHSHIFT_ON", 1);
 // Always notify (only in ContactInfo.defaultWatch, generally admin only)
-define("WATCHSHIFT_ALL", 2);
+define("WATCHSHIFT_ALLON", 2);
 
 define("WATCHTYPE_COMMENT", (1 << 0));
-define("WATCH_COMMENTSET", WATCHTYPE_COMMENT << WATCHSHIFT_EXPLICIT);
-define("WATCH_COMMENT", WATCHTYPE_COMMENT << WATCHSHIFT_NORMAL);
-define("WATCH_ALLCOMMENTS", WATCHTYPE_COMMENT << WATCHSHIFT_ALL);
-
 define("WATCHTYPE_REVIEW", (1 << 0)); // same as WATCHTYPE_COMMENT
-
 define("WATCHTYPE_FINAL_SUBMIT", (1 << 3));
 
 define("REV_RATINGS_PC", 0);
@@ -65,24 +61,22 @@ define("VIEWSCORE_MAX", 3);
 define("COMMENTTYPE_DRAFT", 1);
 define("COMMENTTYPE_BLIND", 2);
 define("COMMENTTYPE_RESPONSE", 4);
+define("COMMENTTYPE_BYAUTHOR", 8);
 define("COMMENTTYPE_ADMINONLY", 0x00000);
 define("COMMENTTYPE_PCONLY", 0x10000);
 define("COMMENTTYPE_REVIEWER", 0x20000);
 define("COMMENTTYPE_AUTHOR", 0x30000);
 define("COMMENTTYPE_VISIBILITY", 0xFFF0000);
 
-define("TAG_REGEX_NOTWIDDLE", '[a-zA-Z!@*_:.][-a-zA-Z0-9!@*_:.\/]*');
+define("TAG_REGEX_NOTWIDDLE", '[a-zA-Z@*_:.][-a-zA-Z0-9!@*_:.\/]*');
 define("TAG_REGEX", '~?~?' . TAG_REGEX_NOTWIDDLE);
-define("TAG_MAXLEN", 40);
+define("TAG_MAXLEN", 80);
 define("TAG_INDEXBOUND", 2147483646);
 
 define("CAPTYPE_RESETPASSWORD", 1);
 define("CAPTYPE_CHANGEEMAIL", 2);
 
-define("ALWAYS_OVERRIDE", 9999);
-
-global $OK, $Now, $ConfSitePATH;
-$OK = 1;
+global $Now, $ConfSitePATH;
 $Now = time();
 $ConfSitePATH = null;
 
@@ -105,58 +99,65 @@ set_path_variables();
 // Load code
 class SiteLoader {
     static $map = [
-        "AssignmentSet" => "src/assigners.php",
+        "AbbreviationClass" => "lib/abbreviationmatcher.php",
+        "AssignmentCountSet" => "src/assignmentset.php",
+        "AutoassignerCosts" => "src/autoassigner.php",
+        "BanalSettings" => "src/settings/s_subform.php",
         "CapabilityManager" => "src/capability.php",
-        "ColumnErrors" => "lib/column.php",
-        "ContactSearch" => "src/papersearch.php",
-        "CountMatcher" => "src/papersearch.php",
+        "ContactCountMatcher" => "src/papersearch.php",
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
-        "FormulaPaperColumn" => "src/papercolumn.php",
+        "FormatChecker" => "src/formatspec.php",
+        "Formula_PaperColumn" => "src/papercolumn.php",
         "JsonSerializable" => "lib/json.php",
         "LoginHelper" => "lib/login.php",
         "MailPreparation" => "lib/mailer.php",
         "MimeText" => "lib/mailer.php",
+        "NameInfo" => "lib/text.php",
         "NumericOrderPaperColumn" => "src/papercolumn.php",
-        "ReviewAssigner" => "src/assigners.php",
+        "Option_SearchTerm" => "src/search/st_option.php",
+        "PaperInfoSet" => "src/paperinfo.php",
+        "PaperInfo_AuthorMatcher" => "src/paperinfo.php",
+        "PaperOptionList" => "src/paperoption.php",
+        "Review_Assigner" => "src/assignmentset.php",
         "ReviewField" => "src/review.php",
+        "ReviewFieldInfo" => "src/review.php",
         "ReviewForm" => "src/review.php",
-        "ReviewSearchMatcher" => "src/papersearch.php",
+        "ReviewSearchMatcher" => "src/search/st_review.php",
+        "ReviewValues" => "src/review.php",
+        "SearchAction" => "src/listaction.php",
+        "SearchTerm" => "src/search.php",
+        "TagAnno" => "lib/tagger.php",
         "TagInfo" => "lib/tagger.php",
+        "TagMap" => "lib/tagger.php",
         "TextPaperOption" => "src/paperoption.php",
         "XlsxGenerator" => "lib/xlsx.php",
         "ZipDocument" => "lib/filer.php"
     ];
-    const API_POST = 0;
-    const API_GET = 1;
-    const API_PAPER = 2;
-    const API_GET_PAPER = 3 /* == API_GET | API_PAPER */;
-    static $api_map = [
-        "alltags" => ["PaperApi::alltags_api", self::API_GET],
-        "setdecision" => ["PaperApi::setdecision_api", self::API_PAPER],
-        "setlead" => ["PaperApi::setlead_api", self::API_PAPER],
-        "setmanager" => ["PaperApi::setmanager_api", self::API_PAPER],
-        "setpref" => ["PaperApi::setpref_api", self::API_PAPER],
-        "setshepherd" => ["PaperApi::setshepherd_api", self::API_PAPER],
-        "settaganno" => ["PaperApi::settaganno_api", self::API_POST],
-        "settags" => ["PaperApi::settags_api", self::API_POST],
-        "taganno" => ["PaperApi::taganno_api", self::API_GET],
-        "tagreport" => ["PaperApi::tagreport_api", self::API_GET],
-        "trackerstatus" => ["MeetingTracker::trackerstatus_api", self::API_GET], // hotcrp-comet entrypoint
-        "votereport" => ["PaperApi::votereport_api", self::API_GET_PAPER],
+
+    static $suffix_map = [
+        "_api.php" => ["api_", "api"],
+        "_assignmentparser.php" => ["a_", "assigners"],
+        "_helptopic.php" => ["h_", "help"],
+        "_listaction.php" => ["la_", "listactions"],
+        "_papercolumn.php" => ["pc_", "papercolumns"],
+        "_papercolumnfactory.php" => ["pc_", "papercolumns"],
+        "_searchterm.php" => ["st_", "search"],
+        "_settingrenderer.php" => ["s_", "settings"],
+        "_settingparser.php" => ["s_", "settings"]
     ];
-    static public function call_api($fn, $user, $qreq, $prow) {
-        // XXX precondition: $user->can_view_paper($prow) || !$prow
-        if (isset(SiteLoader::$api_map[$fn])) {
-            $uf = SiteLoader::$api_map[$fn];
-            if (!($uf[1] & SiteLoader::API_GET) && !check_post($qreq))
-                json_exit(["ok" => false, "error" => "Missing credentials."]);
-            if (($uf[1] & SiteLoader::API_PAPER) && !$prow)
-                json_exit(["ok" => false, "error" => "No such paper."]);
-            call_user_func($uf[0], $user, $qreq, $prow);
-            return true;
-        }
-        return false;
+
+    static function read_main_options() {
+        global $ConfSitePATH, $Opt;
+        if (defined("HOTCRP_OPTIONS"))
+            $files = [HOTCRP_OPTIONS];
+        else
+            $files = ["$ConfSitePATH/conf/options.php", "$ConfSitePATH/conf/options.inc", "$ConfSitePATH/Code/options.inc"];
+        foreach ($files as $f)
+            if ((@include $f) !== false) {
+                $Opt["loaded"][] = $f;
+                break;
+            }
     }
 }
 
@@ -185,6 +186,17 @@ setlocale(LC_CTYPE, "C");
 
 
 // Set up conference options (also used in mailer.php)
+function expand_includes_once($file, $includepath, $globby) {
+    foreach ($file[0] === "/" ? [""] : $includepath as $idir) {
+        $try = $idir . $file;
+        if (!$globby && is_readable($try))
+            return [$try];
+        else if ($globby && ($m = glob($try, GLOB_BRACE)))
+            return $m;
+    }
+    return [];
+}
+
 function expand_includes($files, $expansions = array()) {
     global $Opt, $ConfSitePATH;
     if (!is_array($files))
@@ -217,18 +229,23 @@ function expand_includes($files, $expansions = array()) {
         if ((string) $f === "")
             continue;
         $matches = [];
-        $globby = preg_match(',[\[\]\*\?\{\}],', $f);
-        foreach ($f[0] === "/" ? array("") : $includepath as $idir) {
-            $e = $idir . $f;
-            if ($globby)
-                $matches = glob($f, GLOB_BRACE);
-            else if (is_readable($e))
-                $matches = [$e];
-            if (!empty($matches))
-                break;
+        $ignore_not_found = $globby = false;
+        if (str_starts_with($f, "?")) {
+            $ignore_not_found = true;
+            $f = substr($f, 1);
+        }
+        if (preg_match(',[\[\]\*\?\{\}],', $f))
+            $ignore_not_found = $globby = true;
+        $matches = expand_includes_once($f, $includepath, $globby);
+        if (empty($matches)
+            && isset($expansions["autoload"])
+            && ($underscore = strpos($f, "_"))
+            && ($f2 = get(SiteLoader::$suffix_map, substr($f, $underscore)))) {
+            $xincludepath = array_merge($f2[1] ? ["{$ConfSitePATH}/src/{$f2[1]}/"] : [], $includepath);
+            $matches = expand_includes_once($f2[0] . substr($f, 0, $underscore) . ".php", $xincludepath, $globby);
         }
         $results = array_merge($results, $matches);
-        if (empty($matches) && !$globby)
+        if (empty($matches) && !$ignore_not_found)
             $results[] = $f[0] === "/" ? $f : $includepath[0] . $f;
     }
     return $results;
@@ -238,26 +255,77 @@ function read_included_options(&$files) {
     global $Opt;
     if (is_string($files))
         $files = [$files];
-    for ($i = 0; $i != count($files); ++$i) {
-        foreach (expand_includes($files[$i]) as $f)
-            if (!@include $f)
-                $Opt["missing"][] = $f;
+    for ($i = 0; $i != count($files); ++$i)
+        foreach (expand_includes($files[$i]) as $f) {
+            $key = "missing";
+            if ((@include $f) !== false)
+                $key = "loaded";
+            $Opt[$key][] = $f;
+        }
+}
+
+function expand_json_includes_callback($includelist, $callback) {
+    $includes = [];
+    foreach (is_array($includelist) ? $includelist : [$includelist] as $k => $str) {
+        $expandable = null;
+        if (is_string($str)) {
+            if (str_starts_with($str, "@"))
+                $expandable = substr($str, 1);
+            else if (!preg_match('/\A[\s\[\{]/', $str)
+                     || ($str[0] === "[" && !preg_match('/\]\s*\z/', $str)))
+                $expandable = $str;
+        }
+        if ($expandable) {
+            foreach (expand_includes($expandable) as $f)
+                if (($x = file_get_contents($f)))
+                    $includes[] = [$x, $f];
+        } else
+            $includes[] = [$str, "entry $k"];
+    }
+    foreach ($includes as $xentry) {
+        list($entry, $landmark) = $xentry;
+        if (is_string($entry)) {
+            $x = json_decode($entry);
+            if ($x === null && json_last_error()) {
+                $x = Json::decode($entry);
+                if ($x === null)
+                    error_log("$landmark: Invalid JSON: " . Json::last_error_msg());
+            }
+            if ($x === null)
+                continue;
+            $entry = $x;
+        }
+        if (is_object($entry) && !isset($entry->name) && !isset($entry->match)) {
+            $isassoc = true;
+            $nassoctest = 5;
+            foreach (get_object_vars($entry) as $k => $v) {
+                if (!is_object($v))
+                    $isassoc = false;
+                if (!$isassoc || --$nassoctest === 0)
+                    break;
+            }
+            if ($isassoc)
+                $entry = get_object_vars($entry);
+        } else {
+            $isassoc = false;
+        }
+        foreach (is_array($entry) ? $entry : [$entry] as $k => $v) {
+            if (is_object($v)) {
+                if ($isassoc && !isset($v->name))
+                    $v->name = $k;
+                $v->__subposition = ++Conf::$next_xt_subposition;
+            }
+            if (!call_user_func($callback, $v, $k))
+                error_log("$landmark: Invalid expansion " . json_encode($v) . ".");
+        }
     }
 }
 
-global $Opt, $OptOverride;
+global $Opt;
 if (!$Opt)
     $Opt = array();
-if (!$OptOverride)
-    $OptOverride = array();
 if (!get($Opt, "loaded")) {
-    if (defined("HOTCRP_OPTIONS")) {
-        if ((@include HOTCRP_OPTIONS) !== false)
-            $Opt["loaded"] = true;
-    } else if ((@include "$ConfSitePATH/conf/options.php") !== false
-               || (@include "$ConfSitePATH/conf/options.inc") !== false
-               || (@include "$ConfSitePATH/Code/options.inc") !== false)
-        $Opt["loaded"] = true;
+    SiteLoader::read_main_options();
     if (get($Opt, "multiconference"))
         Multiconference::init();
     if (get($Opt, "include"))
@@ -270,23 +338,15 @@ if (get($Opt, "dbLogQueries"))
 
 
 // Allow lots of memory
-function set_memory_limit() {
-    global $Opt;
-    if (!get($Opt, "memoryLimit")) {
-        $suf = array("" => 1, "k" => 1<<10, "m" => 1<<20, "g" => 1<<30);
-        if (preg_match(',\A(\d+)\s*([kmg]?)\z,', strtolower(ini_get("memory_limit")), $m)
-            && $m[1] * $suf[$m[2]] < (128<<20))
-            $Opt["memoryLimit"] = "128M";
-    }
-    if (get($Opt, "memoryLimit"))
-        ini_set("memory_limit", $Opt["memoryLimit"]);
-}
-set_memory_limit();
+if (!get($Opt, "memoryLimit") && ini_get_bytes("memory_limit") < (128 << 20))
+    $Opt["memoryLimit"] = "128M";
+if (get($Opt, "memoryLimit"))
+    ini_set("memory_limit", $Opt["memoryLimit"]);
 
 
 // Create the conference
 global $Conf;
 if (!$Conf)
-    $Conf = Conf::$g = new Conf(Dbl::make_dsn($Opt));
+    $Conf = Conf::$g = new Conf($Opt, true);
 if (!$Conf->dblink)
     Multiconference::fail_bad_database();

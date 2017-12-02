@@ -1,10 +1,10 @@
 <?php
 // cacheable.php -- HotCRP cacheability helper
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 session_cache_limiter("");
-header("Cache-Control: public, max-age=315576000");
+header("Cache-Control: max-age=315576000, public");
 header("Expires: " . gmdate("D, d M Y H:i:s", time() + 315576000) . " GMT");
 
 // *** NB This file does not include all of the HotCRP infrastructure! ***
@@ -16,23 +16,24 @@ if ($zlib_output_compression) {
     header("Vary: Accept-Encoding", false);
 }
 
-function fail() {
+function fail($file) {
     global $zlib_output_compression;
     header("Content-Type: text/plain; charset=utf-8");
+    $result = "Go away ($file).\r\n";
     if (!$zlib_output_compression)
-        header("Content-Length: 10");
-    echo "Go away.\r\n";
+        header("Content-Length: " . strlen($result));
+    echo $result;
     exit;
 }
 
 $file = isset($_GET["file"]) ? $_GET["file"] : null;
 if (!$file)
-    fail();
+    fail("no file");
 
 $mtime = @filemtime($file);
 $prefix = "";
 if (preg_match(',\A(?:images|scripts|stylesheets)(?:/[^./][^/]+)+\z,', $file)
-    && preg_match(',.*([.][a-z]*)\z,', $file, $m)) {
+    && preg_match(',.*(\.[a-z0-9]*)\z,', $file, $m)) {
     $s = $m[1];
     if ($s === ".js") {
         header("Content-Type: text/javascript; charset=utf-8");
@@ -48,16 +49,28 @@ if (preg_match(',\A(?:images|scripts|stylesheets)(?:/[^./][^/]+)+\z,', $file)
         header("Content-Type: image/jpeg");
     else if ($s === ".png")
         header("Content-Type: image/png");
+    else if ($s === ".svg")
+        header("Content-Type: image/svg+xml");
     else if ($s === ".mp3")
         header("Content-Type: audio/mpeg");
+    else if ($s === ".woff")
+        header("Content-Type: application/font-woff");
+    else if ($s === ".woff2")
+        header("Content-Type: application/font-woff2");
+    else if ($s === ".ttf")
+        header("Content-Type: application/x-font-ttf");
+    else if ($s === ".otf")
+        header("Content-Type: font/opentype");
+    else if ($s === ".eot")
+        header("Content-Type: application/vnd.ms-fontobject");
     else
-        fail();
+        fail($file);
     header("Access-Control-Allow-Origin: *");
 } else
-    fail();
+    fail($file);
 
 $last_modified = gmdate("D, d M Y H:i:s", $mtime) . " GMT";
-$etag = '"' . md5($last_modified) . '"';
+$etag = '"' . md5("$file $last_modified") . '"';
 header("Last-Modified: $last_modified");
 header("ETag: $etag");
 

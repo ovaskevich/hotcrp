@@ -1,6 +1,6 @@
 <?php
 // scorechart.php -- HotCRP chart generator
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 // Generates a PNG image of a bar chat.
@@ -140,7 +140,7 @@ if ($s == 0) {
 }
 
 session_cache_limiter("");
-header("Cache-Control: public, max-age=31557600");
+header("Cache-Control: max-age=31557600, public");
 header("Expires: " . gmdate("D, d M Y H:i:s", time() + 31557600) . " GMT");
 header("Content-Type: image/png");
 imagepng($pic);

@@ -1,12 +1,10 @@
 <?php
 // src/settings/s_basics.php -- HotCRP settings > info page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
-class SettingRenderer_Basics extends SettingRenderer {
-function render($sv) {
-    global $Conf, $Opt;
-
+class Basics_SettingRenderer {
+static function render(SettingValues $sv) {
     echo '<div class="f-c">', $sv->label("opt.shortName", "Conference abbreviation"), "</div>\n";
     $sv->echo_entry("opt.shortName");
     echo '<div class="f-h">Examples: “HotOS XIV”, “NSDI \'14”</div>';
@@ -46,6 +44,3 @@ function render($sv) {
     echo '<div class="f-h">This applies to email sent to reviewers and email sent using the <a href="', hoturl("mail"), '">mail tool</a>. It doesn’t apply to account-related email or email sent to submitters.</div>';
 }
 }
-
-SettingGroup::register("basics", "Basics", 0, new SettingRenderer_Basics);
-SettingGroup::register_synonym("info", "basics");

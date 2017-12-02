@@ -11,12 +11,12 @@ if (isset($arg["h"]) || isset($arg["help"])) {
 $storageIds = $Conf->active_document_ids();
 $force = isset($arg["f"]) || isset($arg["force"]);
 
-$result = $Conf->qe("select paperStorageId, paperId, timestamp, mimetype,
+$result = $Conf->qe_raw("select paperStorageId, paperId, timestamp, mimetype,
         compression, sha1, documentType, filename, infoJson
         from PaperStorage where paperStorageId not in (" . join(",", $storageIds) . ")
         and paper is not null and paperStorageId>1 order by timestamp");
 $killable = array();
-while (($doc = $Conf->document_row($result, null)))
+while (($doc = DocumentInfo::fetch($result, $Conf)))
     $killable[$doc->paperStorageId] = "[" . $Conf->unparse_time_log($doc->timestamp)
         . "] " . HotCRPDocument::filename($doc) . " ($doc->paperStorageId)";
 
@@ -28,7 +28,7 @@ if (count($killable)) {
         if (!preg_match('/\A[yY]/', $x))
             die("* Exiting\n");
     }
-    $Conf->qe("update PaperStorage set paper=NULL where paperStorageId in ("
+    $Conf->qe_raw("update PaperStorage set paper=NULL where paperStorageId in ("
         . join(",", array_keys($killable)) . ")");
     fwrite(STDOUT, count($killable) . " documents killed.\n");
 } else

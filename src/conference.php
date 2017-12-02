@@ -1,10 +1,9 @@
 <?php
 // conference.php -- HotCRP central helper class (singleton)
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class Track {
-    private $a;
     const VIEW = 0;
     const VIEWPDF = 1;
     const VIEWREV = 2;
@@ -12,23 +11,45 @@ class Track {
     const ASSREV = 4;
     const UNASSREV = 5;
     const VIEWTRACKER = 6;
+    const ADMIN = 7;
     static public $map = [
         "view" => 0, "viewpdf" => 1, "viewrev" => 2, "viewrevid" => 3,
-        "assrev" => 4, "unassrev" => 5, "viewtracker" => 6
+        "assrev" => 4, "unassrev" => 5, "viewtracker" => 6, "admin" => 7
     ];
-    static public $zero = [null, null, null, null, null, null, null];
+    static public $zero = [null, null, null, null, null, null, null, null];
+    static function match_perm(Contact $user, $perm) {
+        if ($perm) {
+            $has_tag = $user->has_tag(substr($perm, 1));
+            return $perm[0] === "-" ? !$has_tag : $has_tag;
+        } else
+            return true;
+    }
 }
 
 class Conf {
     public $dblink = null;
 
     var $settings;
-    var $settingTexts;
+    private $settingTexts;
     public $sversion;
     private $_pc_seeall_cache = null;
-    private $_pc_see_pdf = null;
+    private $_pc_see_pdf = false;
+
+    public $dbname;
+    public $dsn = null;
+
+    public $short_name;
+    public $long_name;
+    public $default_format;
+    public $download_prefix;
     public $au_seerev;
     public $tag_au_seerev;
+    public $tag_seeall;
+    public $sort_by_last;
+    public $opt;
+    public $opt_override = null;
+    private $_opt_timestamp = null;
+    public $paper_opts;
 
     private $save_messages = true;
     var $headerPrinted = false;
@@ -38,21 +59,51 @@ class Conf {
 
     private $rounds = null;
     private $_defined_rounds = null;
+    private $_round_settings = null;
     private $tracks = null;
+    private $_taginfo = null;
     private $_track_tags = null;
+    private $_track_view_sensitivity = false;
     private $_track_review_sensitivity = false;
+    private $_track_admin_sensitivity = false;
     private $_decisions = null;
+    private $_topic_map = null;
+    private $_topic_order_map = null;
     private $_topic_separator_cache = null;
-    public $dsn = null;
+    private $_pc_members_cache = null;
+    private $_pc_tags_cache = null;
+    private $_pc_members_and_admins_cache = null;
+    private $_pc_members_fully_loaded = false;
+    private $_review_form_cache = null;
+    private $_abbrev_matcher = null;
+    private $_date_format_initialized = false;
+    private $_docclass_cache = [];
+    private $_formatspec_cache = [];
+    private $_docstore = false;
+    private $_defined_formulas = null;
+    private $_emoji_codes = null;
+    private $_s3_document = false;
+    private $_ims = null;
+    private $_format_info = null;
+    private $_updating_autosearch_tags = false;
+
+    private $_formula_functions = null;
+    private $_search_keyword_base = null;
+    private $_search_keyword_factories = null;
+    private $_assignment_parsers = null;
+    private $_api_map = null;
+    private $_list_action_map = null;
+    private $_list_action_renderers = null;
+    private $_list_action_factories = null;
+    private $_paper_column_map = null;
+    private $_paper_column_factories = null;
 
     public $paper = null; // current paper row
 
     static public $g;
-    static public $gShortName;
-    static public $gLongName;
-    static public $gDefaultFormat;
-    static private $gFormatInfo;
     static public $no_invalidate_caches = false;
+    static public $next_xt_subposition = 0;
+    static private $xt_require_resolved = [];
 
     const BLIND_NEVER = 0;
     const BLIND_OPTIONAL = 1;
@@ -76,17 +127,23 @@ class Conf {
 
     static public $review_deadlines = array("pcrev_soft", "pcrev_hard", "extrev_soft", "extrev_hard");
 
-    function __construct($dsn) {
-        global $Opt;
+    static public $hoturl_defaults = null;
+
+    function __construct($options, $make_dsn) {
         // unpack dsn, connect to database, load current settings
-        if (($this->dsn = $dsn))
-            list($this->dblink, $Opt["dbName"]) = Dbl::connect_dsn($this->dsn);
-        if (!isset($Opt["confid"]))
-            $Opt["confid"] = get($Opt, "dbName");
-        if ($this->dblink) {
+        if ($make_dsn && ($this->dsn = Dbl::make_dsn($options)))
+            list($this->dblink, $options["dbName"]) = Dbl::connect_dsn($this->dsn);
+        if (!isset($options["confid"]))
+            $options["confid"] = get($options, "dbName");
+        $this->opt = $options;
+        $this->dbname = $options["dbName"];
+        $this->paper_opts = new PaperOptionList($this);
+        if ($this->dblink && !Dbl::$default_dblink) {
             Dbl::set_default_dblink($this->dblink);
             Dbl::set_error_handler(array($this, "query_error_handler"));
-            Dbl::$landmark_sanitizer = "/^(?:Dbl::|Conf::q|call_user_func)/";
+        }
+        if ($this->dblink) {
+            Dbl::$landmark_sanitizer = "/^(?:Dbl::|Conf::q|Conf::fetch|call_user_func)/";
             $this->load_settings();
         } else
             $this->crosscheck_options();
@@ -98,73 +155,78 @@ class Conf {
     //
 
     function load_settings() {
-        global $Opt, $OptOverride, $Now, $OK;
+        global $Now;
 
         // load settings from database
         $this->settings = array();
         $this->settingTexts = array();
+        foreach ($this->opt_override ? : [] as $k => $v) {
+            if ($v === null)
+                unset($this->opt[$k]);
+            else
+                $this->opt[$k] = $v;
+        }
+        $this->opt_override = [];
 
-        $result = $this->q("select name, value, data from Settings");
+        $result = $this->q_raw("select name, value, data from Settings");
         while ($result && ($row = $result->fetch_row())) {
             $this->settings[$row[0]] = (int) $row[1];
             if ($row[2] !== null)
                 $this->settingTexts[$row[0]] = $row[2];
             if (substr($row[0], 0, 4) == "opt.") {
                 $okey = substr($row[0], 4);
-                if (!array_key_exists($okey, $OptOverride))
-                    $OptOverride[$okey] = get($Opt, $okey);
-                $Opt[$okey] = ($row[2] === null ? (int) $row[1] : $row[2]);
+                $this->opt_override[$okey] = get($this->opt, $okey);
+                $this->opt[$okey] = ($row[2] === null ? (int) $row[1] : $row[2]);
             }
         }
         Dbl::free($result);
 
         // update schema
         $this->sversion = $this->settings["allowPaperOption"];
-        if ($this->sversion < 132) {
+        if ($this->sversion < 181) {
             require_once("updateschema.php");
-            $oldOK = $OK;
+            $old_nerrors = Dbl::$nerrors;
             updateSchema($this);
-            $OK = $oldOK;
+            Dbl::$nerrors = $old_nerrors;
         }
-        if ($this->sversion < 73)
+        if ($this->sversion < 95)
             self::msg_error("Warning: The database could not be upgraded to the current version; expect errors. A system administrator must solve this problem.");
 
-        // invalidate caches after loading from backup
+        // invalidate all caches after loading from backup
         if (isset($this->settings["frombackup"])
-            && $this->invalidateCaches()) {
-            $this->qe("delete from Settings where name='frombackup' and value=" . $this->settings["frombackup"]);
+            && $this->invalidate_caches()) {
+            $this->qe_raw("delete from Settings where name='frombackup' and value=" . $this->settings["frombackup"]);
             unset($this->settings["frombackup"]);
-        } else
-            $this->invalidateCaches(array("rf" => true));
+        }
 
         // update options
-        if (isset($Opt["ldapLogin"]) && !$Opt["ldapLogin"])
-            unset($Opt["ldapLogin"]);
-        if (isset($Opt["httpAuthLogin"]) && !$Opt["httpAuthLogin"])
-            unset($Opt["httpAuthLogin"]);
+        if (isset($this->opt["ldapLogin"]) && !$this->opt["ldapLogin"])
+            unset($this->opt["ldapLogin"]);
+        if (isset($this->opt["httpAuthLogin"]) && !$this->opt["httpAuthLogin"])
+            unset($this->opt["httpAuthLogin"]);
 
         // set conferenceKey
-        if (!isset($Opt["conferenceKey"])) {
+        if (!isset($this->opt["conferenceKey"])) {
             if (!isset($this->settingTexts["conf_key"])
-                && ($key = hotcrp_random_bytes(32)) !== false)
+                && ($key = random_bytes(32)) !== false)
                 $this->save_setting("conf_key", 1, $key);
-            $Opt["conferenceKey"] = defval($this->settingTexts, "conf_key", "");
+            $this->opt["conferenceKey"] = get($this->settingTexts, "conf_key", "");
         }
 
         // set capability key
         if (!get($this->settings, "cap_key")
-            && !get($Opt, "disableCapabilities")
-            && !(($key = hotcrp_random_bytes(16)) !== false
+            && !get($this->opt, "disableCapabilities")
+            && !(($key = random_bytes(16)) !== false
                  && ($key = base64_encode($key))
                  && $this->save_setting("cap_key", 1, $key)))
-            $Opt["disableCapabilities"] = true;
+            $this->opt["disableCapabilities"] = true;
 
         // GC old capabilities
         if (defval($this->settings, "__capability_gc", 0) < $Now - 86400) {
             foreach (array($this->dblink, Contact::contactdb()) as $db)
                 if ($db)
                     Dbl::ql($db, "delete from Capability where timeExpires>0 and timeExpires<$Now");
-            $this->q("insert into Settings (name, value) values ('__capability_gc', $Now) on duplicate key update value=values(value)");
+            $this->q_raw("insert into Settings (name, value) values ('__capability_gc', $Now) on duplicate key update value=values(value)");
             $this->settings["__capability_gc"] = $Now;
         }
 
@@ -173,7 +235,7 @@ class Conf {
     }
 
     private function crosscheck_settings() {
-        global $Opt, $Now;
+        global $Now;
 
         // enforce invariants
         foreach (array("pcrev_any", "extrev_view") as $x)
@@ -193,13 +255,32 @@ class Conf {
             $this->settings["pc_seeblindrev"] = 1;
             $this->settings["pc_seeallrev"] = self::PCSEEREV_YES;
         }
+        if (($sub_update = get($this->settings, "sub_update", -1)) > 0
+            && ($sub_reg = get($this->settings, "sub_reg", -1)) <= 0) {
+            $this->settings["sub_reg"] = $sub_update;
+            $this->settings["__sub_reg"] = $sub_reg;
+        }
 
         // rounds
-        $this->rounds = array("");
+        $this->rounds = [""];
         if (isset($this->settingTexts["tag_rounds"])) {
             foreach (explode(" ", $this->settingTexts["tag_rounds"]) as $r)
                 if ($r != "")
                     $this->rounds[] = $r;
+        }
+        $this->_round_settings = null;
+        if (isset($this->settingTexts["round_settings"])) {
+            $this->_round_settings = json_decode($this->settingTexts["round_settings"]);
+            $max_rs = [];
+            foreach ($this->_round_settings as $rs) {
+                if ($rs && isset($rs->pc_seeallrev)
+                    && self::pcseerev_compare($rs->pc_seeallrev, get($max_rs, "pc_seeallrev", 0)) > 0)
+                    $max_rs["pc_seeallrev"] = $rs->pc_seeallrev;
+                if ($rs && isset($rs->extrev_view)
+                    && $rs->extrev_view > get($max_rs, "extrev_view", 0))
+                    $max_rs["extrev_view"] = $rs->extrev_view;
+            }
+            $this->_round_settings["max"] = (object) $max_rs;
         }
 
         // review times
@@ -213,20 +294,25 @@ class Conf {
 
         // S3 settings
         foreach (array("s3_bucket", "s3_key", "s3_secret") as $k)
-            if (!get($this->settingTexts, $k) && get($Opt, $k))
-                $this->settingTexts[$k] = $Opt[$k];
+            if (!get($this->settingTexts, $k) && ($x = get($this->opt, $k)))
+                $this->settingTexts[$k] = $x;
         if (!get($this->settingTexts, "s3_bucket")
             || !get($this->settingTexts, "s3_key")
             || !get($this->settingTexts, "s3_secret"))
             unset($this->settingTexts["s3_bucket"], $this->settingTexts["s3_key"],
                   $this->settingTexts["s3_secret"]);
-        if (get($Opt, "dbNoPapers") && !get($Opt, "docstore")
-            && !get($Opt, "filestore") && !get($this->settingTexts, "s3_bucket"))
-            unset($Opt["dbNoPapers"]);
+        if (get($this->opt, "dbNoPapers") && !get($this->opt, "docstore")
+            && !get($this->opt, "filestore") && !get($this->settingTexts, "s3_bucket"))
+            unset($this->opt["dbNoPapers"]);
+        if ($this->_s3_document
+            && (!isset($this->settingTexts["s3_bucket"])
+                || !$this->_s3_document->check_key_secret_bucket($this->settingTexts["s3_key"], $this->settingTexts["s3_secret"], $this->settingTexts["s3_bucket"])))
+            $this->_s3_document = false;
 
         // tracks settings
         $this->tracks = $this->_track_tags = null;
-        $this->_track_review_sensitivity = false;
+        $this->_track_view_sensitivity = $this->_track_review_sensitivity =
+            $this->_track_admin_sensitivity = false;
         if (($j = get($this->settingTexts, "tracks")))
             $this->crosscheck_track_settings($j);
 
@@ -240,7 +326,9 @@ class Conf {
             && ($so = get($this->settings, "sub_open", 0)) > 0
             && $so < $Now
             && ($ss = get($this->settings, "sub_sub", 0)) > 0
-            && $ss > $Now)
+            && $ss > $Now
+            && (get($this->settings, "pc_seeallpdf", 0) <= 0
+                || !$this->can_pc_see_all_submissions()))
             $this->_pc_see_pdf = false;
 
         $this->au_seerev = get($this->settings, "au_seerev", 0);
@@ -251,13 +339,15 @@ class Conf {
         $this->tag_au_seerev = null;
         if ($this->au_seerev == self::AUSEEREV_TAGS)
             $this->tag_au_seerev = explode(" ", get_s($this->settingTexts, "tag_au_seerev"));
+        $this->tag_seeall = get($this->settings, "tag_seeall", 0) > 0;
     }
 
     private function crosscheck_track_settings($j) {
         if (is_string($j) && !($j = json_decode($j)))
             return;
-        $this->tracks = array("_" => Track::$zero);
-        $this->_track_tags = array();
+        $this->tracks = [];
+        $default_track = Track::$zero;
+        $this->_track_tags = [];
         foreach ((array) $j as $k => $v) {
             if ($k !== "_")
                 $this->_track_tags[] = $k;
@@ -267,140 +357,603 @@ class Conf {
             foreach (Track::$map as $tname => $idx)
                 if (isset($v->$tname))
                     $t[$idx] = $v->$tname;
-            $this->tracks[$k] = $t;
+            if ($k === "_")
+                $default_track = $t;
+            else
+                $this->tracks[$k] = $t;
+            if ($t[Track::VIEW])
+                $this->_track_view_sensitivity = true;
             if ($t[Track::UNASSREV] || $t[Track::ASSREV])
                 $this->_track_review_sensitivity = true;
+            if ($t[Track::ADMIN])
+                $this->_track_admin_sensitivity = true;
         }
+        $this->tracks["_"] = $default_track;
     }
 
     private function crosscheck_options() {
-        global $Opt, $ConfSitePATH;
+        global $ConfSitePATH;
 
         // set longName, downloadPrefix, etc.
-        $confid = $Opt["confid"];
-        if ((!isset($Opt["longName"]) || $Opt["longName"] == "")
-            && (!isset($Opt["shortName"]) || $Opt["shortName"] == "")) {
-            $Opt["shortNameDefaulted"] = true;
-            $Opt["longName"] = $Opt["shortName"] = $confid;
-        } else if (!isset($Opt["longName"]) || $Opt["longName"] == "")
-            $Opt["longName"] = $Opt["shortName"];
-        else if (!isset($Opt["shortName"]) || $Opt["shortName"] == "")
-            $Opt["shortName"] = $Opt["longName"];
-        if (!isset($Opt["downloadPrefix"]) || $Opt["downloadPrefix"] == "")
-            $Opt["downloadPrefix"] = $confid . "-";
-        self::$gShortName = $Opt["shortName"];
-        self::$gLongName = $Opt["longName"];
+        $confid = $this->opt["confid"];
+        if ((!isset($this->opt["longName"]) || $this->opt["longName"] == "")
+            && (!isset($this->opt["shortName"]) || $this->opt["shortName"] == "")) {
+            $this->opt["shortNameDefaulted"] = true;
+            $this->opt["longName"] = $this->opt["shortName"] = $confid;
+        } else if (!isset($this->opt["longName"]) || $this->opt["longName"] == "")
+            $this->opt["longName"] = $this->opt["shortName"];
+        else if (!isset($this->opt["shortName"]) || $this->opt["shortName"] == "")
+            $this->opt["shortName"] = $this->opt["longName"];
+        if (!isset($this->opt["downloadPrefix"]) || $this->opt["downloadPrefix"] == "")
+            $this->opt["downloadPrefix"] = $confid . "-";
+        $this->short_name = $this->opt["shortName"];
+        $this->long_name = $this->opt["longName"];
 
         // expand ${confid}, ${confshortname}
         foreach (array("sessionName", "downloadPrefix", "conferenceSite",
                        "paperSite", "defaultPaperSite", "contactName",
                        "contactEmail", "docstore") as $k)
-            if (isset($Opt[$k]) && is_string($Opt[$k])
-                && strpos($Opt[$k], "$") !== false) {
-                $Opt[$k] = preg_replace(',\$\{confid\}|\$confid\b,', $confid, $Opt[$k]);
-                $Opt[$k] = preg_replace(',\$\{confshortname\}|\$confshortname\b,', $Opt["shortName"], $Opt[$k]);
+            if (isset($this->opt[$k]) && is_string($this->opt[$k])
+                && strpos($this->opt[$k], "$") !== false) {
+                $this->opt[$k] = preg_replace(',\$\{confid\}|\$confid\b,', $confid, $this->opt[$k]);
+                $this->opt[$k] = preg_replace(',\$\{confshortname\}|\$confshortname\b,', $this->short_name, $this->opt[$k]);
             }
+        $this->download_prefix = $this->opt["downloadPrefix"];
+
         foreach (array("emailFrom", "emailSender", "emailCc", "emailReplyTo") as $k)
-            if (isset($Opt[$k]) && is_string($Opt[$k])
-                && strpos($Opt[$k], "$") !== false) {
-                $Opt[$k] = preg_replace(',\$\{confid\}|\$confid\b,', $confid, $Opt[$k]);
-                if (strpos($Opt[$k], "confshortname") !== false) {
-                    $v = rfc2822_words_quote($Opt["shortName"]);
-                    if ($v[0] === "\"" && strpos($Opt[$k], "\"") !== false)
+            if (isset($this->opt[$k]) && is_string($this->opt[$k])
+                && strpos($this->opt[$k], "$") !== false) {
+                $this->opt[$k] = preg_replace(',\$\{confid\}|\$confid\b,', $confid, $this->opt[$k]);
+                if (strpos($this->opt[$k], "confshortname") !== false) {
+                    $v = rfc2822_words_quote($this->short_name);
+                    if ($v[0] === "\"" && strpos($this->opt[$k], "\"") !== false)
                         $v = substr($v, 1, strlen($v) - 2);
-                    $Opt[$k] = preg_replace(',\$\{confshortname\}|\$confshortname\b,', $v, $Opt[$k]);
+                    $this->opt[$k] = preg_replace(',\$\{confshortname\}|\$confshortname\b,', $v, $this->opt[$k]);
                 }
             }
 
         // remove final slash from $Opt["paperSite"]
-        if (!isset($Opt["paperSite"]) || $Opt["paperSite"] == "")
-            $Opt["paperSite"] = Navigation::site_absolute();
-        if ($Opt["paperSite"] == "" && isset($Opt["defaultPaperSite"]))
-            $Opt["paperSite"] = $Opt["defaultPaperSite"];
-        $Opt["paperSite"] = preg_replace('|/+\z|', "", $Opt["paperSite"]);
+        if (!isset($this->opt["paperSite"]) || $this->opt["paperSite"] == "")
+            $this->opt["paperSite"] = Navigation::site_absolute();
+        if ($this->opt["paperSite"] == "" && isset($this->opt["defaultPaperSite"]))
+            $this->opt["paperSite"] = $this->opt["defaultPaperSite"];
+        $this->opt["paperSite"] = preg_replace('|/+\z|', "", $this->opt["paperSite"]);
 
         // option name updates (backwards compatibility)
         foreach (array("assetsURL" => "assetsUrl",
                        "jqueryURL" => "jqueryUrl", "jqueryCDN" => "jqueryCdn",
                        "disableCSV" => "disableCsv") as $kold => $knew)
-            if (isset($Opt[$kold]) && !isset($Opt[$knew]))
-                $Opt[$knew] = $Opt[$kold];
+            if (isset($this->opt[$kold]) && !isset($this->opt[$knew]))
+                $this->opt[$knew] = $this->opt[$kold];
 
         // set assetsUrl and scriptAssetsUrl
-        if (!isset($Opt["scriptAssetsUrl"]) && isset($_SERVER["HTTP_USER_AGENT"])
+        if (!isset($this->opt["scriptAssetsUrl"]) && isset($_SERVER["HTTP_USER_AGENT"])
             && strpos($_SERVER["HTTP_USER_AGENT"], "MSIE") !== false)
-            $Opt["scriptAssetsUrl"] = Navigation::siteurl();
-        if (!isset($Opt["assetsUrl"]))
-            $Opt["assetsUrl"] = Navigation::siteurl();
-        if ($Opt["assetsUrl"] !== "" && !str_ends_with($Opt["assetsUrl"], "/"))
-            $Opt["assetsUrl"] .= "/";
-        if (!isset($Opt["scriptAssetsUrl"]))
-            $Opt["scriptAssetsUrl"] = $Opt["assetsUrl"];
-        Ht::$img_base = $Opt["assetsUrl"] . "images/";
+            $this->opt["scriptAssetsUrl"] = Navigation::siteurl();
+        if (!isset($this->opt["assetsUrl"]))
+            $this->opt["assetsUrl"] = Navigation::siteurl();
+        if ($this->opt["assetsUrl"] !== "" && !str_ends_with($this->opt["assetsUrl"], "/"))
+            $this->opt["assetsUrl"] .= "/";
+        if (!isset($this->opt["scriptAssetsUrl"]))
+            $this->opt["scriptAssetsUrl"] = $this->opt["assetsUrl"];
+        Ht::$img_base = $this->opt["assetsUrl"] . "images/";
+        Ht::$default_button_class = "btn";
 
         // set docstore
-        if (get($Opt, "docstore") === true)
-            $Opt["docstore"] = "docs";
-        else if (!get($Opt, "docstore") && get($Opt, "filestore")) { // backwards compat
-            if (($Opt["docstore"] = $Opt["filestore"]) === true)
-                $Opt["docstore"] = "filestore";
-            $Opt["docstoreSubdir"] = get($Opt, "filestoreSubdir");
+        if (get($this->opt, "docstore") === true)
+            $this->opt["docstore"] = "docs";
+        else if (!get($this->opt, "docstore") && get($this->opt, "filestore")) { // backwards compat
+            $this->opt["docstore"] = $this->opt["filestore"];
+            if ($this->opt["docstore"] === true)
+                $this->opt["docstore"] = "filestore";
+            $this->opt["docstoreSubdir"] = get($this->opt, "filestoreSubdir");
         }
-        if (get($Opt, "docstore") && $Opt["docstore"][0] !== "/")
-            $Opt["docstore"] = $ConfSitePATH . "/" . $Opt["docstore"];
+        if (get($this->opt, "docstore") && $this->opt["docstore"][0] !== "/")
+            $this->opt["docstore"] = $ConfSitePATH . "/" . $this->opt["docstore"];
+        $this->_docstore = false;
+        if (($dpath = get($this->opt, "docstore"))) {
+            if (strpos($dpath, "%") !== false)
+                $this->_docstore = $dpath;
+            else {
+                if ($dpath[strlen($dpath) - 1] === "/")
+                    $dpath = substr($dpath, 0, strlen($dpath) - 1);
+                $use_subdir = get($this->opt, "docstoreSubdir");
+                if ($use_subdir && ($use_subdir === true || $use_subdir > 0))
+                    $dpath .= "/%" . ($use_subdir === true ? 2 : $use_subdir) . "h";
+                $this->_docstore = $dpath . "/%h%x";
+            }
+        }
 
         // handle timezone
         if (function_exists("date_default_timezone_set")) {
-            if (isset($Opt["timezone"])) {
-                if (!date_default_timezone_set($Opt["timezone"])) {
-                    self::msg_error("Timezone option “" . htmlspecialchars($Opt["timezone"]) . "” is invalid; falling back to “America/New_York”.");
+            if (isset($this->opt["timezone"])) {
+                if (!date_default_timezone_set($this->opt["timezone"])) {
+                    self::msg_error("Timezone option “" . htmlspecialchars($this->opt["timezone"]) . "” is invalid; falling back to “America/New_York”.");
                     date_default_timezone_set("America/New_York");
                 }
             } else if (!ini_get("date.timezone") && !getenv("TZ"))
                 date_default_timezone_set("America/New_York");
         }
+        $this->_date_format_initialized = false;
 
         // set safePasswords
-        if (!get($Opt, "safePasswords")
-            || (is_int($Opt["safePasswords"]) && $Opt["safePasswords"] < 1))
-            $Opt["safePasswords"] = 0;
-        else if ($Opt["safePasswords"] === true)
-            $Opt["safePasswords"] = 1;
-        if (!isset($Opt["contactdb_safePasswords"]))
-            $Opt["contactdb_safePasswords"] = $Opt["safePasswords"];
+        if (!get($this->opt, "safePasswords")
+            || (is_int($this->opt["safePasswords"]) && $this->opt["safePasswords"] < 1))
+            $this->opt["safePasswords"] = 0;
+        else if ($this->opt["safePasswords"] === true)
+            $this->opt["safePasswords"] = 1;
+        if (!isset($this->opt["contactdb_safePasswords"]))
+            $this->opt["contactdb_safePasswords"] = $this->opt["safePasswords"];
 
         // set defaultFormat
-        self::$gDefaultFormat = (int) get($Opt, "defaultFormat");
-        self::$gFormatInfo = null;
+        $this->default_format = (int) get($this->opt, "defaultFormat");
+        $this->_format_info = null;
+
+        // other caches
+        $sort_by_last = !!get($this->opt, "sortByLastName");
+        if (!$this->sort_by_last != !$sort_by_last)
+            $this->invalidate_caches("pc");
+        $this->sort_by_last = $sort_by_last;
+        $this->_api_map = null;
+        $this->_list_action_map = $this->_list_action_renderers = $this->_list_action_factories = null;
     }
 
     function has_setting($name) {
         return isset($this->settings[$name]);
     }
 
-    function setting($name, $defval = false) {
-        return defval($this->settings, $name, $defval);
+    function setting($name, $defval = null) {
+        return get($this->settings, $name, $defval);
     }
 
     function setting_data($name, $defval = false) {
-        return defval($this->settingTexts, $name, $defval);
+        return get($this->settingTexts, $name, $defval);
     }
 
     function setting_json($name, $defval = false) {
-        $x = defval($this->settingTexts, $name, $defval);
-        return (is_string($x) ? json_decode($x) : $x);
+        $x = get($this->settingTexts, $name, $defval);
+        return is_string($x) ? json_decode($x) : $x;
     }
 
+    function opt($name, $defval = null) {
+        return get($this->opt, $name, $defval);
+    }
+
+    function set_opt($name, $value) {
+        global $Opt;
+        $Opt[$name] = $this->opt[$name] = $value;
+    }
+
+    function unset_opt($name) {
+        global $Opt;
+        unset($Opt[$name], $this->opt[$name]);
+    }
+
+    function opt_timestamp() {
+        if ($this->_opt_timestamp === null) {
+            $this->_opt_timestamp = 1;
+            foreach (get($this->opt, "loaded", []) as $fn)
+                $this->_opt_timestamp = max($this->_opt_timestamp, +@filemtime($fn));
+        }
+        return $this->_opt_timestamp;
+    }
+
+
+    static function pcseerev_compare($sr1, $sr2) {
+        if ($sr1 == $sr2)
+            return 0;
+        else if ($sr1 == self::PCSEEREV_YES || $sr2 == self::PCSEEREV_YES)
+            return $sr1 == self::PCSEEREV_YES ? 1 : -1;
+        else
+            return $sr1 > $sr2 ? 1 : -1;
+    }
+
+
+    // database
+
+    function q(/* $qstr, ... */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), 0);
+    }
+    function q_raw(/* $qstr */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_RAW);
+    }
+    function q_apply(/* $qstr, $args */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_APPLY);
+    }
+
+    function ql(/* $qstr, ... */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_LOG);
+    }
+    function ql_raw(/* $qstr */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_RAW | Dbl::F_LOG);
+    }
+    function ql_apply(/* $qstr, $args */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_APPLY | Dbl::F_LOG);
+    }
+
+    function qe(/* $qstr, ... */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_ERROR);
+    }
+    function qe_raw(/* $qstr */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_RAW | Dbl::F_ERROR);
+    }
+    function qe_apply(/* $qstr, $args */) {
+        return Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_APPLY | Dbl::F_ERROR);
+    }
+
+    function fetch_rows(/* $qstr, ... */) {
+        return Dbl::fetch_rows(Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_ERROR));
+    }
+    function fetch_first_row(/* $qstr, ... */) {
+        return Dbl::fetch_first_row(Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_ERROR));
+    }
+    function fetch_value(/* $qstr, ... */) {
+        return Dbl::fetch_value(Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_ERROR));
+    }
+    function fetch_ivalue(/* $qstr, ... */) {
+        return Dbl::fetch_ivalue(Dbl::do_query_on($this->dblink, func_get_args(), Dbl::F_ERROR));
+    }
+
+    function db_error_html($getdb = true, $while = "") {
+        $text = "<p>Database error";
+        if ($while)
+            $text .= " $while";
+        if ($getdb)
+            $text .= ": " . htmlspecialchars($this->dblink->error);
+        return $text . "</p>";
+    }
+
+    function db_error_text($getdb = true, $while = "") {
+        $text = "Database error";
+        if ($while)
+            $text .= " $while";
+        if ($getdb)
+            $text .= ": " . $this->dblink->error;
+        return $text;
+    }
+
+    function query_error_handler($dblink, $query) {
+        $landmark = caller_landmark(1, "/^(?:Dbl::|Conf::q|call_user_func)/");
+        if (PHP_SAPI == "cli")
+            fwrite(STDERR, "$landmark: database error: $dblink->error in $query\n");
+        else {
+            error_log("$landmark: database error: $dblink->error in $query");
+            self::msg_error("<p>" . htmlspecialchars($landmark) . ": database error: " . htmlspecialchars($this->dblink->error) . " in " . Ht::pre_text_wrap($query) . "</p>");
+        }
+    }
+
+
+    // name
+
+    function full_name() {
+        if ($this->short_name && $this->short_name != $this->long_name)
+            return $this->long_name . " (" . $this->short_name . ")";
+        else
+            return $this->long_name;
+    }
+
+
+    function docclass($dtype) {
+        if (!isset($this->_docclass_cache[$dtype]))
+            $this->_docclass_cache[$dtype] = new HotCRPDocument($this, $dtype);
+        return $this->_docclass_cache[$dtype];
+    }
+
+    function format_spec($dtype) {
+        if (!isset($this->_formatspec_cache[$dtype])) {
+            $o = $this->paper_opts->get($dtype);
+            $spec = $o ? $o->format_spec() : null;
+            $this->_formatspec_cache[$dtype] = $spec ? : new FormatSpec;
+        }
+        return $this->_formatspec_cache[$dtype];
+    }
+
+    function docstore() {
+        return $this->_docstore;
+    }
+
+    function s3_docstore() {
+        global $Now;
+        if ($this->_s3_document === false) {
+            if ($this->setting_data("s3_bucket")) {
+                $opts = ["bucket" => $this->setting_data("s3_bucket"),
+                         "key" => $this->setting_data("s3_key"),
+                         "secret" => $this->setting_data("s3_secret"),
+                         "scope" => $this->setting_data("__s3_scope"),
+                         "signing_key" => $this->setting_data("__s3_signing_key")];
+                $this->_s3_document = new S3Document($opts);
+                list($scope, $signing_key) = $this->_s3_document->scope_and_signing_key($Now);
+                if ($opts["scope"] !== $scope || $opts["signing_key"] !== $signing_key) {
+                    $this->save_setting("__s3_scope", 1, $scope);
+                    $this->save_setting("__s3_signing_key", 1, $signing_key);
+                }
+            } else
+                $this->_s3_document = null;
+        }
+        return $this->_s3_document;
+    }
+
+
+    function _add_emoji_code($val, $key) {
+        if (is_string($val) && str_starts_with($key, ":") && str_ends_with($key, ":")) {
+            $this->_emoji_codes[$key] = $val;
+            return true;
+        } else
+            return false;
+    }
+    function emoji_code_map() {
+        global $ConfSitePATH;
+        if ($this->_emoji_codes === null) {
+            $this->_emoji_codes = json_decode(file_get_contents("$ConfSitePATH/etc/emojicodes.json"), true);
+            if (($olist = $this->opt("emojiCodes")))
+                expand_json_includes_callback($olist, [$this, "_add_emoji_code"]);
+        }
+        return $this->_emoji_codes;
+    }
+
+
+    static function xt_priority($xt) {
+        return $xt ? get($xt, "priority", 0) : -PHP_INT_MAX;
+    }
+    static function xt_priority_compare($xta, $xtb) {
+        $ap = self::xt_priority($xta);
+        $bp = self::xt_priority($xtb);
+        if ($ap == $bp) {
+            $ap = $xta ? get($xta, "__subposition", 0) : -PHP_INT_MAX;
+            $bp = $xtb ? get($xtb, "__subposition", 0) : -PHP_INT_MAX;
+        }
+        return $ap < $bp ? 1 : ($ap == $bp ? 0 : -1);
+    }
+    static function xt_position_compare($xta, $xtb) {
+        $ap = get($xta, "position", 0);
+        $bp = get($xtb, "position", 0);
+        if ($ap == $bp) {
+            $ap = get($xta, "__subposition", 0);
+            $bp = get($xtb, "__subposition", 0);
+        }
+        return $ap < $bp ? -1 : ($ap == $bp ? 0 : 1);
+    }
+    static function xt_add(&$a, $name, $xt) {
+        $a[$name][] = $xt;
+        if (($syn = get($xt, "synonym")))
+            foreach (is_string($syn) ? [$syn] : $syn as $synname)
+                $a[$synname][] = $xt;
+        return true;
+    }
+    static private function xt_combine($xt1, $xt2) {
+        foreach (get_object_vars($xt2) as $k => $v)
+            if (!property_exists($xt1, $k)
+                && !in_array($k, ["match", "expand_function"]))
+                $xt1->$k = $v;
+    }
+    static function xt_enabled($xt) {
+        return $xt && (!isset($xt->disabled) || !$xt->disabled);
+    }
+    static function xt_disabled($xt) {
+        return !$xt || (isset($xt->disabled) && $xt->disabled);
+    }
+    static function xt_resolve_require($xt) {
+        if ($xt && isset($xt->require) && !isset(self::$xt_require_resolved[$xt->require])) {
+            foreach (expand_includes($xt->require, ["autoload" => true]) as $f)
+                require_once($f);
+            self::$xt_require_resolved[$xt->require] = true;
+        }
+        return $xt;
+    }
+    function xt_check($expr, $xt, Contact $user = null) {
+        $es = is_array($expr) ? $expr : [$expr];
+        foreach ($es as $e) {
+            $not = false;
+            if (is_string($e) && ($not = str_starts_with($e, "!")))
+                $e = substr($e, 1);
+            if (!is_string($e))
+                $b = $e;
+            else if ($e === "chair")
+                $b = !$user || $user->privChair;
+            else if ($e === "manager")
+                $b = !$user || $user->is_manager();
+            else if ($e === "pc")
+                $b = !$user || $user->isPC;
+            else if ($e === "reviewer")
+                $b = !$user || $user->is_reviewer();
+            else if ($e === "view_review")
+                $b = !$user || $user->can_view_some_review();
+            else if ($e === "lead" || $e === "shepherd")
+                $b = $this->has_any_lead_or_shepherd();
+            else if (strpos($e, "::") !== false) {
+                self::xt_resolve_require($xt);
+                $b = call_user_func($e, $xt, $user, $this);
+            } else {
+                // check if setting exists
+                if (str_starts_with($e, "opt."))
+                    $b = !!$this->opt(substr($e, 4));
+                else if (str_starts_with($e, "setting."))
+                    $b = !!$this->setting(substr($e, 8));
+                else
+                    $b = !!$this->setting($e);
+            }
+            if ($not ? $b : !$b)
+                return false;
+        }
+        return true;
+    }
+    function xt_allowed($xt, Contact $user = null) {
+        return $xt && (!isset($xt->allow_if)
+                       || $this->xt_check($xt->allow_if, $xt, $user));
+    }
+    function xt_search_name($map, $name, $checkf, $found = null) {
+        foreach (get($map, $name, []) as $xt)
+            if (self::xt_priority_compare($xt, $found) <= 0
+                && call_user_func($checkf, $xt))
+                $found = $xt;
+        return $found;
+    }
+    function xt_search_factories($factories, $name, $checkf, $found,
+                                 Contact $user = null, $reflags = "") {
+        $this->xt_user = $user;
+        $this->_xt_factory_match = false;
+        $this->_xt_factory_error = null;
+        $xts = [];
+        foreach ($factories as $fxt) {
+            if (self::xt_priority_compare($fxt, $found) >= 0)
+                break;
+            if ($fxt->match === ".*")
+                $m = [$name];
+            else if (!preg_match("\1\\A(?:{$fxt->match})\\z\1{$reflags}", $name, $m))
+                continue;
+            if (!call_user_func($checkf, $fxt))
+                continue;
+            self::xt_resolve_require($fxt);
+            $r = call_user_func($fxt->expand_function, $name, $this, $fxt, $m);
+            if (is_object($r))
+                $r = [$r];
+            foreach ($r ? : [] as $xt) {
+                self::xt_combine($xt, $fxt);
+                $prio = self::xt_priority_compare($xt, $found);
+                if ($prio <= 0 && call_user_func($checkf, $xt)) {
+                    if ($prio < 0)
+                        $xts = [];
+                    $xts[] = $found = $xt;
+                }
+            }
+        }
+        $this->xt_user = null;
+        return $xts;
+    }
+    function xt_factory_mark_matched() {
+        $this->_xt_factory_match = true;
+    }
+    function xt_factory_error($message) {
+        $this->_xt_factory_error[] = $message;
+    }
+    function xt_factory_matched() {
+        return $this->_xt_factory_match;
+    }
+    function xt_factory_errors() {
+        return $this->_xt_factory_error;
+    }
+
+
+    function _add_search_keyword_json($kwj) {
+        if (isset($kwj->name) && is_string($kwj->name))
+            return self::xt_add($this->_search_keyword_base, $kwj->name, $kwj);
+        else if (is_string($kwj->match) && is_string($kwj->expand_function)) {
+            $this->_search_keyword_factories[] = $kwj;
+            return true;
+        } else
+            return false;
+    }
+    private function make_search_keyword_map() {
+        $this->_search_keyword_base = $this->_search_keyword_factories = [];
+        expand_json_includes_callback(["etc/searchkeywords.json"], [$this, "_add_search_keyword_json"]);
+        if (($olist = $this->opt("searchKeywords")))
+            expand_json_includes_callback($olist, [$this, "_add_search_keyword_json"]);
+        usort($this->_search_keyword_factories, "Conf::xt_priority_compare");
+    }
+    function search_keyword($keyword, Contact $user = null) {
+        if ($this->_search_keyword_base === null)
+            $this->make_search_keyword_map();
+        $checkf = function ($xt) use ($user) { return $this->xt_allowed($xt, $user); };
+        $uf = $this->xt_search_name($this->_search_keyword_base, $keyword, $checkf);
+        if (($expansions = $this->xt_search_factories($this->_search_keyword_factories, $keyword, $checkf, $uf, $user)))
+            $uf = $expansions[0];
+        if (self::xt_disabled($uf))
+            $uf = null;
+        return self::xt_resolve_require($uf);
+    }
+
+
+    function _add_assignment_parser_json($uf) {
+        if (isset($uf->name) && is_string($uf->name))
+            return self::xt_add($this->_assignment_parsers, $uf->name, $uf);
+        return false;
+    }
+    function assignment_parser($keyword, Contact $user = null) {
+        require_once("assignmentset.php");
+        if ($this->_assignment_parsers === null) {
+            $this->_assignment_parsers = [];
+            expand_json_includes_callback(["etc/assignmentparsers.json"], [$this, "_add_assignment_parser_json"]);
+            if (($olist = $this->opt("assignmentParsers")))
+                expand_json_includes_callback($olist, [$this, "_add_assignment_parser_json"]);
+        }
+        $checkf = function ($xt) use ($user) { return $this->xt_allowed($xt, $user); };
+        $uf = $this->xt_search_name($this->_assignment_parsers, $keyword, $checkf);
+        if (self::xt_disabled($uf))
+            $uf = null;
+        if ($uf && !isset($uf->__parser)) {
+            self::xt_resolve_require($uf);
+            $p = $uf->parser_class;
+            $uf->__parser = new $p($uf, $this);
+        }
+        return $uf ? $uf->__parser : null;
+    }
+
+
+    function _add_formula_function_json($fj) {
+        if (isset($fj->name) && is_string($fj->name))
+            return self::xt_add($this->_formula_functions, $fj->name, $fj);
+        return false;
+    }
+    function formula_function($fname, Contact $user) {
+        if ($this->_formula_functions === null) {
+            $this->_formula_functions = [];
+            expand_json_includes_callback(["etc/formulafunctions.json"], [$this, "_add_formula_function_json"]);
+            if (($olist = $this->opt("formulaFunctions")))
+                expand_json_includes_callback($olist, [$this, "_add_formula_function_json"]);
+        }
+        $checkf = function ($xt) use ($user) { return $this->xt_allowed($xt, $user); };
+        $uf = $this->xt_search_name($this->_formula_functions, $fname, $checkf);
+        if (self::xt_disabled($uf))
+            $uf = null;
+        return self::xt_resolve_require($uf);
+    }
+
+
+    function named_formulas() {
+        if ($this->_defined_formulas === null) {
+            $this->_defined_formulas = [];
+            if ($this->setting("formulas")) {
+                $result = $this->q("select * from Formula order by lower(name)");
+                while ($result && ($f = Formula::fetch($this, $result)))
+                    $this->_defined_formulas[$f->formulaId] = $f;
+                Dbl::free($result);
+            }
+        }
+        return $this->_defined_formulas;
+    }
+
+    function invalidate_named_formulas() {
+        $this->_defined_formulas = null;
+    }
+
+    function find_named_formula($text) {
+        return $this->abbrev_matcher()->find1($text, self::FSRCH_FORMULA);
+    }
+
+    function viewable_named_formulas(Contact $user, $author_only = false) {
+        return array_filter($this->named_formulas(), function ($f) use ($user, $author_only) {
+            return $user->can_view_formula($f, $author_only);
+        });
+    }
 
 
     function decision_map() {
         if ($this->_decisions === null) {
-            $this->_decisions = array();
+            $dmap = array();
             if (($j = get($this->settingTexts, "outcome_map"))
                 && ($j = json_decode($j, true))
                 && is_array($j))
-                $this->_decisions = $j;
-            $this->_decisions[0] = "Unspecified";
+                $dmap = $j;
+            $dmap[0] = "Unspecified";
+            $this->_decisions = $dmap;
+            uksort($this->_decisions, function ($ka, $kb) use ($dmap) {
+                if ($ka == 0 || $kb == 0)
+                    return $ka == 0 ? -1 : 1;
+                else if (($ka > 0) !== ($kb > 0))
+                    return $ka > 0 ? 1 : -1;
+                else
+                    return strcasecmp($dmap[$ka], $dmap[$kb]);
+            });
         }
         return $this->_decisions;
     }
@@ -427,40 +980,37 @@ class Conf {
 
 
     function topic_map() {
-        $x = get($this->settingTexts, "topic_map");
-        if (!$x) {
-            $result = $this->qe("select topicId, topicName from TopicArea order by topicName");
-            $to = $tx = array();
+        if ($this->_topic_map === null) {
+            $this->_topic_map = $tx = [];
+            $result = $this->qe_raw("select topicId, topicName from TopicArea");
             while (($row = edb_row($result))) {
                 if (strcasecmp(substr($row[1], 0, 7), "none of") == 0)
                     $tx[(int) $row[0]] = $row[1];
                 else
-                    $to[(int) $row[0]] = $row[1];
+                    $this->_topic_map[(int) $row[0]] = $row[1];
             }
-            foreach ($tx as $tid => $tname)
-                $to[$tid] = $tname;
-            $x = $this->settingTexts["topic_map"] = $to;
+            Dbl::free($result);
+            asort($this->_topic_map, SORT_NATURAL | SORT_FLAG_CASE);
+            if (!empty($tx)) {
+                asort($tx, SORT_NATURAL | SORT_FLAG_CASE);
+                foreach ($tx as $tid => $tname)
+                    $this->_topic_map[$tid] = $tname;
+            }
         }
-        if (is_string($x))
-            $x = $this->settingTexts["topic_map"] = json_decode($x, true);
-        return is_array($x) ? $x : array();
+        return $this->_topic_map;
     }
 
     function topic_order_map() {
-        $x = get($this->settingTexts, "topic_order_map");
-        if (!$x) {
-            $to = array();
+        if ($this->_topic_order_map === null) {
+            $this->_topic_order_map = [];
             foreach ($this->topic_map() as $tid => $tname)
-                $to[$tid] = count($to);
-            $x = $this->settingTexts["topic_order_map"] = $to;
+                $this->_topic_order_map[$tid] = count($this->_topic_order_map);
         }
-        if (is_string($x))
-            $x = $this->settingTexts["topic_order_map"] = json_decode($x, true);
-        return is_array($x) ? $x : array();
+        return $this->_topic_order_map;
     }
 
     function has_topics() {
-        return count($this->topic_map()) != 0;
+        return get($this->settings, "has_topics", 0) !== 0;
     }
 
     function topic_count() {
@@ -480,11 +1030,43 @@ class Conf {
     }
 
     function invalidate_topics() {
-        unset($this->settingTexts["topic_map"]);
-        unset($this->settingTexts["topic_order_map"]);
+        $this->_topic_map = $this->_topic_order_map = null;
         $this->_topic_separator_cache = null;
     }
 
+
+    const FSRCH_OPTION = 1;
+    const FSRCH_REVIEW = 2;
+    const FSRCH_FORMULA = 4;
+
+    function abbrev_matcher() {
+        if (!$this->_abbrev_matcher) {
+            $this->_abbrev_matcher = new AbbreviationMatcher;
+            $this->_abbrev_matcher->add("paper", $this->paper_opts->get(DTYPE_SUBMISSION), self::FSRCH_OPTION, 1);
+            $this->_abbrev_matcher->add("submission", $this->paper_opts->get(DTYPE_SUBMISSION), self::FSRCH_OPTION, 1);
+            if ($this->has_any_accepted()) {
+                $ol = $this->paper_opts->option_list();
+                $this->_abbrev_matcher->add("final", $this->paper_opts->get(DTYPE_FINAL), self::FSRCH_OPTION, 1);
+            } else
+                $ol = $this->paper_opts->nonfinal_option_list();
+            // XXX exposes invisible paper options, review fields
+            foreach ($ol as $o) {
+                $this->_abbrev_matcher->add($o->name, $o, self::FSRCH_OPTION);
+                $this->_abbrev_matcher->add("opt" . $o->id, $o, self::FSRCH_OPTION, 1);
+            }
+            foreach ($this->all_review_fields() as $f)
+                if ($f->displayed)
+                    $this->_abbrev_matcher->add($f->name, $f, self::FSRCH_REVIEW);
+            foreach ($this->named_formulas() as $f)
+                if ($f->name)
+                    $this->_abbrev_matcher->add($f->name, $f, self::FSRCH_FORMULA);
+        }
+        return $this->_abbrev_matcher;
+    }
+
+    function find_all_fields($text, $tflags = 0) {
+        return $this->abbrev_matcher()->find_all($text, $tflags);
+    }
 
 
     function review_form_json() {
@@ -493,6 +1075,33 @@ class Conf {
             $x = $this->settingTexts["review_form"] = json_decode($x);
         return is_object($x) ? $x : null;
     }
+
+    function review_form() {
+        if (!$this->_review_form_cache)
+            $this->_review_form_cache = new ReviewForm($this->review_form_json(), $this);
+        return $this->_review_form_cache;
+    }
+
+    function all_review_fields() {
+        return $this->review_form()->all_fields();
+    }
+
+    function review_field($fid) {
+        return $this->review_form()->field($fid);
+    }
+
+    function find_review_field($text) {
+        return $this->abbrev_matcher()->find1($text, self::FSRCH_REVIEW);
+    }
+
+
+
+    function tags() {
+        if (!$this->_taginfo)
+            $this->_taginfo = TagMap::make($this);
+        return $this->_taginfo;
+    }
+
 
 
     function has_tracks() {
@@ -507,64 +1116,86 @@ class Conf {
         return $this->_track_tags ? $this->_track_tags : array();
     }
 
-    function check_tracks($prow, $contact, $type) {
-        if ($this->tracks) {
-            $checked = false;
-            if ($prow)
-                foreach ($this->_track_tags as $t)
-                    if (($perm = $this->tracks[$t][$type])
-                        && $prow->has_tag($t)) {
-                        $has_tag = $contact->has_tag(substr($perm, 1));
-                        if ($perm[0] == "-" ? $has_tag : !$has_tag)
-                            return false;
-                        $checked = true;
-                    }
-            if (!$checked
-                && ($perm = $this->tracks["_"][$type])) {
-                $has_tag = $contact->has_tag(substr($perm, 1));
-                if ($perm[0] == "-" ? $has_tag : !$has_tag)
-                    return false;
-            }
-        }
-        return true;
+    function permissive_track_tag_for(Contact $user, $perm) {
+        foreach ($this->tracks ? : [] as $t => $tr)
+            if (Track::match_perm($user, $tr[$perm]))
+                return $t;
+        return null;
     }
 
-    function check_any_tracks($contact, $type) {
-        if ($this->tracks)
-            foreach ($this->tracks as $k => $v)
-                if (($perm = $v[$type]) === null)
-                    return true;
-                else {
-                    $has_tag = $contact->has_tag(substr($perm, 1));
-                    if ($perm[0] == "-" ? !$has_tag : $has_tag)
+    function check_tracks(PaperInfo $prow, Contact $contact, $type) {
+        $unmatched = true;
+        if ($this->tracks) {
+            foreach ($this->tracks as $t => $tr)
+                if ($t === "_" ? $unmatched : $prow->has_tag($t)) {
+                    $unmatched = false;
+                    if (Track::match_perm($contact, $tr[$type]))
                         return true;
                 }
+        }
+        return $unmatched;
+    }
+
+    function check_admin_tracks(PaperInfo $prow, Contact $contact) {
+        if ($this->_track_admin_sensitivity) {
+            $unmatched = true;
+            foreach ($this->tracks as $t => $tr)
+                if ($t === "_" ? $unmatched : $prow->has_tag($t)) {
+                    $unmatched = false;
+                    if ($tr[Track::ADMIN] && Track::match_perm($contact, $tr[Track::ADMIN]))
+                        return true;
+                }
+        }
+        return false;
+    }
+
+    function check_default_track(Contact $contact, $type) {
+        return !$this->tracks || Track::match_perm($contact, $this->tracks["_"][$type]);
+    }
+
+    function check_any_tracks(Contact $contact, $type) {
+        if ($this->tracks)
+            foreach ($this->tracks as $t => $tr)
+                if (($type === Track::VIEW
+                     || Track::match_perm($contact, $tr[Track::VIEW]))
+                    && Track::match_perm($contact, $tr[$type]))
+                    return true;
         return !$this->tracks;
     }
 
-    function check_all_tracks($contact, $type) {
+    function check_any_admin_tracks(Contact $contact) {
+        if ($this->_track_admin_sensitivity)
+            foreach ($this->tracks as $t => $tr)
+                if ($tr[Track::ADMIN] && Track::match_perm($contact, $tr[Track::ADMIN]))
+                    return true;
+        return false;
+    }
+
+    function check_all_tracks(Contact $contact, $type) {
         if ($this->tracks)
-            foreach ($this->tracks as $k => $v)
-                if (($perm = $v[$type]) !== null) {
-                    $has_tag = $contact->has_tag(substr($perm, 1));
-                    if ($perm[0] == "-" ? $has_tag : !$has_tag)
-                        return false;
-                }
+            foreach ($this->tracks as $t => $tr)
+                if (!(($type === Track::VIEW
+                       || Track::match_perm($contact, $tr[Track::VIEW]))
+                      && Track::match_perm($contact, $tr[$type])))
+                    return false;
         return true;
     }
 
     function check_track_sensitivity($type) {
         if ($this->tracks)
-            foreach ($this->tracks as $k => $v)
-                if ($v[$type] !== null)
+            foreach ($this->tracks as $t => $tr)
+                if ($tr[$type] !== null)
                     return true;
         return false;
+    }
+
+    function check_track_view_sensitivity() {
+        return $this->_track_view_sensitivity;
     }
 
     function check_track_review_sensitivity() {
         return $this->_track_review_sensitivity;
     }
-
 
 
     function has_rounds() {
@@ -590,7 +1221,7 @@ class Conf {
                     $i && ($r[$i] = $rname);
                 }
             if (!$dl[0]) {
-                $result = Dbl::qe("select reviewId from PaperReview where reviewRound=0 limit 1");
+                $result = $this->qe("select exists (select * from PaperReview where reviewRound=0)");
                 if (!$result || !$result->num_rows)
                     unset($dl[0]);
                 Dbl::free($result);
@@ -612,12 +1243,11 @@ class Conf {
         return $this->_defined_rounds;
     }
 
-    function round_name($roundno, $expand = false) {
+    function round_name($roundno) {
         if ($roundno > 0) {
             if (($rname = get($this->rounds, $roundno)) && $rname !== ";")
                 return $rname;
-            else if ($expand)
-                return "?$roundno?"; /* should not happen */
+            error_log($this->dbname . ": round #$roundno undefined");
         }
         return "";
     }
@@ -643,8 +1273,8 @@ class Conf {
 
     function sanitize_round_name($rname) {
         if ($rname === null)
-            return $this->current_round_name();
-        else if ($rname === "" || preg_match('/\A(?:\(none\)|none|default|unnamed)\z/i', $rname))
+            return $this->assignment_round_name(false);
+        else if ($rname === "" || preg_match('/\A(?:\(none\)|none|unnamed)\z/i', $rname))
             return "";
         else if (self::round_name_error($rname))
             return false;
@@ -652,47 +1282,50 @@ class Conf {
             return $rname;
     }
 
-    function current_round_name() {
-        return (string) get($this->settingTexts, "rev_roundtag");
+    function assignment_round_name($external) {
+        if ($external && ($x = get($this->settingTexts, "extrev_roundtag")) !== null)
+            return $x;
+        else
+            return (string) get($this->settingTexts, "rev_roundtag");
     }
 
-    function current_round($add = false) {
-        return $this->round_number($this->current_round_name(), $add);
+    function assignment_round($external) {
+        return $this->round_number($this->assignment_round_name($external), false);
     }
 
-    function round_number($name, $add) {
-        if (!$name || !strcasecmp($name, "default") || !strcasecmp($name, "unnamed"))
+    function round_number($rname, $add) {
+        if (!$rname || !strcasecmp($rname, "none") || !strcasecmp($rname, "unnamed"))
             return 0;
         for ($i = 1; $i != count($this->rounds); ++$i)
-            if (!strcasecmp($this->rounds[$i], $name))
+            if (!strcasecmp($this->rounds[$i], $rname))
                 return $i;
-        if ($add) {
+        if ($add && !self::round_name_error($rname)) {
             $rtext = $this->setting_data("tag_rounds", "");
-            $rtext = ($rtext ? "$rtext$name " : " $name ");
+            $rtext = ($rtext ? "$rtext$rname " : " $rname ");
             $this->save_setting("tag_rounds", 1, $rtext);
-            return $this->round_number($name, false);
+            return $this->round_number($rname, false);
         } else
-            return 0;
+            return false;
     }
 
     function round_selector_options() {
         $opt = array();
         foreach ($this->defined_round_list() as $rname)
             $opt[$rname] = $rname;
-        $crname = $this->current_round_name() ? : "unnamed";
+        $crname = $this->assignment_round_name(false) ? : "unnamed";
         if ($crname && !get($opt, $crname))
             $opt[$crname] = $crname;
         return $opt;
     }
 
-    function round_selector_name($roundno) {
-        if ($roundno === null)
-            return $this->current_round_name() ? : "unnamed";
-        else if ($roundno > 0 && ($rname = get($this->rounds, $roundno))
-                 && $rname !== ";")
-            return $rname;
+    function round_setting($name, $round, $defval = null) {
+        if ($this->_round_settings !== null
+            && $round !== null
+            && isset($this->_round_settings[$round])
+            && isset($this->_round_settings[$round]->$name))
+            return $this->_round_settings[$round]->$name;
         else
-            return "unnamed";
+            return get($this->settings, $name, $defval);
     }
 
 
@@ -742,30 +1375,221 @@ class Conf {
     }
 
 
-    static function format_info($format) {
-        global $Opt;
-        if (self::$gFormatInfo === null) {
-            if (is_array(get($Opt, "formatInfo")))
-                self::$gFormatInfo = $Opt["formatInfo"];
-            else if (is_string(get($Opt, "formatInfo")))
-                self::$gFormatInfo = json_decode($Opt["formatInfo"], true);
-            if (!self::$gFormatInfo)
-                self::$gFormatInfo = array();
+    function format_info($format) {
+        if ($this->_format_info === null) {
+            $this->_format_info = [];
+            if (!isset($this->opt["formatInfo"]))
+                /* OK */;
+            else if (is_array($this->opt["formatInfo"]))
+                $this->_format_info = $this->opt["formatInfo"];
+            else if (is_string($this->opt["formatInfo"]))
+                $this->_format_info = json_decode($this->opt["formatInfo"], true);
+            foreach ($this->_format_info as $format => &$fi)
+                $fi = new TextFormat($format, $fi);
         }
         if ($format === null)
-            $format = self::$gDefaultFormat;
-        return get(self::$gFormatInfo, $format);
+            $format = $this->default_format;
+        return get($this->_format_info, $format);
     }
 
-    static function check_format($format, $text = null) {
+    public function check_format($format, $text = null) {
         if ($format === null)
-            $format = self::$gDefaultFormat;
-        if ($format && $text !== null && ($f = self::format_info($format))
-            && ($re = get($f, "simple_regex")) && preg_match($re, $text))
+            $format = $this->default_format;
+        if ($format && $text !== null && ($f = $this->format_info($format))
+            && $f->simple_regex && preg_match($f->simple_regex, $text))
             $format = 0;
         return $format;
     }
 
+
+    function saved_searches() {
+        $ss = [];
+        foreach ($this->settingTexts as $k => $v)
+            if (substr($k, 0, 3) === "ss:" && ($v = json_decode($v)))
+                $ss[substr($k, 3)] = $v;
+        return $ss;
+    }
+
+
+    // users
+
+    function external_login() {
+        return isset($this->opt["ldapLogin"]) || isset($this->opt["httpAuthLogin"]);
+    }
+
+    function site_contact() {
+        $contactEmail = $this->opt("contactEmail");
+        if (!$contactEmail || $contactEmail == "you@example.com") {
+            $result = $this->ql("select firstName, lastName, email from ContactInfo where roles!=0 and (roles&" . (Contact::ROLE_CHAIR | Contact::ROLE_ADMIN) . ")!=0 order by (roles&" . Contact::ROLE_CHAIR . ") desc limit 1");
+            if ($result && ($row = $result->fetch_object())) {
+                $this->set_opt("defaultSiteContact", true);
+                $this->set_opt("contactName", Text::name_text($row));
+                $this->set_opt("contactEmail", $row->email);
+            }
+            Dbl::free($result);
+        }
+        return new Contact((object) array("fullName" => $this->opt["contactName"],
+                                          "email" => $this->opt["contactEmail"],
+                                          "isChair" => true,
+                                          "isPC" => true,
+                                          "is_site_contact" => true,
+                                          "contactTags" => null), $this);
+    }
+
+    function user_by_id($id) {
+        $result = $this->qe("select ContactInfo.* from ContactInfo where contactId=?", $id);
+        $acct = Contact::fetch($result, $this);
+        Dbl::free($result);
+        return $acct;
+    }
+
+    function cached_user_by_id($id) {
+        global $Me;
+        if ($id && $Me && $Me->contactId == $id)
+            return $Me;
+        else if ($this->_pc_members_cache
+                 && isset($this->_pc_members_and_admins_cache[$id]))
+            return $this->_pc_members_and_admins_cache[$id];
+        else
+            return $this->user_by_id($id);
+    }
+
+    function user_by_email($email) {
+        $acct = null;
+        if (($email = trim((string) $email)) !== "") {
+            $result = $this->qe("select * from ContactInfo where email=?", $email);
+            $acct = Contact::fetch($result, $this);
+            Dbl::free($result);
+        }
+        return $acct;
+    }
+
+    function user_id_by_email($email) {
+        $result = $this->qe("select contactId from ContactInfo where email=?", trim($email));
+        $row = edb_row($result);
+        Dbl::free($result);
+        return $row ? (int) $row[0] : false;
+    }
+
+    function cached_user_by_email($email) {
+        global $Me;
+        if ($email && $Me && strcasecmp($Me->email, $email) == 0)
+            return $Me;
+        else if (($u = $this->pc_member_by_email($email)))
+            return $u;
+        else
+            return $this->user_by_email($email);
+    }
+
+    function pc_members() {
+        if ($this->_pc_members_cache === null) {
+            $q = "contactId, firstName, lastName, unaccentedName, affiliation, email, roles, contactTags, disabled";
+            if ($this->_pc_members_fully_loaded)
+                $q = "*";
+            $pc = array();
+            $result = $this->q("select $q from ContactInfo where roles!=0 and (roles&" . Contact::ROLE_PCLIKE . ")!=0");
+            $by_name_text = array();
+            $this->_pc_tags_cache = ["pc" => "pc"];
+            while ($result && ($row = Contact::fetch($result, $this))) {
+                $pc[$row->contactId] = $row;
+                if ($row->firstName || $row->lastName) {
+                    $name_text = Text::name_text($row);
+                    $row2 = get($by_name_text, $name_text);
+                    if ($row2) {
+                        $pc1 = ($row->roles & Contact::ROLE_PC) != 0;
+                        $pc2 = ($row2->roles & Contact::ROLE_PC) != 0;
+                        if (!$pc1 || $pc2)
+                            $row->nameAmbiguous = true;
+                        if (!$pc2 || $pc1)
+                            $row2->nameAmbiguous = true;
+                        if (!$pc2)
+                            $by_name_text[$name_text] = $row;
+                    } else
+                        $by_name_text[$name_text] = $row;
+                }
+                if ($row->contactTags)
+                    foreach (explode(" ", $row->contactTags) as $t) {
+                        list($tag, $value) = TagInfo::unpack($t);
+                        if ($tag)
+                            $this->_pc_tags_cache[strtolower($tag)] = $tag;
+                    }
+            }
+            Dbl::free($result);
+            uasort($pc, "Contact::compare");
+            $this->_pc_members_and_admins_cache = $pc;
+            $pc = array_filter($pc, function ($p) { return ($p->roles & Contact::ROLE_PC) != 0; });
+            $order = 0;
+            foreach ($pc as $row) {
+                $row->sort_position = $order;
+                ++$order;
+            }
+            $this->_pc_members_cache = $pc;
+            ksort($this->_pc_tags_cache);
+        }
+        return $this->_pc_members_cache;
+    }
+
+    function pc_members_and_admins() {
+        if ($this->_pc_members_and_admins_cache === null)
+            $this->pc_members();
+        return $this->_pc_members_and_admins_cache;
+    }
+
+    function full_pc_members() {
+        if ($this->_pc_members_cache !== null) {
+            $result = $this->q("select * from ContactInfo where roles!=0 and (roles&" . Contact::ROLE_PCLIKE . ")!=0");
+            while ($result && ($row = $result->fetch_object())) {
+                if (($pc = get($this->_pc_members_and_admins_cache, $row->contactId)))
+                    $pc->merge_secondary_properties($row);
+            }
+            Dbl::free($result);
+        }
+        $this->_pc_members_fully_loaded = true;
+        return $this->pc_members();
+    }
+
+    function pc_member_by_id($cid) {
+        return get($this->pc_members(), $cid);
+    }
+
+    function pc_member_by_email($email) {
+        foreach ($this->pc_members() as $p)
+            if (strcasecmp($p->email, $email) == 0)
+                return $p;
+        return null;
+    }
+
+    function pc_tags() {
+        if ($this->_pc_tags_cache === null)
+            $this->pc_members();
+        return $this->_pc_tags_cache;
+    }
+
+    function pc_tag_exists($tag) {
+        if ($this->_pc_tags_cache === null)
+            $this->pc_members();
+        return isset($this->_pc_tags_cache[strtolower($tag)]);
+    }
+
+    function pc_completion_map() {
+        $map = $bylevel = [];
+        foreach ($this->pc_members_and_admins() as $pc)
+            if (!$pc->disabled) {
+                foreach ($pc->completion_items() as $k => $level) {
+                    if (!isset($bylevel[$k])
+                        || $bylevel[$k] < $level
+                        || get($map, $k) === $pc) {
+                        $map[$k] = $pc;
+                        $bylevel[$k] = $level;
+                    } else
+                        unset($map[$k]);
+                }
+            }
+        return $map;
+    }
+
+
+    // session data
 
     function session($name, $defval = null) {
         if (isset($_SESSION[$this->dsn][$name]))
@@ -779,16 +1603,6 @@ class Conf {
             $_SESSION[$this->dsn][$name] = $value;
         else
             unset($_SESSION[$this->dsn][$name]);
-    }
-
-    function save_session_array($name, $index, $value) {
-        if (!isset($_SESSION[$this->dsn][$name])
-            || !is_array($_SESSION[$this->dsn][$name]))
-            $_SESSION[$this->dsn][$name] = array();
-        if ($index !== true)
-            $_SESSION[$this->dsn][$name][$index] = $value;
-        else
-            $_SESSION[$this->dsn][$name][] = $value;
     }
 
     function capability_text($prow, $capType) {
@@ -824,46 +1638,90 @@ class Conf {
 
 
     // update the 'papersub' setting: are there any submitted papers?
-    function update_papersub_setting($forsubmit) {
-        $papersub = defval($this->settings, "papersub");
-        if ($papersub === null && $forsubmit)
-            $this->q("insert into Settings (name, value) values ('papersub',1) on duplicate key update value=value");
-        else if ($papersub <= 0 || !$forsubmit)
-            // see also settings.php
-            $this->q("update Settings set value=(select ifnull(min(paperId),0) from Paper where " . ($this->can_pc_see_all_submissions() ? "timeWithdrawn<=0" : "timeSubmitted>0") . ") where name='papersub'");
-        $this->settings["papersub"] = Dbl::fetch_ivalue("select value from Settings where name='papersub'");
-    }
-
-    function update_paperacc_setting($foraccept) {
-        if (!isset($this->settings["paperacc"]) && $foraccept)
-            $this->q("insert into Settings (name, value) values ('paperacc', " . time() . ") on duplicate key update value=value");
-        else if (defval($this->settings, "paperacc") <= 0 || !$foraccept)
-            $this->q("update Settings set value=(select max(outcome) from Paper where timeSubmitted>0 group by paperId>0) where name='paperacc'");
-        $this->settings["paperacc"] = Dbl::fetch_ivalue("select value from Settings where name='paperacc'");
-    }
-
-    function update_rev_tokens_setting($always) {
-        if ($always || defval($this->settings, "rev_tokens", 0) < 0) {
-            $this->qe("insert into Settings (name, value) select 'rev_tokens', count(reviewId) from PaperReview where reviewToken!=0 on duplicate key update value=values(value)");
-            $this->settings["rev_tokens"] = Dbl::fetch_ivalue("select value from Settings where name='rev_tokens'");
+    function update_papersub_setting($adding) {
+        if ($this->setting("no_papersub", 0) > 0 ? $adding >= 0 : $adding <= 0) {
+            $this->qe("delete from Settings where name='no_papersub'");
+            $this->qe("insert into Settings (name, value) select 'no_papersub', 1 from dual where exists (select * from Paper where timeSubmitted>0) = 0");
+            $this->settings["no_papersub"] = $this->fetch_ivalue("select value from Settings where name='no_papersub'");
         }
     }
 
-    function update_paperlead_setting() {
-        $this->qe("insert into Settings (name, value) select 'paperlead', count(paperId) from Paper where leadContactId>0 or shepherdContactId>0 limit 1 on duplicate key update value=values(value)");
-        $this->settings["paperlead"] = Dbl::fetch_ivalue("select value from Settings where name='paperlead'");
+    function update_paperacc_setting($adding) {
+        if ($this->setting("paperacc", 0) <= 0 ? $adding >= 0 : $adding <= 0) {
+            $this->qe_raw("insert into Settings (name, value) select 'paperacc', exists (select * from Paper where outcome>0) on duplicate key update value=values(value)");
+            $this->settings["paperacc"] = $this->fetch_ivalue("select value from Settings where name='paperacc'");
+        }
     }
 
-    function update_papermanager_setting() {
-        $this->qe("insert into Settings (name, value) select 'papermanager', count(paperId) from Paper where managerContactId>0 limit 1 on duplicate key update value=values(value)");
-        $this->settings["papermanager"] = Dbl::fetch_ivalue("select value from Settings where name='papermanager'");
+    function update_rev_tokens_setting($adding) {
+        if ($this->setting("rev_tokens", 0) === -1)
+            $adding = 0;
+        if ($this->setting("rev_tokens", 0) <= 0 ? $adding >= 0 : $adding <= 0) {
+            $this->qe_raw("insert into Settings (name, value) select 'rev_tokens', exists (select * from PaperReview where reviewToken!=0) on duplicate key update value=values(value)");
+            $this->settings["rev_tokens"] = $this->fetch_ivalue("select value from Settings where name='rev_tokens'");
+        }
+    }
+
+    function update_paperlead_setting($adding) {
+        if ($this->setting("paperlead", 0) <= 0 ? $adding >= 0 : $adding <= 0) {
+            $this->qe_raw("insert into Settings (name, value) select 'paperlead', exists (select * from Paper where leadContactId>0 or shepherdContactId>0) on duplicate key update value=values(value)");
+            $this->settings["paperlead"] = $this->fetch_ivalue("select value from Settings where name='paperlead'");
+        }
+    }
+
+    function update_papermanager_setting($adding) {
+        if ($this->setting("papermanager", 0) <= 0 ? $adding >= 0 : $adding <= 0) {
+            $this->qe_raw("insert into Settings (name, value) select 'papermanager', exists (select * from Paper where managerContactId>0) on duplicate key update value=values(value)");
+            $this->settings["papermanager"] = $this->fetch_ivalue("select value from Settings where name='papermanager'");
+        }
+    }
+
+    function update_metareviews_setting($adding) {
+        if ($this->setting("metareviews", 0) <= 0 ? $adding >= 0 : $adding <= 0) {
+            $this->qe_raw("insert into Settings (name, value) select 'metareviews', exists (select * from PaperReview where reviewType=" . REVIEW_META . ") on duplicate key update value=values(value)");
+            $this->settings["metareviews"] = $this->fetch_ivalue("select value from Settings where name='metareviews'");
+        }
+    }
+
+    function update_autosearch_tags($paper = null) {
+        if ((!$this->setting("tag_autosearch") && !$this->opt("definedTags"))
+            || !$this->tags()->has_autosearch
+            || $this->_updating_autosearch_tags)
+            return;
+        $csv = ["paper,tag"];
+        if (!$paper) {
+            foreach ($this->tags()->filter("autosearch") as $dt) {
+                $csv[] = CsvGenerator::quote("#{$dt->tag}") . "," . CsvGenerator::quote("{$dt->tag}#clear");
+                $csv[] = CsvGenerator::quote($dt->autosearch) . "," . CsvGenerator::quote($dt->tag);
+            }
+        } else {
+            $prow = $this->paperRow(is_object($paper) ? $paper->paperId : $paper);
+            foreach ($this->tags()->filter("autosearch") as $dt) {
+                $search = new PaperSearch($this->site_contact(), ["q" => $dt->autosearch, "t" => "all"]);
+                $want = $search->test($prow);
+                if ($prow->has_tag($dt->tag) !== $want)
+                    $csv[] = "{$prow->paperId}," . CsvGenerator::quote($dt->tag . ($want ? "" : "#clear"));
+            }
+        }
+        $this->_update_autosearch_tags_csv($csv);
+    }
+
+    function _update_autosearch_tags_csv($csv) {
+        if (count($csv) > 1) {
+            $this->_updating_autosearch_tags = true;
+            $aset = new AssignmentSet($this->site_contact(), true);
+            $aset->set_search_type("all");
+            $aset->parse($csv);
+            $aset->execute();
+            $this->_updating_autosearch_tags = false;
+        }
     }
 
 
     static private $invariant_row = null;
 
     private function invariantq($q, $args = []) {
-        $result = Dbl::ql_apply($this->dblink, $q, $args);
+        $result = $this->ql_apply($q, $args);
         if ($result) {
             self::$invariant_row = $result->fetch_row();
             $result->close();
@@ -873,44 +1731,46 @@ class Conf {
     }
 
     function check_invariants() {
-        global $Opt;
-
-        $any = $this->invariantq("select paperId from Paper where " . ($this->can_pc_see_all_submissions() ? "timeWithdrawn<=0" : "timeSubmitted>0") . " limit 1");
-        if ($any !== !!get($this->settings, "papersub"))
-            trigger_error($Opt["dbName"] . " invariant error: papersub");
+        $any = $this->invariantq("select paperId from Paper where timeSubmitted>0 limit 1");
+        if ($any !== !get($this->settings, "no_papersub"))
+            trigger_error("$this->dbname invariant error: no_papersub");
 
         $any = $this->invariantq("select paperId from Paper where outcome>0 and timeSubmitted>0 limit 1");
         if ($any !== !!get($this->settings, "paperacc"))
-            trigger_error($Opt["dbName"] . " invariant error: paperacc");
+            trigger_error("$this->dbname invariant error: paperacc");
 
         $any = $this->invariantq("select reviewId from PaperReview where reviewToken!=0 limit 1");
         if ($any !== !!get($this->settings, "rev_tokens"))
-            trigger_error($Opt["dbName"] . " invariant error: rev_tokens");
+            trigger_error("$this->dbname invariant error: rev_tokens");
 
         $any = $this->invariantq("select paperId from Paper where leadContactId>0 or shepherdContactId>0 limit 1");
         if ($any !== !!get($this->settings, "paperlead"))
-            trigger_error($Opt["dbName"] . " invariant error: paperlead");
+            trigger_error("$this->dbname invariant error: paperlead");
 
         $any = $this->invariantq("select paperId from Paper where managerContactId>0 limit 1");
         if ($any !== !!get($this->settings, "papermanager"))
-            trigger_error($Opt["dbName"] . " invariant error: papermanager");
+            trigger_error("$this->dbname invariant error: papermanager");
+
+        $any = $this->invariantq("select paperId from PaperReview where reviewType=" . REVIEW_META . " limit 1");
+        if ($any !== !!get($this->settings, "metareviews"))
+            trigger_error("$this->dbname invariant error: metareviews");
 
         // no empty text options
         $text_options = array();
-        foreach (PaperOption::option_list($this) as $ox)
+        foreach ($this->paper_opts->option_list() as $ox)
             if ($ox->type === "text")
                 $text_options[] = $ox->id;
         if (count($text_options)) {
-            $q = Dbl::format_query("select paperId from PaperOption where optionId ?a and data='' limit 1", $text_options);
+            $q = Dbl::format_query($this->dblink, "select paperId from PaperOption where optionId ?a and data='' limit 1", $text_options);
             $any = $this->invariantq($q);
             if ($any)
-                trigger_error($Opt["dbName"] . " invariant error: text option with empty text");
+                trigger_error("$this->dbname invariant error: text option with empty text");
         }
 
         // no funky PaperConflict entries
         $any = $this->invariantq("select paperId from PaperConflict where conflictType<=0 limit 1");
         if ($any)
-            trigger_error($Opt["dbName"] . " invariant error: PaperConflict with zero conflictType");
+            trigger_error("$this->dbname invariant error: PaperConflict with zero conflictType");
 
         // reviewNeedsSubmit is defined correctly
         $any = $this->invariantq("select r.paperId, r.reviewId from PaperReview r
@@ -922,37 +1782,56 @@ class Conf {
             and if(coalesce(q.ct,0)=0,1,if(q.cs=0,-1,0))!=r.reviewNeedsSubmit
             limit 1");
         if ($any)
-            trigger_error($Opt["dbName"] . " invariant error: bad reviewNeedsSubmit for review #" . self::$invariant_row[0] . "/" . self::$invariant_row[1]);
+            trigger_error("$this->dbname invariant error: bad reviewNeedsSubmit for review #" . self::$invariant_row[0] . "/" . self::$invariant_row[1]);
 
         // anonymous users are disabled
         $any = $this->invariantq("select email from ContactInfo where email regexp '^anonymous[0-9]*\$' and not disabled limit 1");
         if ($any)
-            trigger_error($Opt["dbName"] . " invariant error: anonymous user is not disabled");
+            trigger_error("$this->dbname invariant error: anonymous user is not disabled");
 
         // no one has password '*'
         $any = $this->invariantq("select email from ContactInfo where password='*' limit 1");
         if ($any)
-            trigger_error($Opt["dbName"] . " invariant error: password '*'");
+            trigger_error("$this->dbname invariant error: password '*'");
+
+        // paper denormalizations match
+        $any = $this->invariantq("select p.paperId from Paper p join PaperStorage ps on (ps.paperStorageId=p.paperStorageId) where p.finalPaperStorageId<=0 and p.paperStorageId>1 and (p.sha1!=ps.sha1 or p.size!=ps.size or p.mimetype!=ps.mimetype or p.timestamp!=ps.timestamp) limit 1");
+        if ($any)
+            trigger_error("$this->dbname invariant error: bad Paper denormalization, paper #" . self::$invariant_row[0]);
+        $any = $this->invariantq("select p.paperId from Paper p join PaperStorage ps on (ps.paperStorageId=p.finalPaperStorageId) where p.finalPaperStorageId>1 and (p.sha1 != ps.sha1 or p.size!=ps.size or p.mimetype!=ps.mimetype or p.timestamp!=ps.timestamp) limit 1");
+        if ($any)
+            trigger_error("$this->dbname invariant error: bad Paper final denormalization, paper #" . self::$invariant_row[0]);
+
+        // filterType is never zero
+        $any = $this->invariantq("select paperStorageId from PaperStorage where filterType=0 limit 1");
+        if ($any)
+            trigger_error("$this->dbname invariant error: bad PaperStorage filterType, id #" . self::$invariant_row[0]);
+
+        // has_colontag is defined
+        $any = $this->invariantq("select tag from PaperTag where tag like '%:' limit 1");
+        if ($any && !$this->setting("has_colontag"))
+            trigger_error("$this->dbname invariant error: has tag " . self::$invariant_row[0] . " but no has_colontag");
+
+        // has_topics is defined
+        $any = $this->invariantq("select topicId from TopicArea limit 1");
+        if (!$any !== !$this->setting("has_topics"))
+            trigger_error("$this->dbname invariant error: has_topics setting incorrect");
     }
 
 
     function save_setting($name, $value, $data = null) {
-        $qname = $this->dblink->escape_string($name);
         $change = false;
         if ($value === null && $data === null) {
-            if ($this->qe("delete from Settings where name='$qname'")) {
+            if ($this->qe("delete from Settings where name=?", $name)) {
                 unset($this->settings[$name]);
                 unset($this->settingTexts[$name]);
                 $change = true;
             }
         } else {
-            if ($data === null)
-                $dval = "null";
-            else if (is_string($data))
-                $dval = "'" . $this->dblink->escape_string($data) . "'";
-            else
-                $dval = "'" . $this->dblink->escape_string(json_encode($data)) . "'";
-            if ($this->qe("insert into Settings (name, value, data) values ('$qname', $value, $dval) on duplicate key update value=values(value), data=values(data)")) {
+            $dval = $data;
+            if (is_array($dval) || is_object($dval))
+                $dval = json_encode_db($dval);
+            if ($this->qe("insert into Settings (name, value, data) values (?, ?, ?) on duplicate key update value=values(value), data=values(data)", $name, $value, $dval)) {
                 $this->settings[$name] = $value;
                 $this->settingTexts[$name] = $data;
                 $change = true;
@@ -960,162 +1839,106 @@ class Conf {
         }
         if ($change) {
             $this->crosscheck_settings();
-            if (str_starts_with($name, "opt."))
+            if (str_starts_with($name, "opt.")) {
+                $oname = substr($name, 4);
+                if ($value === null && $data === null)
+                    $this->opt[$oname] = get($this->opt_override, $oname);
+                else
+                    $this->opt[$oname] = $data === null ? $value : $data;
                 $this->crosscheck_options();
+            }
         }
         return $change;
     }
 
     function update_schema_version($n) {
         if (!$n)
-            $n = Dbl::fetch_ivalue("select value from Settings where name='allowPaperOption'");
-        if ($n && Dbl::ql("update Settings set value=$n where name='allowPaperOption'")) {
+            $n = $this->fetch_ivalue("select value from Settings where name='allowPaperOption'");
+        if ($n && $this->ql("update Settings set value=? where name='allowPaperOption'", $n)) {
             $this->sversion = $this->settings["allowPaperOption"] = $n;
             return true;
         } else
             return false;
     }
 
-    function invalidateCaches($caches = null) {
-        global $OK;
-        if (self::$no_invalidate_caches)
-            return;
-        $inserts = array();
-        $removes = array();
-        $time = time();
-        if ($caches ? isset($caches["pc"]) : $this->setting("pc") > 0) {
-            if (!$caches || $caches["pc"]) {
-                $inserts[] = "('pc',$time)";
-                $this->settings["pc"] = $time;
-            } else {
-                $removes[] = "'pc'";
-                unset($this->settings["pc"]);
+    function invalidate_caches($caches = null) {
+        if (!self::$no_invalidate_caches) {
+            if (is_string($caches))
+                $caches = [$caches => true];
+            if (!$caches || isset($caches["pc"]))
+                $this->_pc_members_cache = $this->_pc_tags_cache = $this->_pc_members_and_admins_cache = null;
+            if (!$caches || isset($caches["options"])) {
+                $this->paper_opts->invalidate_option_list();
+                $this->_docclass_cache = [];
+                $this->_formatspec_cache = [];
+                $this->_abbrev_matcher = null;
             }
+            if (!$caches || isset($caches["rf"])) {
+                $this->_review_form_cache = $this->_defined_rounds = null;
+                $this->_abbrev_matcher = null;
+            }
+            if (!$caches || isset($caches["taginfo"]) || isset($caches["tracks"]))
+                $this->_taginfo = null;
+            if (!$caches || isset($caches["formulas"]))
+                $this->_formula_functions = null;
+            if (!$caches || isset($caches["assigners"]))
+                $this->_assignment_parsers = null;
+            if (!$caches || isset($caches["tracks"]))
+                Contact::update_rights();
         }
-        if (!$caches || isset($caches["paperOption"]))
-            PaperOption::invalidate_option_list();
-        if (!$caches || isset($caches["rf"])) {
-            ReviewForm::clear_cache();
-            $this->_defined_rounds = null;
-        }
-        $ok = true;
-        if (count($inserts))
-            $ok = $ok && ($this->qe("insert into Settings (name, value) values " . join(",", $inserts) . " on duplicate key update value=values(value)") !== false);
-        if (count($removes))
-            $ok = $ok && ($this->qe("delete from Settings where name in (" . join(",", $removes) . ")") !== false);
-        return $ok;
-    }
-
-    function ql($query) {
-        $result = $this->dblink->query($query);
-        if (!$result)
-            error_log(caller_landmark() . ": " . $this->dblink->error);
-        return $result;
-    }
-
-    function q($query) {
-        global $OK;
-        $result = $this->dblink->query($query);
-        if ($result === false)
-            $OK = false;
-        return $result;
-    }
-
-    function db_error_html($getdb = true, $while = "") {
-        $text = "<p>Database error";
-        if ($while)
-            $text .= " $while";
-        if ($getdb)
-            $text .= ": " . htmlspecialchars($this->dblink->error);
-        return $text . "</p>";
-    }
-
-    function db_error_text($getdb = true, $while = "") {
-        $text = "Database error";
-        if ($while)
-            $text .= " $while";
-        if ($getdb)
-            $text .= ": " . $this->dblink->error;
-        return $text;
-    }
-
-    function query_error_handler($dblink, $query) {
-        global $OK;
-        $landmark = caller_landmark(1, "/^(?:Dbl::|Conf::q|call_user_func)/");
-        if (PHP_SAPI == "cli")
-            fwrite(STDERR, "$landmark: database error: $dblink->error in $query\n");
-        else {
-            error_log("$landmark: database error: $dblink->error in $query");
-            self::msg_error("<p>" . htmlspecialchars($landmark) . ": database error: " . htmlspecialchars($this->dblink->error) . " in " . Ht::pre_text_wrap($query) . "</p>");
-        }
-        $OK = false;
-    }
-
-    function qe($query) {
-        return Dbl::qe_raw($this->dblink, $query);
     }
 
 
     // times
 
-    static function _dateFormat($type) {
-        global $Opt;
-        if (!isset($Opt["_dateFormatInitialized"])) {
-            if (!isset($Opt["time24hour"]) && isset($Opt["time24Hour"]))
-                $Opt["time24hour"] = $Opt["time24Hour"];
-            if (!isset($Opt["dateFormatLong"]) && isset($Opt["dateFormat"]))
-                $Opt["dateFormatLong"] = $Opt["dateFormat"];
-            if (!isset($Opt["dateFormat"])) {
-                if (isset($Opt["time24hour"]) && $Opt["time24hour"])
-                    $Opt["dateFormat"] = "j M Y H:i:s";
-                else
-                    $Opt["dateFormat"] = "j M Y g:i:sa";
-            }
-            if (!isset($Opt["dateFormatLong"]))
-                $Opt["dateFormatLong"] = "l " . $Opt["dateFormat"];
-            if (!isset($Opt["dateFormatObscure"]))
-                $Opt["dateFormatObscure"] = "j M Y";
-            if (!isset($Opt["timestampFormat"]))
-                $Opt["timestampFormat"] = $Opt["dateFormat"];
-            if (!isset($Opt["dateFormatSimplifier"])) {
-                if (isset($Opt["time24hour"]) && $Opt["time24hour"])
-                    $Opt["dateFormatSimplifier"] = "/:00(?!:)/";
-                else
-                    $Opt["dateFormatSimplifier"] = "/:00(?::00|)(?= ?[ap]m)/";
-            }
-            if (!isset($Opt["dateFormatTimezone"]))
-                $Opt["dateFormatTimezone"] = null;
-            $Opt["_dateFormatInitialized"] = true;
+    private function _dateFormat($type) {
+        if (!$this->_date_format_initialized) {
+            if (!isset($this->opt["time24hour"]) && isset($this->opt["time24Hour"]))
+                $this->opt["time24hour"] = $this->opt["time24Hour"];
+            if (!isset($this->opt["dateFormatLong"]) && isset($this->opt["dateFormat"]))
+                $this->opt["dateFormatLong"] = $this->opt["dateFormat"];
+            if (!isset($this->opt["dateFormat"]))
+                $this->opt["dateFormat"] = get($this->opt, "time24hour") ? "j M Y H:i:s" : "j M Y g:i:sa";
+            if (!isset($this->opt["dateFormatLong"]))
+                $this->opt["dateFormatLong"] = "l " . $this->opt["dateFormat"];
+            if (!isset($this->opt["dateFormatObscure"]))
+                $this->opt["dateFormatObscure"] = "j M Y";
+            if (!isset($this->opt["timestampFormat"]))
+                $this->opt["timestampFormat"] = $this->opt["dateFormat"];
+            if (!isset($this->opt["dateFormatSimplifier"]))
+                $this->opt["dateFormatSimplifier"] = get($this->opt, "time24hour") ? "/:00(?!:)/" : "/:00(?::00|)(?= ?[ap]m)/";
+            if (!isset($this->opt["dateFormatTimezone"]))
+                $this->opt["dateFormatTimezone"] = null;
+            $this->_date_format_initialized = true;
         }
         if ($type == "timestamp")
-            return $Opt["timestampFormat"];
+            return $this->opt["timestampFormat"];
         else if ($type == "obscure")
-            return $Opt["dateFormatObscure"];
+            return $this->opt["dateFormatObscure"];
         else if ($type)
-            return $Opt["dateFormatLong"];
+            return $this->opt["dateFormatLong"];
         else
-            return $Opt["dateFormat"];
+            return $this->opt["dateFormat"];
     }
 
     function parseableTime($value, $include_zone) {
-        global $Opt;
-        $f = self::_dateFormat(false);
+        $f = $this->_dateFormat(false);
         $d = date($f, $value);
-        if ($Opt["dateFormatSimplifier"])
-            $d = preg_replace($Opt["dateFormatSimplifier"], "", $d);
+        if ($this->opt["dateFormatSimplifier"])
+            $d = preg_replace($this->opt["dateFormatSimplifier"], "", $d);
         if ($include_zone) {
-            if ($Opt["dateFormatTimezone"] === null)
+            if ($this->opt["dateFormatTimezone"] === null)
                 $d .= " " . date("T", $value);
-            else if ($Opt["dateFormatTimezone"])
-                $d .= " " . $Opt["dateFormatTimezone"];
+            else if ($this->opt["dateFormatTimezone"])
+                $d .= " " . $this->opt["dateFormatTimezone"];
         }
         return $d;
     }
     function parse_time($d, $reference = null) {
-        global $Now, $Opt;
+        global $Now;
         if ($reference === null)
             $reference = $Now;
-        if (!isset($Opt["dateFormatTimezoneRemover"])
+        if (!isset($this->opt["dateFormatTimezoneRemover"])
             && function_exists("timezone_abbreviations_list")) {
             $mytz = date_default_timezone_get();
             $x = array();
@@ -1126,33 +1949,32 @@ class Conf {
             }
             if (count($x) == 0)
                 $x[] = preg_quote(date("T", $reference));
-            $Opt["dateFormatTimezoneRemover"] =
+            $this->opt["dateFormatTimezoneRemover"] =
                 "/(?:\\s|\\A)(?:" . join("|", $x) . ")(?:\\s|\\z)/i";
         }
-        if (get($Opt, "dateFormatTimezoneRemover"))
-            $d = preg_replace($Opt["dateFormatTimezoneRemover"], " ", $d);
+        if ($this->opt["dateFormatTimezoneRemover"])
+            $d = preg_replace($this->opt["dateFormatTimezoneRemover"], " ", $d);
         $d = preg_replace('/\butc([-+])/i', 'GMT$1', $d);
         return strtotime($d, $reference);
     }
 
     function _printableTime($value, $type, $useradjust, $preadjust = null) {
-        global $Opt;
         if ($value <= 0)
             return "N/A";
-        $t = date(self::_dateFormat($type), $value);
-        if ($Opt["dateFormatSimplifier"])
-            $t = preg_replace($Opt["dateFormatSimplifier"], "", $t);
+        $t = date($this->_dateFormat($type), $value);
+        if ($this->opt["dateFormatSimplifier"])
+            $t = preg_replace($this->opt["dateFormatSimplifier"], "", $t);
         if ($type !== "obscure") {
-            if ($Opt["dateFormatTimezone"] === null)
+            if ($this->opt["dateFormatTimezone"] === null)
                 $t .= " " . date("T", $value);
-            else if ($Opt["dateFormatTimezone"])
-                $t .= " " . $Opt["dateFormatTimezone"];
+            else if ($this->opt["dateFormatTimezone"])
+                $t .= " " . $this->opt["dateFormatTimezone"];
         }
         if ($preadjust)
             $t .= $preadjust;
         if ($useradjust) {
             $sp = strpos($useradjust, " ");
-            $t .= "<$useradjust class=\"usertime\" id=\"usertime$this->usertimeId\" style=\"display:none\"></" . ($sp ? substr($useradjust, 0, $sp) : $useradjust) . ">";
+            $t .= "<$useradjust class=\"usertime hidden\" id=\"usertime$this->usertimeId\"></" . ($sp ? substr($useradjust, 0, $sp) : $useradjust) . ">";
             Ht::stash_script("setLocalTime('usertime$this->usertimeId',$value)");
             ++$this->usertimeId;
         }
@@ -1162,20 +1984,24 @@ class Conf {
         return $this->_printableTime($value, true, $useradjust, $preadjust);
     }
     function obscure_time($timestamp) {
-        $timestamp = (int) ($timestamp + 0.5);
-        $offset = 0;
-        if (($zone = timezone_open(date_default_timezone_get())))
-            $offset = $zone->getOffset(new DateTime("@$timestamp"));
-        return $timestamp - (($timestamp + $offset) % 86400) + 43200;
+        if ($timestamp !== null)
+            $timestamp = (int) ($timestamp + 0.5);
+        if ($timestamp > 0) {
+            $offset = 0;
+            if (($zone = timezone_open(date_default_timezone_get())))
+                $offset = $zone->getOffset(new DateTime("@$timestamp"));
+            $timestamp += 43200 - ($timestamp + $offset) % 86400;
+        }
+        return $timestamp;
     }
-    function unparse_time_obscure($value, $useradjust = false, $preadjust = null) {
-        return $this->_printableTime($value, "obscure", $useradjust, $preadjust);
+    function unparse_time_short($value) {
+        return $this->_printableTime($value, false, false, null);
     }
-    function printableTimestamp($value, $useradjust = false, $preadjust = null) {
-        return $this->_printableTime($value, "timestamp", $useradjust, $preadjust);
+    function unparse_time_full($value) {
+        return $this->_printableTime($value, "timestamp", false, null);
     }
-    function printableTimeShort($value, $useradjust = false, $preadjust = null) {
-        return $this->_printableTime($value, false, $useradjust, $preadjust);
+    function unparse_time_obscure($value) {
+        return $this->_printableTime($value, "obscure", false, null);
     }
     function unparse_time_log($value) {
         return date("d/M/Y:H:i:s O", $value);
@@ -1228,9 +2054,8 @@ class Conf {
     function collectFinalPapers() {
         return $this->setting("final_open") > 0;
     }
-    function timeSubmitFinalPaper() {
-        return $this->timeAuthorViewDecision()
-            && $this->deadlinesBetween("final_open", "final_done", "final_grace");
+    function time_submit_final_version() {
+        return $this->deadlinesBetween("final_open", "final_done", "final_grace");
     }
     function timeAuthorViewReviews($reviewsOutstanding = false) {
         // also used to determine when authors can see review counts
@@ -1255,7 +2080,10 @@ class Conf {
         $isuf = $round ? "_$round" : "";
         return $this->deadlinesBetween("resp_open$isuf", "resp_done$isuf", "resp_grace$isuf");
     }
-    function timeAuthorViewDecision() {
+    function can_all_author_view_decision() {
+        return $this->setting("seedec") == self::SEEDEC_ALL;
+    }
+    function can_some_author_view_decision() {
         return $this->setting("seedec") == self::SEEDEC_ALL;
     }
     function time_review_open() {
@@ -1266,7 +2094,7 @@ class Conf {
     function review_deadline($round, $isPC, $hard) {
         $dn = ($isPC ? "pcrev_" : "extrev_") . ($hard ? "hard" : "soft");
         if ($round === null)
-            $round = $this->current_round(false);
+            $round = $this->assignment_round(!$isPC);
         else if (is_object($round))
             $round = $round->reviewRound ? : 0;
         if ($round && isset($this->settings["{$dn}_$round"]))
@@ -1288,14 +2116,7 @@ class Conf {
         return !$this->missed_review_deadline($round, $isPC, $hard);
     }
     function timePCReviewPreferences() {
-        return defval($this->settings, "papersub") > 0;
-    }
-    function timePCViewAllReviews($myReviewNeedsSubmit = false, $reviewsOutstanding = false) {
-        return ($this->settingsAfter("pc_seeallrev")
-                && (!$myReviewNeedsSubmit
-                    || $this->settings["pc_seeallrev"] != self::PCSEEREV_UNLESSINCOMPLETE)
-                && (!$reviewsOutstanding
-                    || $this->settings["pc_seeallrev"] != self::PCSEEREV_UNLESSANYINCOMPLETE));
+        return $this->can_pc_see_all_submissions() || $this->has_any_submitted();
     }
     function timePCViewDecision($conflicted) {
         $s = $this->setting("seedec");
@@ -1304,10 +2125,10 @@ class Conf {
         else
             return $s >= self::SEEDEC_REV;
     }
-    function timeReviewerViewDecision() {
+    function time_reviewer_view_decision() {
         return $this->setting("seedec") >= self::SEEDEC_REV;
     }
-    function timeReviewerViewAcceptedAuthors() {
+    function time_reviewer_view_accepted_authors() {
         return $this->setting("seedec") == self::SEEDEC_ALL;
     }
     function timePCViewPaper($prow, $pdf) {
@@ -1317,11 +2138,6 @@ class Conf {
             return !$pdf || $this->_pc_see_pdf;
         else
             return !$pdf && $this->can_pc_see_all_submissions();
-    }
-    function timePCViewSomePaper($pdf) {
-        return $this->setting("papersub")
-            ? !$pdf || $this->_pc_see_pdf
-            : !$pdf || $this->can_pc_see_all_submissions();
     }
     function timeEmailChairAboutReview() {
         return get($this->settings, "rev_notifychair") > 0;
@@ -1344,24 +2160,32 @@ class Conf {
     }
 
     function is_review_blind($rrow) {
+        $rb = $this->settings["rev_blind"];
+        if ($rb == self::BLIND_ALWAYS)
+            return true;
+        else if ($rb != self::BLIND_OPTIONAL)
+            return false;
         if (is_object($rrow))
             $rrow = (bool) $rrow->reviewBlind;
-        $rb = $this->settings["rev_blind"];
-        return $rb == self::BLIND_ALWAYS
-            || ($rb == self::BLIND_OPTIONAL
-                && ($rrow === null || $rrow));
+        return $rrow === null || $rrow;
     }
     function review_blindness() {
         return $this->settings["rev_blind"];
     }
 
-    function has_any_accepts() {
+    function has_any_submitted() {
+        return !get($this->settings, "no_papersub");
+    }
+    function has_any_pc_visible_pdf() {
+        return $this->has_any_submitted() && $this->_pc_see_pdf;
+    }
+    function has_any_accepted() {
         return !!get($this->settings, "paperacc");
     }
 
     function count_submitted_accepted() {
         $dlt = max($this->setting("sub_sub"), $this->setting("sub_close"));
-        $result = Dbl::qe("select outcome, count(paperId) from Paper where timeSubmitted>0 " . ($dlt ? "or (timeSubmitted=-100 and timeWithdrawn>=$dlt) " : "") . "group by outcome");
+        $result = $this->qe("select outcome, count(paperId) from Paper where timeSubmitted>0 " . ($dlt ? "or (timeSubmitted=-100 and timeWithdrawn>=$dlt) " : "") . "group by outcome");
         $n = $nyes = 0;
         while (($row = edb_row($result))) {
             $n += $row[1];
@@ -1377,7 +2201,11 @@ class Conf {
     }
 
     function has_any_manager() {
-        return !!get($this->settings, "papermanager");
+        return $this->_track_admin_sensitivity || !!get($this->settings, "papermanager");
+    }
+
+    function has_any_metareviews() {
+        return !!get($this->settings, "metareviews");
     }
 
     function can_pc_see_all_submissions() {
@@ -1390,28 +2218,132 @@ class Conf {
     }
 
 
-    function echoScript($script = "") {
-        Ht::stash_script($script);
-        echo Ht::take_stash();
-    }
-
-    function footerScript($script, $uniqueid = null) {
-        Ht::stash_script($script, $uniqueid);
-    }
-
-    function footerHtml($html, $uniqueid = null) {
-        Ht::stash_html($html, $uniqueid);
-    }
-
-
     function set_siteurl($base) {
-        global $Opt;
         $old_siteurl = Navigation::siteurl();
         $base = Navigation::set_siteurl($base);
-        if ($Opt["assetsUrl"] === $old_siteurl) {
-            $Opt["assetsUrl"] = $base;
-            Ht::$img_base = $Opt["assetsUrl"] . "images/";
+        if ($this->opt["assetsUrl"] === $old_siteurl) {
+            $this->opt["assetsUrl"] = $base;
+            Ht::$img_base = $this->opt["assetsUrl"] . "images/";
         }
+        if ($this->opt["scriptAssetsUrl"] === $old_siteurl)
+            $this->opt["scriptAssetsUrl"] = $base;
+    }
+
+    const HOTURL_RAW = 1;
+    const HOTURL_POST = 2;
+    const HOTURL_ABSOLUTE = 4;
+    const HOTURL_SITE_RELATIVE = 8;
+    const HOTURL_NO_DEFAULTS = 16;
+
+    function hoturl($page, $options = null, $flags = 0) {
+        global $Me;
+        $amp = ($flags & self::HOTURL_RAW ? "&" : "&amp;");
+        $t = $page . Navigation::php_suffix();
+        // parse options, separate anchor; see also redirectSelf
+        $anchor = "";
+        if (is_array($options)) {
+            $x = "";
+            foreach ($options as $k => $v)
+                if ($v === null || $v === false)
+                    /* skip */;
+                else if ($k !== "anchor")
+                    $x .= ($x === "" ? "" : $amp) . $k . "=" . urlencode($v);
+                else
+                    $anchor = "#" . urlencode($v);
+            $options = $x;
+        } else if (is_string($options)) {
+            if (preg_match('/\A(.*?)(#.*)\z/', $options, $m))
+                list($options, $anchor) = array($m[1], $m[2]);
+        } else
+            $options = "";
+        if ($flags & self::HOTURL_POST)
+            $options .= ($options === "" ? "" : $amp) . "post=" . post_value();
+        // append defaults
+        $are = '/\A(|.*?(?:&|&amp;))';
+        $zre = '(?:&(?:amp;)?|\z)(.*)\z/';
+        if (Conf::$hoturl_defaults && !($flags & self::HOTURL_NO_DEFAULTS))
+            foreach (Conf::$hoturl_defaults as $k => $v)
+                if (!preg_match($are . preg_quote($k) . '=/', $options))
+                    $options .= $amp . $k . "=" . $v;
+        // append forceShow to links to same paper if appropriate
+        $is_paper_page = preg_match('/\A(?:paper|review|comment|assign)\z/', $page);
+        if ($is_paper_page && $this->paper
+            && preg_match($are . 'p=' . $this->paper->paperId . $zre, $options)
+            && $Me->conf === $this
+            && $Me->can_administer($this->paper)
+            && $this->paper->has_conflict($Me)
+            && !preg_match($are . 'forceShow=/', $options))
+            $options .= $amp . "forceShow=1";
+        // create slash-based URLs if appropriate
+        if ($options) {
+            if ($page == "review"
+                && preg_match($are . 'r=(\d+[A-Z]+)' . $zre, $options, $m)) {
+                $t .= "/" . $m[2];
+                $options = $m[1] . $m[3];
+                if (preg_match($are . 'p=\d+' . $zre, $options, $m))
+                    $options = $m[1] . $m[2];
+            } else if ($page == "paper"
+                       && preg_match($are . 'p=(\d+|%\w+%|new)' . $zre, $options, $m)
+                       && preg_match($are . 'm=(\w+)' . $zre, $m[1] . $m[3], $m2)) {
+                $t .= "/" . $m[2] . "/" . $m2[2];
+                $options = $m2[1] . $m2[3];
+            } else if (($is_paper_page
+                        && preg_match($are . 'p=(\d+|%\w+%|new)' . $zre, $options, $m))
+                       || ($page == "profile"
+                           && preg_match($are . 'u=([^&?]+)' . $zre, $options, $m))
+                       || ($page == "help"
+                           && preg_match($are . 't=(\w+)' . $zre, $options, $m))
+                       || ($page == "settings"
+                           && preg_match($are . 'group=(\w+)' . $zre, $options, $m))
+                       || ($page == "graph"
+                           && preg_match($are . 'g=([^&?]+)' . $zre, $options, $m))
+                       || ($page == "doc"
+                           && preg_match($are . 'file=([^&]+)' . $zre, $options, $m))) {
+                $t .= "/" . str_replace("%2F", "/", $m[2]);
+                $options = $m[1] . $m[3];
+            } else if (preg_match($are . '__PATH__=([^&]+)' . $zre, $options, $m)) {
+                $t .= "/" . urldecode($m[2]);
+                $options = $m[1] . $m[3];
+            }
+            $options = preg_replace('/&(?:amp;)?\z/', "", $options);
+        }
+        if ($options && preg_match('/\A&(?:amp;)?(.*)\z/', $options, $m))
+            $options = $m[1];
+        if ($options !== "")
+            $t .= "?" . $options;
+        if ($anchor !== "")
+            $t .= $anchor;
+        if ($flags & self::HOTURL_SITE_RELATIVE)
+            return $t;
+        $need_site_path = false;
+        if ($page === "index") {
+            $expect = "index" . Navigation::php_suffix();
+            if (substr($t, 0, strlen($expect)) === $expect
+                && ($t === $expect || $t[strlen($expect)] === "?" || $t[strlen($expect)] === "#")) {
+                $need_site_path = true;
+                $t = substr($t, strlen($expect));
+            }
+        }
+        if (($flags & self::HOTURL_ABSOLUTE) || $this !== Conf::$g)
+            return $this->opt("paperSite") . "/" . $t;
+        else {
+            $siteurl = Navigation::siteurl();
+            if ($need_site_path && $siteurl === "")
+                $siteurl = Navigation::site_path();
+            return $siteurl . $t;
+        }
+    }
+
+    function hoturl_site_relative($page, $options = null) {
+        return $this->hoturl($page, $options, self::HOTURL_SITE_RELATIVE);
+    }
+
+    function hoturl_post($page, $options = null) {
+        return $this->hoturl($page, $options, self::HOTURL_POST);
+    }
+
+    function hoturl_raw($page, $options = null) {
+        return $this->hoturl($page, $options, self::HOTURL_RAW);
     }
 
 
@@ -1424,135 +2356,49 @@ class Conf {
             "select finalPaperStorageId from Paper where finalPaperStorageId>1",
             "select paperStorageId from PaperComment where paperStorageId>1");
         $document_option_ids = array();
-        foreach (PaperOption::option_list() as $id => $o)
+        foreach ($this->paper_opts->option_list() as $id => $o)
             if ($o->has_document())
                 $document_option_ids[] = $id;
-        if (count($document_option_ids))
+        if (!empty($document_option_ids))
             $q[] = "select value from PaperOption where optionId in ("
                 . join(",", $document_option_ids) . ") and value>1";
 
-        $result = $this->qe(join(" UNION ", $q));
+        $result = $this->qe_raw(join(" UNION ", $q));
         $ids = array();
         while (($row = edb_row($result)))
             $ids[(int) $row[0]] = true;
+        Dbl::free($result);
         ksort($ids);
         return array_keys($ids);
     }
 
-    function document_result($prow, $documentType, $docid = null) {
-        global $Opt;
-        if (is_array($prow) && count($prow) <= 1)
-            $prow = (count($prow) ? $prow[0] : -1);
-        if (is_numeric($prow))
-            $paperMatch = "=" . $prow;
-        else if (is_array($prow))
-            $paperMatch = " in (" . join(",", $prow) . ")";
-        else
-            $paperMatch = "=" . $prow->paperId;
-        $q = "select p.paperId, s.mimetype, s.sha1, s.timestamp, ";
-        if (!get($Opt, "docstore") && !is_array($prow))
-            $q .= "s.paper as content, ";
-        $q .= "s.filename, s.infoJson, $documentType documentType, s.paperStorageId from Paper p";
-        if ($docid)
-            $sjoin = $docid;
-        else if ($documentType == DTYPE_SUBMISSION)
-            $sjoin = "p.paperStorageId";
-        else if ($documentType == DTYPE_FINAL)
-            $sjoin = "p.finalPaperStorageId";
-        else {
-            $q .= " left join PaperOption o on (o.paperId=p.paperId and o.optionId=$documentType)";
-            $sjoin = "o.value";
-        }
-        $q .= " left join PaperStorage s on (s.paperStorageId=$sjoin) where p.paperId$paperMatch";
-        return $this->q($q);
-    }
-
-    function document_row($result, $dtype = DTYPE_SUBMISSION) {
-        if (!($doc = edb_orow($result)))
-            return $doc;
-        // type doesn't matter
-        if ($dtype === null && isset($doc->documentType))
-            $dtype = $doc->documentType = (int) $doc->documentType;
-        $doc->docclass = new HotCRPDocument($dtype);
-        // in modern versions sha1 is set at storage time; before it wasn't
-        if ($doc->paperStorageId > 1 && $doc->sha1 == ""
-            && $doc->docclass->load_content($doc)) {
-            $doc->sha1 = sha1($doc->content, true);
-            Dbl::q("update PaperStorage set sha1=? where paperStorageId=?", $doc->sha1, $doc->paperStorageId);
-        }
-        // unparse infoJson
-        if ($doc->infoJson) {
-            $doc->infoJson_str = $doc->infoJson;
-            $doc->infoJson = json_decode($doc->infoJson);
-        }
+    function document_by_id($did, PaperInfo $prow = null) {
+        $result = $this->qe("select * from PaperStorage where paperStorageId=?"
+            . ($prow ? " and paperId={$prow->paperId}" : ""), $did);
+        $doc = DocumentInfo::fetch($result, $this, $prow);
+        Dbl::free($result);
         return $doc;
     }
 
-    function update_document_metadata($doc, $delta) {
-        if ($doc->paperStorageId <= 1)
+    function download_documents($docs, $attachment) {
+        if (count($docs) == 1
+            && $docs[0]->paperStorageId <= 1
+            && (!isset($docs[0]->content) || $docs[0]->content === "")) {
+            self::msg_error("Paper #" . $docs[0]->paperId . " hasn’t been uploaded yet.");
             return false;
-        while (1) {
-            $old_str = isset($doc->infoJson_str) ? $doc->infoJson_str : null;
-            $metadata = null;
-            if (is_string($old_str))
-                $metadata = json_decode($old_str);
-            $metadata = is_object($metadata) ? $metadata : (object) [];
-            foreach ($delta as $k => $v)
-                if ($v === null)
-                    unset($metadata->$v);
-                else
-                    $metadata->$k = $v;
-            $metadata_str = count(get_object_vars($metadata)) ? json_encode($metadata) : null;
-            $ijq = isset($old_str) ? "=" : " is ";
-            $result = Dbl::qe("update PaperStorage set infoJson=? where paperStorageId=? and infoJson{$ijq}?", $metadata_str, $doc->paperStorageId, $old_str);
-            if ($result->affected_rows != 0)
-                break;
-            $doc->infoJson_str = Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId);
-        }
-        $doc->infoJson_str = $metadata_str;
-        $doc->infoJson = $metadata;
-        return true;
-    }
-
-    private function __downloadPaper($paperId, $attachment, $documentType, $docid) {
-        global $Opt, $Me;
-
-        if (is_object($docid))
-            $docs = array($docid);
-        else {
-            $result = $this->document_result($paperId, $documentType, $docid);
-            if (!$result) {
-                $this->log("Download error: " . $this->dblink->error, $Me, $paperId);
-                return set_error_html("Database error while downloading paper.");
-            } else if (edb_nrows($result) == 0)
-                return set_error_html("No such document.");
-
-            // Check data
-            $docs = array();
-            while (($doc = $this->document_row($result, $documentType))) {
-                if (!$doc->mimetype)
-                    $doc->mimetype = Mimetype::PDF;
-                $doc->filename = HotCRPDocument::filename($doc);
-                $docs[] = $doc;
-            }
-            Dbl::free($result);
         }
 
-        if (count($docs) == 1 && $docs[0]->paperStorageId <= 1)
-            return set_error_html("Paper #" . $docs[0]->paperId . " hasn’t been uploaded yet.");
+        foreach ($docs as $doc)
+            $doc->filename = HotCRPDocument::filename($doc);
         $downloadname = false;
         if (count($docs) > 1) {
-            $name = HotCRPDocument::unparse_dtype($documentType);
-            if ($documentType <= 0)
+            $o = $this->paper_opts->get($docs[0]->documentType);
+            $name = $o->dtype_name();
+            if ($docs[0]->documentType <= 0)
                 $name = pluralize($name);
-            $downloadname = $Opt["downloadPrefix"] . "$name.zip";
+            $downloadname = $this->download_prefix . "$name.zip";
         }
-        return Filer::multidownload($docs, $downloadname, $attachment);
-    }
-
-    function downloadPaper($paperId, $attachment, $documentType = DTYPE_SUBMISSION, $docid = null) {
-        global $Me;
-        $result = $this->__downloadPaper($paperId, $attachment, $documentType, $docid);
+        $result = Filer::multidownload($docs, $downloadname, $attachment);
         if ($result->error) {
             self::msg_error($result->error_html);
             return false;
@@ -1576,14 +2422,10 @@ class Conf {
     }
 
     function query_all_reviewer_preference() {
-        return "group_concat(concat(contactId,' ',preference,' ',coalesce(expertise,'.')) separator ',')";
+        return "group_concat(contactId,' ',preference,' ',coalesce(expertise,'.'))";
     }
 
-    function query_topic_interest($table = "") {
-        return $table . "interest";
-    }
-
-    function paperQuery($contact, $options = array()) {
+    private function paperQuery(Contact $contact = null, $options = array()) {
         // Options:
         //   "paperId" => $pid  Only paperId $pid (if array, any of those)
         //   "reviewId" => $rid Only paper reviewed by $rid
@@ -1596,13 +2438,8 @@ class Conf {
         //   "myReviewRequests" Only reviews requested by $contactId
         //   "myReviews"        All reviews authored by $contactId
         //   "myOutstandingReviews" All unsubmitted reviews auth by $contactId
-        //   "myReviewsOpt"     myReviews, + include papers not yet reviewed
-        //   "allReviews"       All reviews (multiple rows per paper)
-        //   "allReviewScores"  All review scores (multiple rows per paper)
-        //   "allComments"      All comments (multiple rows per paper)
-        //   "reviewerName"     Include reviewer names
+        //   "myConflicts"      Only conflicted papers
         //   "commenterName"    Include commenter names
-        //   "reviewer" => $cid Include reviewerConflictType/reviewerReviewType
         //   "tags"             Include paperTags
         //   "tagIndex" => $tag Include tagIndex of named tag
         //   "tagIndex" => tag array -- include tagIndex, tagIndex1, ...
@@ -1611,28 +2448,10 @@ class Conf {
         //   "scores" => array(fields to score)
         //   "assignments"
         //   "order" => $sql    $sql is SQL 'order by' clause (or empty)
-        global $Opt;
 
-        $reviewerQuery = isset($options["myReviews"]) || isset($options["allReviews"]) || isset($options["myReviewRequests"]) || isset($options["myReviewsOpt"]) || isset($options["myOutstandingReviews"]);
-        $allReviewerQuery = isset($options["allReviews"]) || isset($options["allReviewScores"]);
-        $scoresQuery = !$reviewerQuery && isset($options["allReviewScores"]);
-        if (is_object($contact))
-            $contactId = $contact->contactId;
-        else {
-            $contactId = (int) $contact;
-            $contact = null;
-        }
-        if (isset($options["reviewer"]) && is_object($options["reviewer"]))
-            $reviewerContactId = $options["reviewer"]->contactId;
-        else if (isset($options["reviewer"]))
-            $reviewerContactId = $options["reviewer"];
-        else
-            $reviewerContactId = $contactId;
-        if (get($options, "author"))
-            $myPaperReview = null;
-        else if ($allReviewerQuery)
-            $myPaperReview = "MyPaperReview";
-        else
+        $contactId = $contact ? $contact->contactId : 0;
+        $myPaperReview = null;
+        if ($contactId && !get($options, "author"))
             $myPaperReview = "PaperReview";
 
         // paper selection
@@ -1641,22 +2460,22 @@ class Conf {
             $paperset[] = self::_cvt_numeric_set($options["paperId"]);
         if (isset($options["reviewId"])) {
             if (is_numeric($options["reviewId"])) {
-                $result = Dbl::qe("select paperId from PaperReview where reviewId=" . $options["reviewId"]);
+                $result = $this->qe("select paperId from PaperReview where reviewId=?", $options["reviewId"]);
                 $paperset[] = self::_cvt_numeric_set(edb_first_columns($result));
             } else if (preg_match('/^(\d+)([A-Z][A-Z]?)$/i', $options["reviewId"], $m)) {
-                $result = Dbl::qe("select paperId from PaperReview where paperId=$m[1] and reviewOrdinal=" . parseReviewOrdinal($m[2]));
+                $result = $this->qe("select paperId from PaperReview where paperId=? and reviewOrdinal=?", $m[1], parseReviewOrdinal($m[2]));
                 $paperset[] = self::_cvt_numeric_set(edb_first_columns($result));
             } else
                 $paperset[] = array();
         }
         if (isset($options["commentId"])) {
-            $result = Dbl::qe("select paperId from PaperComment where commentId" . sql_in_numeric_set(self::_cvt_numeric_set($options["commentId"])));
+            $result = $this->qe("select paperId from PaperComment where commentId?a", self::_cvt_numeric_set($options["commentId"]));
             $paperset[] = self::_cvt_numeric_set(edb_first_columns($result));
         }
         if (count($paperset) > 1)
             $paperset = array(call_user_func_array("array_intersect", $paperset));
         $papersel = "";
-        if (count($paperset))
+        if (!empty($paperset))
             $papersel = "paperId" . sql_in_numeric_set($paperset[0]) . " and ";
 
         // prepare query: basic tables
@@ -1668,7 +2487,7 @@ class Conf {
 
         $aujoinwhere = null;
         if (get($options, "author") && $contact
-            && ($aujoinwhere = $contact->actAuthorSql("PaperConflict", true)))
+            && ($aujoinwhere = $contact->act_author_view_sql("PaperConflict", true)))
             $where[] = $aujoinwhere;
         if (get($options, "author") && !$aujoinwhere)
             $joins[] = "join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId=$contactId and PaperConflict.conflictType>=" . CONFLICT_AUTHOR . ")";
@@ -1676,122 +2495,55 @@ class Conf {
             $joins[] = "left join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId=$contactId)";
 
         // my review
-        $qr = "";
-        if ($contact && ($tokens = $contact->review_tokens()))
-            $qr = " or PaperReview.reviewToken in (" . join(", ", $tokens) . ")";
-        if (get($options, "myReviewRequests"))
-            $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId and PaperReview.requestedBy=$contactId and PaperReview.reviewType=" . REVIEW_EXTERNAL . ")";
-        else if (get($options, "myReviews"))
-            $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId and (PaperReview.contactId=$contactId$qr))";
+        $reviewjoin = "PaperReview.contactId=$contactId";
+        $review_tokens = $contact ? $contact->review_tokens() : false;
+        if ($review_tokens)
+            $reviewjoin = "($reviewjoin or reviewToken in (" . join(",", $review_tokens) . "))";
+        if (get($options, "myReviews"))
+            $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId and $reviewjoin)";
         else if (get($options, "myOutstandingReviews"))
-            $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId and (PaperReview.contactId=$contactId$qr) and PaperReview.reviewNeedsSubmit!=0)";
-        else if (get($options, "myReviewsOpt"))
-            $joins[] = "left join PaperReview on (PaperReview.paperId=Paper.paperId and (PaperReview.contactId=$contactId$qr))";
-        else if (get($options, "allReviews") || get($options, "allReviewScores")) {
-            $x = (get($options, "reviewLimitSql") ? " and (" . $options["reviewLimitSql"] . ")" : "");
-            $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId$x)";
-        } else if (!get($options, "author"))
-            $joins[] = "left join PaperReview on (PaperReview.paperId=Paper.paperId and (PaperReview.contactId=$contactId$qr))";
+            $joins[] = "join PaperReview on (PaperReview.paperId=Paper.paperId and $reviewjoin and PaperReview.reviewNeedsSubmit!=0)";
+        else if ($myPaperReview)
+            $joins[] = "left join PaperReview on (PaperReview.paperId=Paper.paperId and $reviewjoin)";
 
-        // started reviews
-        if (get($options, "startedReviewCount")) {
-            $joins[] = "left join (select paperId, count(*) count from PaperReview where {$papersel}(reviewSubmitted or reviewNeedsSubmit>0) group by paperId) R_started on (R_started.paperId=Paper.paperId)";
-            $cols[] = "coalesce(R_started.count,0) startedReviewCount";
-        }
-
-        // submitted reviews
-        $j = "select paperId, count(*) count";
-        $before_ncols = count($cols);
-        if (get($options, "startedReviewCount"))
-            $cols[] = "coalesce(R_submitted.count,0) reviewCount";
-        if (get($options, "scores"))
-            foreach ($options["scores"] as $fid) {
-                $cols[] = "R_submitted.{$fid}Scores";
-                if ($myPaperReview)
-                    $cols[] = "$myPaperReview.$fid";
-                $j .= ", group_concat($fid order by reviewId) {$fid}Scores";
+        // review signatures
+        if (get($options, "reviewSignatures") || get($options, "scores")
+            || get($options, "reviewWordCounts")) {
+            $cols[] = "R_alls.reviewSignatures";
+            $j = "";
+            foreach (get($options, "scores", []) as $fid)
+                if (($f = $this->review_field($fid)) && $f->main_storage) {
+                    $cols[] = "R_alls.{$fid}Signature";
+                    $j .= ", group_concat({$f->main_storage} order by reviewId) {$fid}Signature";
+                }
+            if (get($options, "reviewWordCounts")) {
+                $cols[] = "R_alls.reviewWordCountSignature";
+                $j .= ", group_concat(coalesce(reviewWordCount,'.') order by reviewId) reviewWordCountSignature";
             }
-        if (get($options, "reviewTypes") || get($options, "reviewIdentities")) {
-            $cols[] = "R_submitted.reviewTypes";
-            $j .= ", group_concat(reviewType order by reviewId) reviewTypes";
-        }
-        if (get($options, "reviewIdentities")) {
-            $cols[] = "R_submitted.reviewRequestedBys";
-            $j .= ", group_concat(requestedBy order by reviewId) reviewRequestedBys";
-            if ($this->review_blindness() == self::BLIND_OPTIONAL) {
-                $cols[] = "R_submitted.reviewBlinds";
-                $j .= ", group_concat(reviewBlind order by reviewId) reviewBlinds";
-            }
-            if ($contact && $contact->review_tokens()) {
-                $cols[] = "R_submitted.reviewTokens";
-                $j .= ", group_concat(reviewToken order by reviewId) reviewTokens";
-            }
-        }
-        if (get($options, "reviewRounds")) {
-            $cols[] = "R_submitted.reviewRounds";
-            $j .= ", group_concat(reviewRound order by reviewId) reviewRounds";
-        }
-        if (get($options, "reviewWordCounts") && $this->sversion >= 99) {
-            $cols[] = "R_submitted.reviewWordCounts";
-            $j .= ", group_concat(reviewWordCount order by reviewId) reviewWordCounts";
-        }
-        if (get($options, "reviewOrdinals")) {
-            $cols[] = "R_submitted.reviewOrdinals";
-            $j .= ", group_concat(reviewOrdinal order by reviewId) reviewOrdinals";
-        }
-        if (get($options, "reviewTypes") || get($options, "scores") || get($options, "reviewContactIds") || get($options, "reviewOrdinals") || get($options, "reviewIdentities")) {
-            $cols[] = "R_submitted.reviewContactIds";
-            $j .= ", group_concat(contactId order by reviewId) reviewContactIds";
-        }
-        if (count($cols) != $before_ncols)
-            $joins[] = "left join ($j from PaperReview where {$papersel}reviewSubmitted>0 group by paperId) R_submitted on (R_submitted.paperId=Paper.paperId)";
-
-        // assignments
-        if (get($options, "assignments")) {
-            $j = "select paperId, group_concat(contactId order by reviewId) allReviewContactIds, group_concat(reviewType order by reviewId) allReviewTypes, group_concat(reviewRound order by reviewId) allReviewRounds";
-            $cols[] = "R_all.allReviewContactIds, R_all.allReviewTypes, R_all.allReviewRounds";
-            $joins[] = "left join ($j from PaperReview where {$papersel}true group by paperId) R_all on (R_all.paperId=Paper.paperId)";
+            $joins[] = "left join (select paperId, " . ReviewInfo::review_signature_sql() . " reviewSignatures$j from PaperReview r where {$papersel}true group by paperId) R_alls on (R_alls.paperId=Paper.paperId)";
         }
 
         // fields
-        if (get($options, "author"))
-            $cols[] = "null reviewType, null reviewId, null myReviewType";
-        else {
-            // see also papercolumn.php
-            array_push($cols, "PaperReview.reviewType, PaperReview.reviewId",
-                       "PaperReview.reviewModified, PaperReview.reviewSubmitted",
-                       "PaperReview.reviewNeedsSubmit, PaperReview.reviewOrdinal",
-                       "PaperReview.reviewBlind, PaperReview.reviewToken",
-                       "PaperReview.contactId as reviewContactId, PaperReview.requestedBy",
-                       "max($myPaperReview.reviewType) as myReviewType",
+        if ($myPaperReview) {
+            array_push($cols, "max($myPaperReview.reviewType) as myReviewType",
                        "max($myPaperReview.reviewSubmitted) as myReviewSubmitted",
-                       "min($myPaperReview.reviewNeedsSubmit) as myReviewNeedsSubmit",
-                       "$myPaperReview.contactId as myReviewContactId",
-                       "PaperReview.reviewRound");
-        }
-
-        if ($reviewerQuery || $scoresQuery) {
-            $cols[] = "PaperReview.reviewEditVersion as reviewEditVersion";
-            $cols[] = ($this->sversion >= 105 ? "PaperReview.reviewFormat" : "null") . " as reviewFormat";
-            foreach (ReviewForm::all_fields() as $f)
-                if ($reviewerQuery || $f->has_options)
-                    $cols[] = "PaperReview.$f->id as $f->id";
-        }
-
-        if ($myPaperReview == "MyPaperReview")
-            $joins[] = "left join PaperReview as MyPaperReview on (MyPaperReview.paperId=Paper.paperId and MyPaperReview.contactId=$contactId)";
+                       "min($myPaperReview.reviewNeedsSubmit) as myReviewNeedsSubmit");
+            if ($review_tokens)
+                $cols[] = "min($myPaperReview.contactId) as myReviewContactId";
+        } else
+            $cols[] = "null myReviewType";
 
         if (get($options, "topics"))
             $cols[] = "(select group_concat(topicId) from PaperTopic where PaperTopic.paperId=Paper.paperId) topicIds";
 
         if (get($options, "options")
-            && (isset($this->settingTexts["options"]) || isset($Opt["optionsInclude"]))
-            && PaperOption::count_option_list())
+            && (isset($this->settingTexts["options"]) || isset($this->opt["fixedOptions"]))
+            && $this->paper_opts->count_option_list())
             $cols[] = "(select group_concat(PaperOption.optionId, '#', value) from PaperOption where paperId=Paper.paperId) optionIds";
         else if (get($options, "options"))
             $cols[] = "'' as optionIds";
 
-        if (get($options, "tags"))
+        if (get($options, "tags") || ($contact && $contact->isPC))
             $cols[] = "(select group_concat(' ', tag, '#', tagIndex order by tag separator '') from PaperTag where PaperTag.paperId=Paper.paperId) paperTags";
         if (get($options, "tagIndex") && !is_array($options["tagIndex"]))
             $options["tagIndex"] = array($options["tagIndex"]);
@@ -1800,7 +2552,7 @@ class Conf {
                 $cols[] = "(select tagIndex from PaperTag where PaperTag.paperId=Paper.paperId and PaperTag.tag='" . sqlq($tag) . "') tagIndex" . ($i ? : "");
 
         if (get($options, "reviewerPreference")) {
-            $joins[] = "left join PaperReviewPreference on (PaperReviewPreference.paperId=Paper.paperId and PaperReviewPreference.contactId=$reviewerContactId)";
+            $joins[] = "left join PaperReviewPreference on (PaperReviewPreference.paperId=Paper.paperId and PaperReviewPreference.contactId=$contactId)";
             $cols[] = "coalesce(PaperReviewPreference.preference, 0) as reviewerPreference";
             $cols[] = "PaperReviewPreference.expertise as reviewerExpertise";
         }
@@ -1820,43 +2572,21 @@ class Conf {
         }
 
         if (get($options, "allConflictType")) {
-            $joins[] = "left join (select paperId, group_concat(concat(contactId,' ',conflictType) separator ',') as allConflictType from PaperConflict where {$papersel}conflictType>0 group by paperId) as AllConflict on (AllConflict.paperId=Paper.paperId)";
+            // See also SearchQueryInfo::add_allConflictType_column
+            $joins[] = "left join (select paperId, group_concat(contactId,' ',conflictType) as allConflictType from PaperConflict where {$papersel}conflictType>0 group by paperId) as AllConflict on (AllConflict.paperId=Paper.paperId)";
             $cols[] = "AllConflict.allConflictType";
         }
 
-        if (get($options, "reviewer")) {
-            $joins[] = "left join PaperConflict RPC on (RPC.paperId=Paper.paperId and RPC.contactId=$reviewerContactId)";
-            $joins[] = "left join PaperReview RPR on (RPR.paperId=Paper.paperId and RPR.contactId=$reviewerContactId)";
-            $cols[] = "RPC.conflictType reviewerConflictType, RPR.reviewType reviewerReviewType";
-        }
-
-        if (get($options, "allComments")) {
-            $joins[] = "join PaperComment on (PaperComment.paperId=Paper.paperId)";
-            $joins[] = "left join PaperConflict as CommentConflict on (CommentConflict.paperId=PaperComment.paperId and CommentConflict.contactId=PaperComment.contactId)";
-            array_push($cols, "PaperComment.commentId, PaperComment.contactId as commentContactId",
-                       "CommentConflict.conflictType as commentConflictType",
-                       "PaperComment.timeModified, PaperComment.comment",
-                       "PaperComment.replyTo, PaperComment.commentType");
-        }
-
-        if (get($options, "reviewerName")) {
-            if ($options["reviewerName"] === "lead" || $options["reviewerName"] === "shepherd")
-                $joins[] = "left join ContactInfo as ReviewerContactInfo on (ReviewerContactInfo.contactId=Paper." . $options['reviewerName'] . "ContactId)";
-            else if (get($options, "allComments"))
-                $joins[] = "left join ContactInfo as ReviewerContactInfo on (ReviewerContactInfo.contactId=PaperComment.contactId)";
-            else if (get($options, "reviewerName"))
-                $joins[] = "left join ContactInfo as ReviewerContactInfo on (ReviewerContactInfo.contactId=PaperReview.contactId)";
-            array_push($cols, "ReviewerContactInfo.firstName as reviewFirstName",
-                       "ReviewerContactInfo.lastName as reviewLastName",
-                       "ReviewerContactInfo.email as reviewEmail",
-                       "ReviewerContactInfo.lastLogin as reviewLastLogin");
+        if (get($options, "watch") && $contactId) {
+            $joins[] = "left join PaperWatch on (PaperWatch.paperId=Paper.paperId and PaperWatch.contactId=$contactId)";
+            $cols[] = "PaperWatch.watch";
         }
 
         if (get($options, "foldall"))
             $cols[] = "1 as folded";
 
         // conditions
-        if (count($paperset))
+        if (!empty($paperset))
             $where[] = "Paper.paperId" . sql_in_numeric_set($paperset[0]);
         if (get($options, "finalized"))
             $where[] = "timeSubmitted>0";
@@ -1866,41 +2596,45 @@ class Conf {
             $where[] = "outcome>0";
         if (get($options, "undecided"))
             $where[] = "outcome=0";
-        if (get($options, "active") || get($options, "myReviews")
+        if (get($options, "active")
+            || get($options, "myReviews")
             || get($options, "myReviewRequests"))
             $where[] = "timeWithdrawn<=0";
         if (get($options, "myLead"))
             $where[] = "leadContactId=$contactId";
         if (get($options, "unmanaged"))
             $where[] = "managerContactId=0";
+        if (get($options, "myManaged"))
+            $where[] = "managerContactId=$contactId";
+        if (get($options, "myReviewRequests"))
+            $where[] = "exists (select * from PaperReview where paperId=Paper.paperId and requestedBy=$contactId and reviewType=" . REVIEW_EXTERNAL . ")";
+        if (get($options, "myWatching") && $contact) {
+            $owhere = ["PaperReview.reviewType>0"];
+            if ($this->has_any_lead_or_shepherd())
+                $owhere[] = "leadContactId=$contactId";
+            if ($this->has_any_manager() && $contact->is_explicit_manager())
+                $owhere[] = "managerContactId=$contactId";
+            if ($contact->privChair || ($contact->isPC && $this->setting("pc_seeallrev") > 0))
+                $owhere[] = "(watch&" . (WATCHTYPE_REVIEW << WATCHSHIFT_ON) . ")!=0";
+            $where[] = "(" . join(" or ", $owhere) . ")";
+        }
+        if (get($options, "myConflicts"))
+            $where[] = "PaperConflict.conflictType>0";
 
         $pq = "select " . join(",\n    ", $cols)
             . "\nfrom " . join("\n    ", $joins);
-        if (count($where))
+        if (!empty($where))
             $pq .= "\nwhere " . join("\n    and ", $where);
 
         // grouping and ordering
-        if (get($options, "allComments"))
-            $pq .= "\ngroup by Paper.paperId, PaperComment.commentId";
-        else if ($reviewerQuery || $scoresQuery)
-            $pq .= "\ngroup by Paper.paperId, PaperReview.reviewId";
-        else
-            $pq .= "\ngroup by Paper.paperId";
-        if (get($options, "order") && $options["order"] != "order by Paper.paperId")
-            $pq .= "\n" . $options["order"];
-        else {
-            $pq .= "\norder by Paper.paperId";
-            if ($reviewerQuery || $scoresQuery)
-                $pq .= ", PaperReview.reviewOrdinal";
-            if (isset($options["allComments"]))
-                $pq .= ", PaperComment.commentId";
-        }
+        $pq .= "\ngroup by Paper.paperId\n"
+            . get($options, "order", "order by Paper.paperId") . "\n";
 
         //Conf::msg_debugt($pq);
-        return $pq . "\n";
+        return $pq;
     }
 
-    function paperRow($sel, $contact, &$whyNot = null) {
+    function paperRow($sel, Contact $contact = null, &$whyNot = null) {
         $ret = null;
         $whyNot = array();
 
@@ -1918,14 +2652,14 @@ class Conf {
             $whyNot['invalidId'] = 'review';
         else {
             $q = $this->paperQuery($contact, $sel);
-            $result = $this->qe($q);
+            $result = $this->qe_raw($q);
 
             if (!$result)
                 $whyNot["dbError"] = "Database error while fetching paper (" . htmlspecialchars($q) . "): " . htmlspecialchars($this->dblink->error);
             else if ($result->num_rows == 0)
                 $whyNot["noPaper"] = 1;
             else
-                $ret = PaperInfo::fetch($result, $contact);
+                $ret = PaperInfo::fetch($result, $contact, $this);
 
             Dbl::free($result);
         }
@@ -1933,136 +2667,14 @@ class Conf {
         return $ret;
     }
 
-    function review_rows($q, $contact) {
-        $result = $this->qe($q);
-        $rrows = array();
-        while (($row = PaperInfo::fetch($result, $contact)))
-            $rrows[$row->reviewId] = $row;
-        Dbl::free($result);
-        return $rrows;
+    function paper_result(Contact $user = null, $options = []) {
+        return $this->qe_raw($this->paperQuery($user, $options));
     }
-
-    function comment_query($where) {
-        return "select PaperComment.*, firstName reviewFirstName, lastName reviewLastName, email reviewEmail
-                from PaperComment join ContactInfo on (ContactInfo.contactId=PaperComment.contactId)
-                where $where order by commentId";
-    }
-
-    function comment_rows($q, $contact) {
-        $result = $this->qe($q);
-        $crows = array();
-        while (($row = PaperInfo::fetch($result, $contact))) {
-            $crows[$row->commentId] = $row;
-            if (isset($row->commentContactId))
-                $cid = $row->commentContactId;
-            else
-                $cid = $row->contactId;
-            $row->threadContacts = array($cid => 1);
-            for ($r = $row; defval($r, "replyTo", 0) && isset($crows[$r->replyTo]); $r = $crows[$r->replyTo])
-                /* do nothing */;
-            $row->threadHead = $r->commentId;
-            $r->threadContacts[$cid] = 1;
-        }
-        Dbl::free($result);
-        foreach ($crows as $row)
-            if ($row->threadHead != $row->commentId)
-                $row->threadContacts = $crows[$row->threadHead]->threadContacts;
-        return $crows;
-    }
-
-
-    function reviewRow($selector, &$whyNot = null) {
-        $whyNot = array();
-
-        if (!is_array($selector))
-            $selector = array('reviewId' => $selector);
-        if (isset($selector['reviewId'])) {
-            $whyNot['reviewId'] = $selector['reviewId'];
-            if (($reviewId = cvtint($selector['reviewId'])) <= 0) {
-                $whyNot['invalidId'] = 'review';
-                return null;
-            }
-        }
-        if (isset($selector['paperId'])) {
-            $whyNot['paperId'] = $selector['paperId'];
-            if (($paperId = cvtint($selector['paperId'])) <= 0) {
-                $whyNot['invalidId'] = 'paper';
-                return null;
-            }
-        }
-
-        $q = "select PaperReview.*,
-                ContactInfo.firstName, ContactInfo.lastName, ContactInfo.email, ContactInfo.roles as contactRoles,
-                ContactInfo.contactTags,
-                ReqCI.firstName as reqFirstName, ReqCI.lastName as reqLastName, ReqCI.email as reqEmail";
-        if (isset($selector["ratings"]))
-            $q .= ",
-                group_concat(ReviewRating.rating) as allRatings";
-        if (isset($selector["myRating"]))
-            $q .= ",
-                MyRating.rating as myRating";
-        $q .= "\n               from PaperReview
-                join ContactInfo using (contactId)
-                left join ContactInfo as ReqCI on (ReqCI.contactId=PaperReview.requestedBy)\n";
-        if (isset($selector["ratings"]))
-            $q .= "             left join ReviewRating on (ReviewRating.reviewId=PaperReview.reviewId)\n";
-        if (isset($selector["myRating"]))
-            $q .= "             left join ReviewRating as MyRating on (MyRating.reviewId=PaperReview.reviewId and MyRating.contactId=" . $selector["myRating"] . ")\n";
-
-        $where = array();
-        $order = array("paperId");
-        if (isset($reviewId))
-            $where[] = "PaperReview.reviewId=$reviewId";
-        if (isset($paperId))
-            $where[] = "PaperReview.paperId=$paperId";
-        $cwhere = array();
-        if (isset($selector["contactId"]))
-            $cwhere[] = "PaperReview.contactId=" . cvtint($selector["contactId"]);
-        if (get($selector, "rev_tokens"))
-            $cwhere[] = "PaperReview.reviewToken in (" . join(",", $selector["rev_tokens"]) . ")";
-        if (count($cwhere))
-            $where[] = "(" . join(" or ", $cwhere) . ")";
-        if (count($cwhere) > 1)
-            $order[] = "(PaperReview.contactId=" . cvtint($selector["contactId"]) . ") desc";
-        if (isset($selector['reviewOrdinal']))
-            $where[] = "PaperReview.reviewSubmitted>0 and reviewOrdinal=" . cvtint($selector['reviewOrdinal']);
-        else if (isset($selector['submitted']))
-            $where[] = "PaperReview.reviewSubmitted>0";
-        if (!count($where)) {
-            $whyNot['internal'] = 1;
-            return null;
-        }
-
-        $q = $q . " where " . join(" and ", $where) . " group by PaperReview.reviewId
-                order by " . join(", ", $order) . ", reviewOrdinal, timeRequested, reviewType desc, reviewId";
-
-        $result = $this->q($q);
-        if (!$result) {
-            $whyNot['dbError'] = "Database error while fetching review (" . htmlspecialchars($q) . "): " . htmlspecialchars($this->dblink->error);
-            return null;
-        }
-
-        $x = array();
-        while (($row = edb_orow($result)))
-            $x[] = $row;
-        Dbl::free($result);
-
-        if (isset($selector["array"]))
-            return $x;
-        else if (count($x) == 1 || (count($x) > 1 && get($selector, "first")))
-            return $x[0];
-        if (count($x) == 0)
-            $whyNot['noReview'] = 1;
-        else
-            $whyNot['multipleReviews'] = 1;
-        return null;
-    }
-
 
     function preferenceConflictQuery($type, $extra) {
         $q = "select PRP.paperId, PRP.contactId, PRP.preference
                 from PaperReviewPreference PRP
-                join ContactInfo c on (c.contactId=PRP.contactId and (c.roles&" . Contact::ROLE_PC . ")!=0)
+                join ContactInfo c on (c.contactId=PRP.contactId and c.roles!=0 and (c.roles&" . Contact::ROLE_PC . ")!=0)
                 join Paper P on (P.paperId=PRP.paperId)
                 left join PaperConflict PC on (PC.paperId=PRP.paperId and PC.contactId=PRP.contactId)
                 where PRP.preference<=-100 and coalesce(PC.conflictType,0)<=0
@@ -2075,213 +2687,57 @@ class Conf {
     }
 
 
-    // Activity
-
-    private static function _flowQueryWheres(&$where, $table, $t0) {
-        $time = $table . ($table == "PaperReview" ? ".reviewSubmitted" : ".timeModified");
-        if (is_array($t0))
-            $where[] = "($time<$t0[0] or ($time=$t0[0] and $table.contactId>$t0[1]) or ($time=$t0[0] and $table.contactId=$t0[1] and $table.paperId>$t0[2]))";
-        else if ($t0)
-            $where[] = "$time<$t0";
-    }
-
-    private function _flowQueryRest() {
-        return "          Paper.title,
-                substring(Paper.title from 1 for 80) as shortTitle,
-                Paper.timeSubmitted,
-                Paper.timeWithdrawn,
-                Paper.blind as paperBlind,
-                Paper.outcome,
-                Paper.managerContactId,
-                Paper.leadContactId,
-                ContactInfo.firstName as reviewFirstName,
-                ContactInfo.lastName as reviewLastName,
-                ContactInfo.email as reviewEmail,
-                PaperConflict.conflictType,
-                MyPaperReview.reviewType as myReviewType,
-                MyPaperReview.reviewSubmitted as myReviewSubmitted,
-                MyPaperReview.reviewNeedsSubmit as myReviewNeedsSubmit,
-                MyPaperReview.contactId as myReviewContactId\n";
-    }
-
-    private function _commentFlowQuery($contact, $t0, $limit) {
-        // XXX review tokens
-        $q = "select PaperComment.*,
-                substring(PaperComment.comment from 1 for 300) as shortComment,\n"
-            . $this->_flowQueryRest()
-            . "\t\tfrom PaperComment
-                join ContactInfo on (ContactInfo.contactId=PaperComment.contactId)
-                join Paper on (Paper.paperId=PaperComment.paperId)
-                left join PaperConflict on (PaperConflict.paperId=PaperComment.paperId and PaperConflict.contactId=$contact->contactId)
-                left join PaperReview as MyPaperReview on (MyPaperReview.paperId=PaperComment.paperId and MyPaperReview.contactId=$contact->contactId)\n";
-        $where = $contact->canViewCommentReviewWheres();
-        self::_flowQueryWheres($where, "PaperComment", $t0);
-        if (count($where))
-            $q .= " where " . join(" and ", $where);
-        $q .= " order by PaperComment.timeModified desc, PaperComment.contactId asc, PaperComment.paperId asc";
-        if ($limit)
-            $q .= " limit $limit";
-        return $q;
-    }
-
-    private function _reviewFlowQuery($contact, $t0, $limit) {
-        // XXX review tokens
-        $q = "select PaperReview.*,\n"
-            . $this->_flowQueryRest()
-            . "\t\tfrom PaperReview
-                join ContactInfo on (ContactInfo.contactId=PaperReview.contactId)
-                join Paper on (Paper.paperId=PaperReview.paperId)
-                left join PaperConflict on (PaperConflict.paperId=PaperReview.paperId and PaperConflict.contactId=$contact->contactId)
-                left join PaperReview as MyPaperReview on (MyPaperReview.paperId=PaperReview.paperId and MyPaperReview.contactId=$contact->contactId)\n";
-        $where = $contact->canViewCommentReviewWheres();
-        self::_flowQueryWheres($where, "PaperReview", $t0);
-        $where[] = "PaperReview.reviewSubmitted>0";
-        $q .= " where " . join(" and ", $where);
-        $q .= " order by PaperReview.reviewSubmitted desc, PaperReview.contactId asc, PaperReview.paperId asc";
-        if ($limit)
-            $q .= " limit $limit";
-        return $q;
-    }
-
-    static function _activity_compar($a, $b) {
-        if (!$a || !$b)
-            return !$a && !$b ? 0 : ($a ? -1 : 1);
-        $at = isset($a->timeModified) ? $a->timeModified : $a->reviewSubmitted;
-        $bt = isset($b->timeModified) ? $b->timeModified : $b->reviewSubmitted;
-        if ($at != $bt)
-            return $at > $bt ? -1 : 1;
-        else if ($a->contactId != $b->contactId)
-            return $a->contactId < $b->contactId ? -1 : 1;
-        else if ($a->paperId != $b->paperId)
-            return $a->paperId < $b->paperId ? -1 : 1;
-        else
-            return 0;
-    }
-
-    function reviewerActivity($contact, $t0, $limit) {
-        // Return the $limit most recent pieces of activity on or before $t0.
-        // Requires some care, since comments and reviews are loaded from
-        // different queries, and we want to return the results sorted.  So we
-        // load $limit comments and $limit reviews -- but if the comments run
-        // out before the $limit is reached (because some comments cannot be
-        // seen by the current user), we load additional comments & try again,
-        // and the same for reviews.
-
-        if ($t0 && preg_match('/\A(\d+)\.(\d+)\.(\d+)\z/', $t0, $m))
-            $ct0 = $rt0 = array($m[1], $m[2], $m[3]);
-        else
-            $ct0 = $rt0 = $t0;
-        $activity = array();
-
-        $crows = $rrows = array(); // comment/review rows being worked through
-        $curcr = $currr = null;    // current comment/review row
-        $last_time = INF;
-        // We read new comment/review rows when the current set is empty.
-
-        while (1) {
-            // load $curcr with most recent viewable comment
-            if ($curcr)
-                /* do nothing */;
-            else if (($curcr = array_pop($crows))) {
-                if (!$contact->can_view_comment($curcr, $curcr, false)) {
-                    $curcr = null;
-                    continue;
-                }
-            } else if ($ct0) {
-                $crows = array_reverse($this->comment_rows(self::_commentFlowQuery($contact, $ct0, $limit), $contact));
-                if (count($crows) == $limit)
-                    $ct0 = array($crows[0]->timeModified, $crows[0]->contactId, $crows[0]->paperId);
-                else
-                    $ct0 = null;
-                continue;
-            }
-
-            // load $currr with most recent viewable review
-            if ($currr)
-                /* do nothing */;
-            else if (($currr = array_pop($rrows))) {
-                if (!$contact->can_view_review($currr, $currr, false)) {
-                    $currr = null;
-                    continue;
-                }
-            } else if ($rt0) {
-                $rrows = array_reverse($this->review_rows(self::_reviewFlowQuery($contact, $rt0, $limit), $contact));
-                if (count($rrows) == $limit)
-                    $rt0 = array($rrows[0]->reviewSubmitted, $rrows[0]->contactId, $rrows[0]->paperId);
-                else
-                    $rt0 = null;
-                continue;
-            }
-
-            // if neither, ran out of activity
-            if (!$curcr && !$currr)
-                break;
-            // if above limit, ran out of activity
-            if (count($activity) >= $limit
-                && (!$curcr || $curcr->timeModified < $last_time)
-                && (!$currr || $currr->reviewSubmitted < $last_time))
-                break;
-
-            // otherwise, choose the later one first
-            if (self::_activity_compar($curcr, $currr) < 0) {
-                $curcr->isComment = true;
-                $activity[] = $curcr;
-                $last_time = $curcr->timeModified;
-                $curcr = null;
-            } else {
-                $currr->isComment = false;
-                $activity[] = $currr;
-                $last_time = $currr->reviewSubmitted;
-                $currr = null;
-            }
-        }
-
-        return $activity;
-    }
-
-
     //
     // Message routines
     //
 
-    function msg($type, $text) {
+    static function msg_on(Conf $conf = null, $type, $text) {
         if (PHP_SAPI == "cli") {
+            if (is_array($text))
+                $text = join("\n", $text);
             if ($type === "xmerror" || $type === "merror")
                 fwrite(STDERR, "$text\n");
-            else if ($type === "xwarning" || $type === "mxwarning"
+            else if ($type === "xwarning" || $type === "warning"
                      || !defined("HOTCRP_TESTHARNESS"))
                 fwrite(STDOUT, "$text\n");
-        } else if ($this->save_messages) {
+        } else if ($conf && $conf->save_messages) {
             ensure_session();
-            $this->save_session_array("msgs", true, array($type, $text));
+            $_SESSION[$conf->dsn]["msgs"][] = [$type, $text];
         } else if ($type[0] == "x")
-            echo Ht::xmsg($text, $type);
-        else
+            echo Ht::xmsg($type, $text);
+        else {
+            if (is_array($text))
+                $text = '<div class="multimessage">' . join("", array_map(function ($x) { return '<div class="mmm">' . $x . '</div>'; }, $text)) . '</div>';
             echo "<div class=\"$type\">$text</div>";
+        }
+    }
+
+    function msg($type, $text) {
+        self::msg_on($this, $type, $text);
     }
 
     function infoMsg($text, $minimal = false) {
         $this->msg($minimal ? "xinfo" : "info", $text);
     }
 
-    static public function msg_info($text, $minimal = false) {
-        self::$g->msg($minimal ? "xinfo" : "info", $text);
+    static function msg_info($text, $minimal = false) {
+        self::msg_on(self::$g, $minimal ? "xinfo" : "info", $text);
     }
 
     function warnMsg($text, $minimal = false) {
         $this->msg($minimal ? "xwarning" : "warning", $text);
     }
 
-    static public function msg_warning($text, $minimal = false) {
-        self::$g->msg($minimal ? "xwarning" : "warning", $text);
+    static function msg_warning($text, $minimal = false) {
+        self::msg_on(self::$g, $minimal ? "xwarning" : "warning", $text);
     }
 
     function confirmMsg($text, $minimal = false) {
         $this->msg($minimal ? "xconfirm" : "confirm", $text);
     }
 
-    static public function msg_confirm($text, $minimal = false) {
-        self::$g->msg($minimal ? "xconfirm" : "confirm", $text);
+    static function msg_confirm($text, $minimal = false) {
+        self::msg_on(self::$g, $minimal ? "xconfirm" : "confirm", $text);
     }
 
     function errorMsg($text, $minimal = false) {
@@ -2289,15 +2745,15 @@ class Conf {
         return false;
     }
 
-    static public function msg_error($text, $minimal = false) {
-        self::$g->msg($minimal ? "xmerror" : "merror", $text);
+    static function msg_error($text, $minimal = false) {
+        self::msg_on(self::$g, $minimal ? "xmerror" : "merror", $text);
         return false;
     }
 
-    static public function msg_debugt($text) {
+    static function msg_debugt($text) {
         if (is_object($text) || is_array($text) || $text === null || $text === false || $text === true)
-            $text = json_encode($text);
-        self::$g->msg("merror", Ht::pre_text_wrap($text));
+            $text = json_encode_browser($text);
+        self::msg_on(self::$g, "merror", Ht::pre_text_wrap($text));
         return false;
     }
 
@@ -2311,11 +2767,13 @@ class Conf {
     //
 
     function make_css_link($url, $media = null) {
-        global $ConfSitePATH, $Opt;
+        global $ConfSitePATH;
+        if (str_starts_with($url, "<meta"))
+            return $url;
         $t = '<link rel="stylesheet" type="text/css" href="';
         if (str_starts_with($url, "stylesheets/")
             || !preg_match(',\A(?:https?:|/),i', $url))
-            $t .= $Opt["assetsUrl"];
+            $t .= $this->opt["assetsUrl"];
         $t .= $url;
         if (($mtime = @filemtime("$ConfSitePATH/$url")) !== false)
             $t .= "?mtime=$mtime";
@@ -2324,52 +2782,74 @@ class Conf {
         return $t . '" />';
     }
 
-    function make_script_file($url, $no_strict = false) {
-        global $ConfSitePATH, $Opt;
+    function make_script_file($url, $no_strict = false, $integrity = null) {
+        global $ConfSitePATH;
         if (str_starts_with($url, "scripts/")) {
             $post = "";
             if (($mtime = @filemtime("$ConfSitePATH/$url")) !== false)
                 $post = "mtime=$mtime";
-            if (get($Opt, "strictJavascript") && !$no_strict)
-                $url = $Opt["scriptAssetsUrl"] . "cacheable.php?file=" . urlencode($url)
+            if (get($this->opt, "strictJavascript") && !$no_strict)
+                $url = $this->opt["scriptAssetsUrl"] . "cacheable.php?file=" . urlencode($url)
                     . "&strictjs=1" . ($post ? "&$post" : "");
             else
-                $url = $Opt["scriptAssetsUrl"] . $url . ($post ? "?$post" : "");
-            if ($Opt["scriptAssetsUrl"] === Navigation::siteurl())
+                $url = $this->opt["scriptAssetsUrl"] . $url . ($post ? "?$post" : "");
+            if ($this->opt["scriptAssetsUrl"] === Navigation::siteurl())
                 return Ht::script_file($url);
         }
-        return Ht::script_file($url, array("crossorigin" => "anonymous"));
+        return Ht::script_file($url, ["crossorigin" => "anonymous", "integrity" => $integrity]);
     }
 
-    private function header_head($title) {
-        global $Me, $ConfSitePATH, $Opt;
+    private function make_jquery_script_file($jqueryVersion) {
+        $integrity = null;
+        if ($this->opt("jqueryCdn")) {
+            if ($jqueryVersion === "1.12.4")
+                $integrity = "sha256-ZosEbRLbNQzLpnKIkEdrPv7lOy9C27hHQ+Xp8a4MxAQ=";
+            else if ($jqueryVersion === "3.1.1")
+                $integrity = "sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8=";
+            else if ($jqueryVersion === "3.2.1")
+                $integrity = "sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=";
+            $jquery = "//code.jquery.com/jquery-{$jqueryVersion}.min.js";
+        } else
+            $jquery = "scripts/jquery-{$jqueryVersion}.min.js";
+        return $this->make_script_file($jquery, true, $integrity);
+    }
+
+    function header_head($title) {
+        global $Me, $ConfSitePATH;
         // load session list and clear its cookie
         $list = SessionList::active();
-        SessionList::set_requested(0);
+        SessionList::clear_cookie();
 
         echo "<!DOCTYPE html>
 <html lang=\"en\">
 <head>
 <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />
 <meta name=\"google\" content=\"notranslate\" />\n";
+        if (!$this->opt("allowIndexPapers") && $this->paper)
+            echo "<meta name=\"robots\" content=\"noindex,noarchive\" />\n";
 
-        if (isset($Opt["fontScript"]))
-            echo $Opt["fontScript"];
+        if (($font_script = $this->opt("fontScript"))) {
+            if (!str_starts_with($font_script, "<script"))
+                $font_script = Ht::script($font_script);
+            echo $font_script, "\n";
+        }
 
+        foreach (mkarray($this->opt("prependStylesheets", [])) as $css)
+            echo $this->make_css_link($css), "\n";
         echo $this->make_css_link("stylesheets/style.css"), "\n";
-        if (get($Opt, "mobileStylesheet")) {
+        if ($this->opt("mobileStylesheet")) {
             echo '<meta name="viewport" content="width=device-width, initial-scale=1">', "\n";
             echo $this->make_css_link("stylesheets/mobile.css", "screen and (max-width: 768px)"), "\n";
         }
-        if (isset($Opt["stylesheets"]))
-            foreach (mkarray($Opt["stylesheets"]) as $css)
-                echo $this->make_css_link($css), "\n";
+        foreach (mkarray($this->opt("stylesheets", [])) as $css)
+            echo $this->make_css_link($css), "\n";
 
         // favicon
-        if (($favicon = defval($Opt, "favicon", "images/review24.png"))) {
+        $favicon = $this->opt("favicon", "images/review24.png");
+        if ($favicon) {
             if (strpos($favicon, "://") === false && $favicon[0] != "/") {
-                if (get($Opt, "assetsUrl") && substr($favicon, 0, 7) === "images/")
-                    $favicon = $Opt["assetsUrl"] . $favicon;
+                if ($this->opt["assetsUrl"] && substr($favicon, 0, 7) === "images/")
+                    $favicon = $this->opt["assetsUrl"] . $favicon;
                 else
                     $favicon = Navigation::siteurl() . $favicon;
             }
@@ -2390,29 +2870,34 @@ class Conf {
             $title = preg_replace(",(?: |&nbsp;|\302\240)+,", " ", $title);
             $title = str_replace("&#x2215;", "-", $title);
         }
-        if ($title)
+        if ($title && $title !== "Home")
             echo $title, " - ";
-        echo htmlspecialchars($Opt["shortName"]), "</title>\n</head>\n";
+        echo htmlspecialchars($this->short_name), "</title>\n</head>\n";
 
         // jQuery
-        $stash = Ht::take_stash();
-        if (isset($Opt["jqueryUrl"]))
-            $jquery = $Opt["jqueryUrl"];
-        else if (get($Opt, "jqueryCdn"))
-            $jquery = "//code.jquery.com/jquery-1.12.3.min.js";
-        else
-            $jquery = "scripts/jquery-1.12.3.min.js";
-        Ht::stash_html($this->make_script_file($jquery, true) . "\n");
+        $stash = Ht::unstash();
+        if (isset($this->opt["jqueryUrl"]))
+            Ht::stash_html($this->make_script_file($this->opt["jqueryUrl"], true) . "\n");
+        else {
+            $jqueryVersion = get($this->opt, "jqueryVersion", "1.12.4");
+            if ($jqueryVersion[0] === "3") {
+                Ht::stash_html("<!--[if lt IE 9]>" . $this->make_jquery_script_file("1.12.4") . "<![endif]-->\n");
+                Ht::stash_html("<![if !IE|gte IE 9]>" . $this->make_jquery_script_file($jqueryVersion) . "<![endif]>\n");
+            } else
+                Ht::stash_html($this->make_jquery_script_file($jqueryVersion) . "\n");
+        }
+        if ($this->opt("jqueryMigrate"))
+            Ht::stash_html($this->make_script_file("//code.jquery.com/jquery-migrate-3.0.0.js", true));
 
         // Javascript settings to set before script.js
-        Ht::stash_script("siteurl=" . json_encode(Navigation::siteurl()) . ";siteurl_suffix=\"" . Navigation::php_suffix() . "\"");
+        Ht::stash_script("siteurl=" . json_encode_browser(Navigation::siteurl()) . ";siteurl_suffix=\"" . Navigation::php_suffix() . "\"");
         if (session_id() !== "")
             Ht::stash_script("siteurl_postvalue=\"" . post_value() . "\"");
         if ($list)
-            Ht::stash_script("hotcrp_list=" . json_encode(["num" => $list->listno, "id" => $list->listid]) . ";");
+            Ht::stash_script("hotcrp_list=" . json_encode_browser(["id" => $list->listid, "info" => $list->info_string()]) . ";");
         if (($urldefaults = hoturl_defaults()))
-            Ht::stash_script("siteurl_defaults=" . json_encode($urldefaults) . ";");
-        Ht::stash_script("assetsurl=" . json_encode($Opt["assetsUrl"]) . ";");
+            Ht::stash_script("siteurl_defaults=" . json_encode_browser($urldefaults) . ";");
+        Ht::stash_script("assetsurl=" . json_encode_browser($this->opt["assetsUrl"]) . ";");
         $huser = (object) array();
         if ($Me && $Me->email)
             $huser->email = $Me->email;
@@ -2420,7 +2905,7 @@ class Conf {
             $huser->is_pclike = true;
         if ($Me && $Me->has_database_account())
             $huser->cid = $Me->contactId;
-        Ht::stash_script("hotcrp_user=" . json_encode($huser) . ";");
+        Ht::stash_script("hotcrp_user=" . json_encode_browser($huser) . ";");
 
         $pid = get($_REQUEST, "paperId");
         $pid = $pid && ctype_digit($pid) ? (int) $pid : 0;
@@ -2432,64 +2917,76 @@ class Conf {
             Ht::stash_script("hotcrp_want_override_conflict=true");
 
         // script.js
-        if (!get($Opt, "noDefaultScript"))
+        if (!$this->opt("noDefaultScript"))
             Ht::stash_html($this->make_script_file("scripts/script.js") . "\n");
 
         // other scripts
-        if (get($Opt, "scripts"))
-            foreach ($Opt["scripts"] as $file)
-                Ht::stash_html($this->make_script_file($file) . "\n");
+        foreach ($this->opt("scripts", []) as $file)
+            Ht::stash_html($this->make_script_file($file) . "\n");
 
         if ($stash)
             Ht::stash_html($stash);
     }
 
-    static function echo_header($conf, $is_home, $site_div, $title_div,
-                                $profile_html, $actions_html) {
-        echo $site_div,
-            '<div id="header_right">', $profile_html,
-            '<div id="maindeadline" style="display:none"></div></div>',
-            $title_div, $actions_html;
+    function has_interesting_deadline($my_deadlines) {
+        global $Now;
+        if (get($my_deadlines->sub, "open"))
+            foreach (["reg", "update", "sub"] as $k)
+                if ($Now <= get($my_deadlines->sub, $k, 0) || get($my_deadlines->sub, "{$k}_ingrace"))
+                    return true;
+        if (get($my_deadlines, "is_author") && get($my_deadlines, "resps"))
+            foreach (get($my_deadlines, "resps") as $r)
+                if ($r->open && ($Now <= $r->done || get($r, "ingrace")))
+                    return true;
+        return false;
     }
 
-    function header($title, $id, $actionBar, $title_div = null) {
-        global $ConfSitePATH, $Me, $Now, $Opt;
-        if ($this->headerPrinted)
-            return;
+    static function echo_header(Conf $conf, $is_home, $site_div, $title_div,
+                                $profile_html, $actions_html, $my_deadlines) {
+        echo $site_div, '<div id="header_right">', $profile_html;
+        if ($my_deadlines && $conf->has_interesting_deadline($my_deadlines))
+            echo '<div id="maindeadline">&nbsp;</div>';
+        else
+            echo '<div id="maindeadline" style="display:none"></div>';
+        echo '</div>', $title_div, $actions_html;
+    }
 
-        // <head>
-        if ($title === "Home")
-            $title = "";
-        $this->header_head($title);
-
-        // <body>
-        $body_class = "";
-        if ($id === "paper_view" || $id === "paper_edit"
-            || $id === "review" || $id === "assign")
-            $body_class = "paper";
-
+    function header_body($title, $id, $actionBar, $title_div = null) {
+        global $ConfSitePATH, $Me, $Now;
         echo "<body";
         if ($id)
             echo ' id="', $id, '"';
-        if ($body_class)
-            echo ' class="', $body_class, '"';
+        $list = null;
+        $ispaper = ($id === "paper_view" || $id === "paper_edit" || $id === "review" || $id === "assign");
+        if ($ispaper || $id === "account")
+            $list = SessionList::active();
+        if ($list)
+            echo ' class="', ($ispaper ? "paper " : ""), 'has-hotlist" data-hotlist="',
+                htmlspecialchars($list->info_string()), '"';
+        else if ($ispaper)
+            echo ' class="paper"';
+        else if ($id === "buzzer")
+            echo ' class="hide-tracker"';
         echo ">\n";
 
         // initial load (JS's timezone offsets are negative of PHP's)
-        Ht::stash_script("hotcrp_load.time(" . (-date("Z", $Now) / 60) . "," . (get($Opt, "time24hour") ? 1 : 0) . ")");
+        Ht::stash_script("hotcrp_load.time(" . (-date("Z", $Now) / 60) . "," . ($this->opt("time24hour") ? 1 : 0) . ")");
 
         // deadlines settings
-        if ($Me)
-            Ht::stash_script("hotcrp_deadlines.init(" . json_encode($Me->my_deadlines($this->paper)) . ")");
-        if (self::$gDefaultFormat)
-            Ht::stash_script("render_text.set_default_format(" . self::$gDefaultFormat . ")");
+        $my_deadlines = null;
+        if ($Me) {
+            $my_deadlines = $Me->my_deadlines($this->paper);
+            Ht::stash_script("hotcrp_deadlines.init(" . json_encode_browser($my_deadlines) . ")");
+        }
+        if ($this->default_format)
+            Ht::stash_script("render_text.set_default_format(" . $this->default_format . ")");
 
         // meeting tracker
         $trackerowner = ($trackerstate = $this->setting_json("tracker"))
             && $trackerstate->trackerid
             && $trackerstate->sessionid == session_id();
         if ($trackerowner)
-            Ht::stash_script("hotcrp_deadlines.tracker(0)");
+            Ht::stash_script("hotcrp_deadlines.tracker_ui(0)");
 
         echo '<div id="prebody"><div id="header">';
 
@@ -2497,22 +2994,22 @@ class Conf {
         $is_home = $id === "home";
         $site_div = '<div id="header_site" class="'
             . ($is_home ? "header_site_home" : "header_site_page")
-            . '"><h1><a class="qq" href="' . hoturl("index") . '">'
-            . htmlspecialchars($Opt["shortName"]);
+            . '"><h1><a class="qq" href="' . $this->hoturl("index") . '">'
+            . '<span class="header-site-name">'
+            . htmlspecialchars($this->short_name) . '</span>';
         if (!$is_home)
-            $site_div .= ' <span style="font-weight:normal">Home</span>';
+            $site_div .= ' Home';
         $site_div .= '</a></h1></div>';
 
         // $header_profile
         $profile_html = "";
         if ($Me && !$Me->is_empty()) {
             // profile link
-            $xsep = ' <span class="barsep">·</span> ';
-            if ($Me->has_email()) {
-                $profile_html .= '<a class="q" href="' . hoturl("profile") . '"><strong>'
+            $profile_parts = [];
+            if ($Me->has_email() && !$Me->disabled) {
+                $profile_parts[] = '<a class="q" href="' . $this->hoturl("profile") . '"><strong>'
                     . htmlspecialchars($Me->email)
-                    . '</strong></a> &nbsp; <a href="' . hoturl("profile") . '">Profile</a>'
-                    . $xsep;
+                    . '</strong></a> &nbsp; <a href="' . $this->hoturl("profile") . '">Profile</a>';
             }
 
             // "act as" link
@@ -2523,40 +3020,44 @@ class Conf {
                 if (!$Me->privChair || strcasecmp($Me->email, $actas) == 0)
                     $actas = $_SESSION["trueuser"]->email;
                 if (strcasecmp($Me->email, $actas) != 0)
-                    $profile_html .= "<a href=\"" . selfHref(array("actas" => $actas)) . "\">"
+                    $profile_parts[] = "<a href=\"" . selfHref(array("actas" => $actas)) . "\">"
                         . ($Me->privChair ? htmlspecialchars($actas) : "Admin")
                         . "&nbsp;" . Ht::img("viewas.png", "Act as " . htmlspecialchars($actas))
-                        . "</a>" . $xsep;
+                        . "</a>";
             }
 
             // help, sign out
             $x = ($id == "search" ? "t=$id" : ($id == "settings" ? "t=chair" : ""));
-            $profile_html .= '<a href="' . hoturl("help", $x) . '">Help</a>';
-            if (!$Me->has_email() && !isset($Opt["httpAuthLogin"]))
-                $profile_html .= $xsep . '<a href="' . hoturl("index", "signin=1") . '">Sign&nbsp;in</a>';
-            if (!$Me->is_empty() || isset($Opt["httpAuthLogin"]))
-                $profile_html .= $xsep . '<a href="' . hoturl_post("index", "signout=1") . '">Sign&nbsp;out</a>';
+            if (!$Me->disabled)
+                $profile_parts[] = '<a href="' . $this->hoturl("help", $x) . '">Help</a>';
+            if (!$Me->has_email() && !isset($this->opt["httpAuthLogin"]))
+                $profile_parts[] = '<a href="' . $this->hoturl("index", "signin=1") . '" class="nw">Sign in</a>';
+            if (!$Me->is_empty() || isset($this->opt["httpAuthLogin"]))
+                $profile_parts[] = '<a href="' . $this->hoturl_post("index", "signout=1") . '" class="nw">Sign out</a>';
+
+            if (!empty($profile_parts))
+                $profile_html .= join(' <span class="barsep">·</span> ', $profile_parts);
         }
 
-        if (!$title_div && $title)
+        if (!$title_div && $title && $title !== "Home")
             $title_div = '<div id="header_page"><h1>' . $title . '</h1></div>';
         if (!$title_div && $actionBar)
             $title_div = '<hr class="c" />';
 
-        $renderf = get($Opt, "headerRenderer");
+        $renderf = $this->opt("headerRenderer");
         if (!$renderf)
             $renderf = "Conf::echo_header";
         if (is_array($renderf)) {
             require_once($renderf[0]);
             $renderf = $renderf[1];
         }
-        call_user_func($renderf, $this, $is_home, $site_div, $title_div, $profile_html, $actionBar);
+        call_user_func($renderf, $this, $is_home, $site_div, $title_div, $profile_html, $actionBar, $my_deadlines);
 
         echo "  <hr class=\"c\" /></div>\n";
 
         echo "<div id=\"initialmsgs\">\n";
-        if (get($Opt, "maintenance"))
-            echo "<div class=\"merror\"><strong>The site is down for maintenance.</strong> ", (is_string($Opt["maintenance"]) ? $Opt["maintenance"] : "Please check back later."), "</div>";
+        if (($x = $this->opt("maintenance")))
+            echo "<div class=\"merror\"><strong>The site is down for maintenance.</strong> ", (is_string($x) ? $x : "Please check back later."), "</div>";
         $this->save_messages = false;
         if (($msgs = $this->session("msgs")) && count($msgs)) {
             $this->save_session("msgs", null);
@@ -2570,14 +3071,14 @@ class Conf {
 
         // If browser owns tracker, send it the script immediately
         if ($trackerowner)
-            $this->echoScript();
+            echo Ht::unstash();
 
         // Callback for version warnings
         if ($Me && $Me->privChair
             && (!isset($_SESSION["updatecheck"])
                 || $_SESSION["updatecheck"] + 20 <= $Now)
-            && (!isset($Opt["updatesSite"]) || $Opt["updatesSite"])) {
-            $m = defval($Opt, "updatesSite", "//hotcrp.lcdf.org/updates");
+            && (!isset($this->opt["updatesSite"]) || $this->opt["updatesSite"])) {
+            $m = isset($this->opt["updatesSite"]) ? $this->opt["updatesSite"] : "//hotcrp.lcdf.org/updates";
             $m .= (strpos($m, "?") === false ? "?" : "&")
                 . "addr=" . urlencode($_SERVER["SERVER_ADDR"])
                 . "&base=" . urlencode(Navigation::siteurl())
@@ -2600,88 +3101,61 @@ class Conf {
         }
     }
 
+    function header($title, $id, $actionBar, $title_div = null) {
+        global $ConfSitePATH, $Me, $Now;
+        if (!$this->headerPrinted) {
+            $this->header_head($title);
+            $this->header_body($title, $id, $actionBar, $title_div);
+        }
+    }
+
+    static function git_status() {
+        global $ConfSitePATH;
+        $args = array();
+        if (is_dir("$ConfSitePATH/.git"))
+            exec("export GIT_DIR=" . escapeshellarg($ConfSitePATH) . "/.git; git rev-parse HEAD 2>/dev/null; git rev-parse v" . HOTCRP_VERSION . " 2>/dev/null", $args);
+        return count($args) == 2 ? $args : null;
+    }
+
     function footer() {
-        global $Opt, $Me, $ConfSitePATH;
+        global $Me, $ConfSitePATH;
         echo "</div>\n", // class='body'
             "<div id='footer'>\n  <div id='footer_crp'>",
-            defval($Opt, "extraFooter", ""),
+            $this->opt("extraFooter", ""),
             "<a href='http://read.seas.harvard.edu/~kohler/hotcrp/'>HotCRP</a>";
-        if (!defval($Opt, "noFooterVersion", 0)) {
+        if (!$this->opt("noFooterVersion")) {
             if ($Me && $Me->privChair) {
                 echo " v", HOTCRP_VERSION;
-                if (is_dir("$ConfSitePATH/.git")) {
-                    $args = array();
-                    exec("export GIT_DIR=" . escapeshellarg($ConfSitePATH) . "/.git; git rev-parse HEAD 2>/dev/null; git rev-parse v" . HOTCRP_VERSION . " 2>/dev/null", $args);
-                    if (count($args) == 2 && $args[0] != $args[1])
-                        echo " [", substr($args[0], 0, 7), "...]";
-                }
+                if (($git_data = self::git_status()) && $git_data[0] !== $git_data[1])
+                    echo " [", substr($git_data[0], 0, 7), "...]";
             } else
                 echo "<!-- Version ", HOTCRP_VERSION, " -->";
         }
         echo "</div>\n  <hr class=\"c\" /></div>\n";
-        echo Ht::take_stash(), "</body>\n</html>\n";
+        echo Ht::unstash(), "</body>\n</html>\n";
     }
 
-    public function stash_hotcrp_pc(Contact $user) {
+    function stash_hotcrp_pc(Contact $user) {
         if (!Ht::mark_stash("hotcrp_pc"))
             return;
-        $sortbylast = opt("sortByLastName");
         $hpcj = $list = [];
-        foreach (pcMembers() as $pcm) {
-            $hpcj[$pcm->contactId] = $j = (object) ["name" => $user->name_html_for($pcm), "email" => $pcm->email];
-            if (($color_classes = $user->reviewer_color_classes_for($pcm)))
+        foreach ($this->pc_members() as $pcm) {
+            $hpcj[$pcm->contactId] = $j = (object) ["name" => $user->name_text_for($pcm), "email" => $pcm->email];
+            if (($color_classes = $user->user_color_classes_for($pcm)))
                 $j->color_classes = $color_classes;
-            if ($sortbylast && $pcm->lastName) {
+            if ($this->sort_by_last && $pcm->lastName) {
                 $r = Text::analyze_name($pcm);
                 if (strlen($r->lastName) !== strlen($r->name))
-                    $j->lastpos = strlen(htmlspecialchars($r->firstName)) + 1;
+                    $j->lastpos = strlen($r->firstName) + 1;
                 if ($r->nameAmbiguous && $r->name && $r->email)
-                    $j->emailpos = strlen(htmlspecialchars($r->name)) + 1;
+                    $j->emailpos = strlen($r->name) + 1;
             }
             $list[] = $pcm->contactId;
         }
         $hpcj["__order__"] = $list;
-        if ($sortbylast)
+        if ($this->sort_by_last)
             $hpcj["__sort__"] = "last";
-        Ht::stash_script("hotcrp_pc=" . json_encode($hpcj) . ";");
-    }
-
-
-    function output_ajax($values = null, $div = false) {
-        if ($values === false || $values === true)
-            $values = array("ok" => $values);
-        else if ($values === null)
-            $values = array();
-        else if (is_object($values))
-            $values = get_object_vars($values);
-        $t = "";
-        if (session_id() !== ""
-            && ($msgs = $this->session("msgs", array()))) {
-            $this->save_session("msgs", null);
-            foreach ($msgs as $msg) {
-                if (($msg[0] === "merror" || $msg[0] === "xmerror")
-                    && !isset($values["error"]))
-                    $values["error"] = $msg[1];
-                if ($div)
-                    $t .= Ht::xmsg($msg[0], $msg[1]);
-                else
-                    $t .= "<span class=\"$msg[0]\">$msg[1]</span>";
-            }
-        }
-        if ($t !== "")
-            $values["response"] = $t . get_s($values, "response");
-        if (isset($_REQUEST["jsontext"]) && $_REQUEST["jsontext"])
-            header("Content-Type: text/plain");
-        else
-            header("Content-Type: application/json");
-        if (check_post())
-            header("Access-Control-Allow-Origin: *");
-        echo json_encode($values);
-    }
-
-    function ajaxExit($values = null, $div = false) {
-        $this->output_ajax($values, $div);
-        exit;
+        Ht::stash_script("hotcrp_pc=" . json_encode_browser($hpcj) . ";");
     }
 
 
@@ -2689,30 +3163,52 @@ class Conf {
     // Action recording
     //
 
+    const action_log_query = "insert into ActionLog (ipaddr, contactId, destContactId, paperId, action) values ?v";
+
     function save_logs($on) {
         if ($on && $this->_save_logs === false)
             $this->_save_logs = array();
         else if (!$on && $this->_save_logs !== false) {
-            $qs = [];
+            $qv = [];
+            $last_pids = null;
             foreach ($this->_save_logs as $cid_text => $pids) {
                 $pos = strpos($cid_text, "|");
-                $qs[] = self::format_log_query(substr($cid_text, $pos + 1), substr($cid_text, 0, $pos), array_keys($pids));
+                list($user, $dest_user) = explode(",", substr($cid_text, 0, $pos));
+                $what = substr($cid_text, $pos + 1);
+                $pids = array_keys($pids);
+
+                // Combine `Tag:` messages
+                if (substr($what, 0, 5) === "Tag: "
+                    && ($n = count($qv)) > 0
+                    && substr($qv[$n-1][4], 0, 5) === "Tag: "
+                    && $last_pids === $pids) {
+                    $qv[$n-1][4] = $what . substr($qv[$n-1][4], 4);
+                    continue;
+                }
+
+                $qv[] = self::format_log_values($what, $user, $dest_user, $pids);
+                $last_pids = $pids;
             }
-            $mresult = Dbl::multi_q_raw(join(";", $qs));
-            while (($result = $mresult->next()))
-                Dbl::free($result);
+            if (!empty($qv))
+                $this->qe(self::action_log_query, $qv);
             $this->_save_logs = false;
         }
     }
 
-    function log($text, $who, $pids = null) {
-        if (!$who)
-            $who = 0;
-        else if (!is_numeric($who)) {
-            if ($who->email && !$who->contactId)
-                $text .= " <{$who->email}>";
-            $who = $who->contactId;
-        }
+    private static function log_clean_user($user, &$text) {
+        if (!$user)
+            return 0;
+        else if (!is_numeric($user)) {
+            if ($user->email && !$user->contactId)
+                $text .= " <{$user->email}>";
+            return $user->contactId;
+        } else
+            return $user;
+    }
+
+    function log_for($user, $dest_user, $text, $pids = null) {
+        $user = self::log_clean_user($user, $text);
+        $dest_user = self::log_clean_user($dest_user, $text);
 
         if (is_object($pids))
             $pids = array($pids->paperId);
@@ -2723,9 +3219,9 @@ class Conf {
             $ps[] = is_object($p) ? $p->paperId : $p;
 
         if ($this->_save_logs === false)
-            Dbl::q_raw(self::format_log_query($text, $who, $ps));
+            $this->qe(self::action_log_query, [self::format_log_values($text, $user, $dest_user, $ps)]);
         else {
-            $key = "$who|$text";
+            $key = "$user,$dest_user|$text";
             if (!isset($this->_save_logs[$key]))
                 $this->_save_logs[$key] = [];
             foreach ($ps as $p)
@@ -2733,22 +3229,19 @@ class Conf {
         }
     }
 
-    private static function format_log_query($text, $who, $pids) {
+    private static function format_log_values($text, $user, $dest_user, $pids) {
         $pid = null;
         if (count($pids) == 1)
             $pid = $pids[0];
         else if (count($pids) > 1)
             $text .= " (papers " . join(", ", $pids) . ")";
-        return Dbl::format_query("insert into ActionLog set ipaddr=?, contactId=?, paperId=?, action=?", get($_SERVER, "REMOTE_ADDR"), (int) $who, $pid, substr($text, 0, 4096));
+        return [get($_SERVER, "REMOTE_ADDR"), (int) $user, (int) $dest_user, $pid, substr($text, 0, 4096)];
     }
 
 
-    //
-    // Miscellaneous
-    //
+    // capabilities
 
     public function capability_manager($for = null) {
-        global $Opt;
         if ($for && substr($for, 0, 1) === "U") {
             if (($cdb = Contact::contactdb()))
                 return new CapabilityManager($cdb, "U");
@@ -2758,6 +3251,8 @@ class Conf {
             return new CapabilityManager($this->dblink, "");
     }
 
+
+    // messages
 
     public function message_name($name) {
         if (str_starts_with($name, "msg."))
@@ -2785,17 +3280,201 @@ class Conf {
     public function message_default_html($name) {
         return Message::default_html($this->message_name($name));
     }
-}
 
 
-function setting($name, $defval = false) {
-    return Conf::$g->setting($name, $defval);
-}
+    function ims() {
+        if (!$this->_ims) {
+            $this->_ims = new IntlMsgSet;
+            $m = ["?etc/msgs.json"];
+            if (($lang = $this->opt("lang")))
+                $m[] = "?etc/msgs.$lang.json";
+            expand_json_includes_callback($m, [$this->_ims, "addj"],
+                                          ["priority" => -1.0], true);
+            if (($mlist = $this->opt("msgs_include")))
+                expand_json_includes_callback($mlist, [$this->_ims, "addj"]);
+        }
+        return $this->_ims;
+    }
 
-function setting_data($name, $defval = false) {
-    return Conf::$g->setting_data($name, $defval);
-}
+    function _($itext) {
+        return call_user_func_array([$this->ims(), "x"], func_get_args());
+    }
 
-function setting_json($name, $defval = false) {
-    return Conf::$g->setting_json($name, $defval);
+    function _c($context, $itext) {
+        return call_user_func_array([$this->ims(), "xc"], func_get_args());
+    }
+
+    function _i($id, $itext) {
+        return call_user_func_array([$this->ims(), "xi"], func_get_args());
+    }
+
+    function _ci($context, $id, $itext) {
+        return call_user_func_array([$this->ims(), "xci"], func_get_args());
+    }
+
+
+    // API
+    function _add_api_json($fj) {
+        if (isset($fj->name) && is_string($fj->name)
+            && isset($fj->function) && is_string($fj->function))
+            return self::xt_add($this->_api_map, $fj->name, $fj);
+        else
+            return false;
+    }
+    private function api_map() {
+        if ($this->_api_map === null) {
+            $this->_api_map = [];
+            expand_json_includes_callback(["etc/apifunctions.json"], [$this, "_add_api_json"]);
+            if (($olist = $this->opt("apiFunctions")))
+                expand_json_includes_callback($olist, [$this, "_add_api_json"]);
+        }
+        return $this->_api_map;
+    }
+    private function check_api_json($fj, Contact $user = null, $method) {
+        if ((isset($fj->allow_if) && !$this->xt_allowed($fj, $user))
+            || ($method === "GET" && !get($fj, "get"))
+            || ($method === "POST" && get($fj, "post") === false))
+            return false;
+        else
+            return true;
+    }
+    function has_api($fn, Contact $user = null, $method = null) {
+        return !!$this->api($fn, $user, $method);
+    }
+    function api($fn, Contact $user = null, $method = null) {
+        $checkf = function ($xt) use ($user, $method) {
+            return $this->check_api_json($xt, $user, $method);
+        };
+        $uf = $this->xt_search_name($this->api_map(), $fn, $checkf);
+        return self::xt_enabled($uf) ? $uf : null;
+    }
+    private function call_api($fn, $uf, Contact $user, Qrequest $qreq, $prow) {
+        if ($qreq->method() !== "GET" && $qreq->method() !== "HEAD" && !check_post($qreq))
+            return new JsonResult(403, ["ok" => false, "error" => "Missing credentials."]);
+        if (!$uf) {
+            if ($this->has_api($fn, $user, null))
+                return new JsonResult(405, ["ok" => false, "error" => "Method not supported."]);
+            else if ($this->has_api($fn, null, $qreq->method()))
+                return new JsonResult(403, ["ok" => false, "error" => "Permission error."]);
+            else
+                return new JsonResult(404, ["ok" => false, "error" => "Function not found."]);
+        }
+        if (!$prow && get($uf, "paper"))
+            return new JsonResult(400, ["ok" => false, "error" => "No paper specified."]);
+        self::xt_resolve_require($uf);
+        return call_user_func($uf->function, $user, $qreq, $prow, $uf);
+    }
+    function call_api_exit($fn, Contact $user, Qrequest $qreq, PaperInfo $prow = null) {
+        // XXX precondition: $user->can_view_paper($prow) || !$prow
+        $uf = $this->api($fn, $user, $qreq->method());
+        if ($uf && get($uf, "redirect") && $qreq->redirect
+            && preg_match('@\A(?![a-z]+:|/).+@', $qreq->redirect)) {
+            try {
+                JsonResultException::$capturing = true;
+                $j = $this->call_api($fn, $uf, $user, $qreq, $prow);
+            } catch (JsonResultException $ex) {
+                $j = $ex->result;
+            }
+            if (is_object($j) && $j instanceof JsonResult)
+                $j = $j->content;
+            if (!get($j, "ok") && !get($j, "error"))
+                Conf::msg_error("Internal error.");
+            else if (($x = get($j, "error")))
+                Conf::msg_error(htmlspecialchars($x));
+            else if (($x = get($j, "error_html")))
+                Conf::msg_error($x);
+            Navigation::redirect_site($qreq->redirect);
+        } else {
+            $j = $this->call_api($fn, $uf, $user, $qreq, $prow);
+            json_exit($j);
+        }
+    }
+
+
+    // List action API
+    function _add_list_action_json($fj) {
+        $ok = false;
+        if (isset($fj->name) && is_string($fj->name)) {
+            if (isset($fj->renderer) && is_string($fj->renderer))
+                $ok = self::xt_add($this->_list_action_renderers, $fj->name, $fj);
+            if ((isset($fj->factory) && is_string($fj->factory))
+                || (isset($fj->factory_class) && is_string($fj->factory_class)))
+                $ok = self::xt_add($this->_list_action_map, $fj->name, $fj);
+        } else if (isset($fj->match) && is_string($fj->match)) {
+            if (isset($fj->expand_function) && is_string($fj->expand_function)) {
+                $this->_list_action_factories[] = $fj;
+                $ok = true;
+            }
+        }
+        return $ok;
+    }
+    function list_action_map() {
+        if ($this->_list_action_map === null) {
+            $this->_list_action_map = $this->_list_action_renderers = $this->_list_action_factories = [];
+            expand_json_includes_callback(["etc/listactions.json"], [$this, "_add_list_action_json"]);
+            if (($olist = $this->opt("listActions")))
+                expand_json_includes_callback($olist, [$this, "_add_list_action_json"]);
+            usort($this->_list_action_factories, "Conf::xt_priority_compare");
+        }
+        return $this->_list_action_map;
+    }
+    function list_action_renderers() {
+        $this->list_action_map();
+        return $this->_list_action_renderers;
+    }
+    function has_list_action($name, Contact $user = null, $method = null) {
+        return !!$this->list_action($name, $user, $method);
+    }
+    function list_action($name, Contact $user = null, $method = null) {
+        $checkf = function ($xt) use ($user, $method) {
+            return $this->check_api_json($xt, $user, $method);
+        };
+        $uf = $this->xt_search_name($this->list_action_map(), $name, $checkf);
+        if (($s = strpos($name, "/")) !== false)
+            $uf = $this->xt_search_name($this->list_action_map(), substr($name, 0, $s), $checkf, $uf);
+        if (($expansions = $this->xt_search_factories($this->_list_action_factories, $name, $checkf, $uf, $user)))
+            $uf = $expansions[0];
+        if (self::xt_disabled($uf))
+            $uf = null;
+        return self::xt_resolve_require($uf);
+    }
+
+
+    // Paper columns
+    function _add_paper_column_json($fj) {
+        if (isset($fj->name) && is_string($fj->name))
+            return self::xt_add($this->_paper_column_map, $fj->name, $fj);
+        else if (isset($fj->match) && is_string($fj->match)
+                 && isset($fj->expand_function) && is_string($fj->expand_function)) {
+            $this->_paper_column_factories[] = $fj;
+            return true;
+        } else
+            return false;
+    }
+    function paper_column_map() {
+        if ($this->_paper_column_map === null) {
+            require_once("papercolumn.php");
+            $this->_paper_column_map = $this->_paper_column_factories = [];
+            expand_json_includes_callback(["etc/papercolumns.json"], [$this, "_add_paper_column_json"]);
+            if (($olist = $this->opt("paperColumns")))
+                expand_json_includes_callback($olist, [$this, "_add_paper_column_json"]);
+            usort($this->_paper_column_factories, "Conf::xt_priority_compare");
+        }
+        return $this->_paper_column_map;
+    }
+    function paper_column_factories() {
+        $this->paper_column_map();
+        return $this->_paper_column_factories;
+    }
+    function basic_paper_column($name, Contact $user = null) {
+        $checkf = function ($xt) use ($user) { return $this->xt_allowed($xt, $user); };
+        $uf = $this->xt_search_name($this->paper_column_map(), $name, $checkf);
+        return self::xt_enabled($uf) ? $uf : null;
+    }
+    function paper_columns($name, Contact $user) {
+        $checkf = function ($xt) use ($user) { return $this->xt_allowed($xt, $user); };
+        $uf = $this->xt_search_name($this->paper_column_map(), $name, $checkf);
+        $expansions = $this->xt_search_factories($this->_paper_column_factories, $name, $checkf, $uf, $user, "i");
+        return array_filter($expansions ? : [$uf], "Conf::xt_enabled");
+    }
 }

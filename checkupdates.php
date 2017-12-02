@@ -1,6 +1,6 @@
 <?php
 // checkupdates.php -- HotCRP update checker helper
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 require_once("src/initweb.php");
@@ -9,9 +9,9 @@ if (isset($_REQUEST["text"]) && $_REQUEST["text"])
 else
     header("Content-Type: application/json");
 
-if ($Me->privChair && isset($_REQUEST["ignore"])) {
+if ($Me->privChair && check_post() && isset($_REQUEST["ignore"])) {
     $when = time() + 86400 * 2;
-    $Conf->qe("insert into Settings (name, value) values ('ignoreupdate_" . sqlq($_REQUEST["ignore"]) . "', $when) on duplicate key update value=$when");
+    $Conf->qe_raw("insert into Settings (name, value) values ('ignoreupdate_" . sqlq($_REQUEST["ignore"]) . "', $when) on duplicate key update value=$when");
 }
 
 $messages = array();
@@ -23,7 +23,7 @@ if ($Me->privChair && isset($_REQUEST["data"])
         if (isset($update["opt"]) && is_array($update["opt"]))
             foreach ($update["opt"] as $k => $v) {
                 $kk = ($k[0] == "-" ? substr($k, 1) : $k);
-                $test = defval($Opt, $kk, null) == $v;
+                $test = $Conf->opt($kk, null) == $v;
                 $ok = $ok && ($k[0] == "-" ? !$test : $test);
             }
         if (isset($update["settings"]) && is_array($update["settings"]))
@@ -59,8 +59,8 @@ if ($Me->privChair && isset($_REQUEST["data"])
             if (isset($update["to"]) && is_string($update["to"])) {
                 $m .= "<div class='bigid'>First unaffected commit: " . htmlspecialchars($update["to"]);
                 if ($errid)
-                    $m .= " <span class='barsep'>·</span> "
-                        . "<a href='#' onclick='return check_version.ignore(\"$errid\")'>Ignore for two days</a>";
+                    $m .= ' <span class="barsep">·</span> '
+                        . '<a class="ui js-check-version-ignore" href="" data-version-id="' . $errid . '">Ignore for two days</a>';
                 $m .= "</div>";
             }
             $messages[] = $m . "</div>\n";
@@ -69,9 +69,4 @@ if ($Me->privChair && isset($_REQUEST["data"])
     }
 }
 
-if (!count($messages))
-    echo "{\"ok\":true}\n";
-else {
-    $j = array("ok" => true, "messages" => join("", $messages));
-    echo json_encode($j);
-}
+json_exit($messages ? ["ok" => true] : ["ok" => true, "messages" => join("", $messages)]);

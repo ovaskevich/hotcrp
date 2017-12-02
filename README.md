@@ -23,7 +23,7 @@ software:
 
 * Apache, http://apache.org/ or Nginx, http://nginx.org/
   (You may be able to use another web server that works with PHP.)
-* PHP version 5.4 or higher, http://php.net/
+* PHP version 5.5 or higher, http://php.net/
   - Including MySQL and GD support
 * MySQL version 5 or higher, http://mysql.org/
 * The zip compressor, http://www.info-zip.org/
@@ -35,13 +35,9 @@ Apache is preloaded on most Linux distributions. You may need to install
 additional packages for PHP and MySQL, such as:
 
 * Fedora Linux: php-mysql, php-gd, zip, (poppler-utils)
-* Debian Linux: php5-common, php5-gd, php5-mysql,
-  libapache2-mod-php5 (or libapache-mod-php5 for Apache 1.x),
-  zip, (poppler-utils)
-* Ubuntu Linux: php5-common, php5-gd, php5-mysql,
-  libapache2-mod-php5 (or libapache-mod-php5 for Apache 1.x),
-  zip, (poppler-utils), and a package for SMTP support, such
-  as sendmail or postfix
+* Ubuntu Linux: php-common, php-gd, php-mysql, libapache2-mod-php (or
+  libapache-mod-php for Apache 1.x), zip, (poppler-utils), and a package for
+  SMTP support, such as sendmail or postfix
 
 You may need to restart the Apache web server after installing these
 packages (`sudo apachectl graceful` or `sudo apache2ctl graceful`). If
@@ -115,12 +111,26 @@ served by HotCRP. This normally happens automatically. However, if
 the URL path is `/`, you may need to turn off your server’s default
 handlers for subdirectories such as `/doc`.
 
-4. Update the systemwide setting for PHP’s `session.gc_maxlifetime`
-configuration variable. This provides an upper bound on HotCRP session
-lifetimes (the amount of idle time before a user is logged out
-automatically). On Unix machines, systemwide PHP settings are often
-stored in `/etc/php.ini`. The suggested value for this setting is
-86400, e.g., 24 hours:
+4. Update PHP settings.
+
+    The first three settings, `upload_max_filesize`, `post_max_size`, and
+`max_input_vars`, may be changed system-wide or in HotCRP’s `.htaccess` and
+`.user.ini` files.
+
+  * `upload_max_filesize`: Set to the largest file upload HotCRP should accept.
+    `15M` is a good default.
+
+  * `post_max_size`: Set to the largest total upload HotCRP should accept. Must
+    be at least as big as `upload_max_filesize`. `20M` is a good default.
+
+  * `max_input_vars`: Set to the largest number of distinct input variables
+    HotCRP should accept. `4096` is a good default.
+
+    The last setting, `session.gc_maxlifetime`, must be changed globally. This
+provides an upper bound on HotCRP session lifetimes (the amount of idle time
+before a user is logged out automatically). On Unix machines, systemwide PHP
+settings are often stored in `/etc/php.ini`. The suggested value for this
+setting is 86400, e.g., 24 hours:
 
         session.gc_maxlifetime = 86400
 
@@ -128,9 +138,9 @@ stored in `/etc/php.ini`. The suggested value for this setting is
 `session.gc_maxlifetime` to 86400 anyway, then edit `conf/options.php`
 to set `$Opt["sessionLifetime"]` to the correct session timeout.
 
-5. Edit MySQL’s my.cnf (typical location: `/etc/mysql/my.cnf`) to ensure
-that MySQL can handle paper-sized objects.  It should contain something
-like this:
+5. Edit MySQL’s my.cnf (typical locations: `/etc/mysql/my.cnf` or
+`/etc/mysql/mysql.conf.d/mysqld.cnf`) to ensure that MySQL can handle
+paper-sized objects.  It should contain something like this:
 
         [mysqld]
         max_allowed_packet=32M

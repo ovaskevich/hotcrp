@@ -1,147 +1,56 @@
 <?php
 // checkformat.php -- HotCRP/banal integration
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
-class CheckFormat {
+class CheckFormat extends MessageSet implements FormatChecker {
+    const RUN_YES = 0;
+    const RUN_PREFER_NO = 1;
+    const RUN_NO = 2;
 
-    const ERR_PAPERSIZE = 1;
-    const ERR_PAGELIMIT = 2;
-    const ERR_COLUMNS = 4;
-    const ERR_TEXTBLOCK = 8;
-    const ERR_BODYFONTSIZE = 16;
-    const ERR_BODYLEADING = 32;
-
-    public static $error_types = array(self::ERR_PAPERSIZE => "papersize",
-                           self::ERR_PAGELIMIT => "pagelimit",
-                           self::ERR_COLUMNS => "columns",
-                           self::ERR_TEXTBLOCK => "textblock",
-                           self::ERR_BODYFONTSIZE => "bodyfontsize",
-                           self::ERR_BODYLEADING => "bodyleading");
-
-    var $msgs = array();
-    public $errors = 0;
     public $pages = 0;
+    private $body_pages;
+    public $metadata_updates = [];
+    public $failed = false;
     public $banal_stdout;
     public $banal_sterr;
     public $banal_status;
+    public $allow_run = self::RUN_YES;
+    public $need_run = false;
+    public $possible_run = false;
+    private $conf = null;
+    private $checkers = [];
+    static private $banal_args;
+    static public $runcount = 0;
 
-    function __construct() {
-        $this->msgs = array();
-        $this->errors = 0;
-        $this->pages = 0;
-    }
-
-    public static function parse_dimen($text, $ndimen = -1) {
-        // replace \xC2\xA0 (utf-8 for U+00A0 NONBREAKING SPACE) with ' '
-        $text = trim(str_replace("\xC2\xA0", " ", strtolower($text)));
-        $n = $text;
-        $a = array();
-        $unit = array();
-        while (preg_match('/^\s*(\d+\.?\d*|\.\d+)\s*(in?|cm?|mm|pt|)\s*(.*)$/', $n, $m)) {
-            $a[] = $m[1];
-            if ($m[2] == "i" || $m[2] == "in")
-                $unit[] = 72;
-            else if ($m[2] == "c" || $m[2] == "cm")
-                $unit[] = 72 * 0.393700787;
-            else if ($m[2] == "mm")
-                $unit[] = 72 * 0.0393700787;
-            else if ($m[2] == "pt")
-                $unit[] = 1;
-            else
-                $unit[] = 0;
-            if ($m[3] == "") {  // end of string
-                // fail on bad number of dimensions
-                if ($ndimen > 0 && count($a) != $ndimen)
-                    return false;
-
-                // spread known units to unknown positions, using two passes
-                $unitrep = 0;
-                for ($i = count($unit) - 1; $i >= 0; --$i)
-                    $unit[$i] = $unitrep = ($unit[$i] ? $unit[$i] : $unitrep);
-                $unitrep = 0;
-                for ($i = 0; $i < count($unit); ++$i)
-                    $unit[$i] = $unitrep = ($unit[$i] ? $unit[$i] : $unitrep);
-
-                // multiply dimensions by units, fail on unknown units
-                for ($i = 0; $i < count($unit); ++$i)
-                    if ($unit[$i])
-                        $a[$i] *= $unit[$i];
-                    else
-                        return false;
-
-                return (count($a) == 1 ? $a[0] : $a);
-            } else if ($m[3][0] == "x")
-                $n = substr($m[3], 1);
-            else if ($m[3][0] == 0xC3 && $m[3][1] == 0x97)
-                // \xC3\x97 is utf-8 for MULTIPLICATION SIGN
-                $n = substr($m[3], 2);
-            else
-                return false;
+    function __construct($allow_run = self::RUN_YES) {
+        parent::__construct();
+        $this->allow_run = $allow_run;
+        if (self::$banal_args === null) {
+            $z = opt("banalZoom");
+            self::$banal_args = $z ? "-zoom=$z" : "";
         }
-        if ($text == "letter")
-            return self::parse_dimen("8.5in x 11in", $ndimen);
-        else if ($text == "a4")
-            return self::parse_dimen("210mm x 297mm", $ndimen);
-        else
-            return false;
     }
 
-    public static function unparse_dimen($n, $to = null) {
-        if ($to == "paper") {
-            if (is_array($n) && count($n) == 2
-                && abs($n[0] - 612) <= 5 && abs($n[1] - 792) <= 5)
-                return "letter paper (8.5in x 11in)";
-            else if (is_array($n) && count($n) == 2
-                     && abs($n[0] - 595.27) <= 5 && abs($n[1] - 841.89) <= 5)
-                return "A4 paper (210mm x 297mm)";
-            else
-                $to = null;
-        }
-        if (is_array($n)) {
-            $t = "";
-            foreach ($n as $v)
-                // \xC2\xA0 is utf-8 for U+00A0 NONBREAKING SPACE
-                $t .= ($t == "" ? "" : "\xC2\xA0x\xC2\xA0") . self::unparse_dimen($v, $to);
-            return $t;
-        }
-        if (!$to && $n < 18)
-            $to = "pt";
-        else if (!$to && abs($n - 18 * (int) (($n + 9) / 18)) <= 0.5)
-            $to = "in";
-        else if (!$to)
-            $to = "mm";
-        if ($to == "pt")
-            return $n . $to;
-        else if ($to == "in" || $to == "i")
-            return ((int) (100 * $n / 72 + 0.5) / 100) . $to;
-        else if ($to == "cm")
-            return ((int) (100 * $n / 72 / 0.393700787 + 0.5) / 100) . $to;
-        else if ($to == "mm")
-            return (int) ($n / 72 / 0.0393700787 + 0.5) . $to;
-        else
-            return "??" . $to;
+    function error_kinds(FormatSpec $spec) {
+        $ks = [];
+        foreach (["papersize", "pagelimit", "columns", "textblock", "bodyfontsize", "bodylineheight"] as $k)
+            if ($spec->unparse_key($k) !== "")
+                $ks[] = $k;
+        return $ks;
     }
 
-    function msg($type, $what) {
-        $this->msgs[] = array($type, $what);
-        return 0;
+    function msg_fail($what) {
+        $this->msg("error", $what, self::ERROR);
+        $this->failed = true;
     }
 
-    static private function split_spec($spec) {
-        if (($gtpos = strpos($spec, ">")) !== false)
-            return [substr($spec, 0, $gtpos), substr($spec, $gtpos + 1)];
-        else
-            return [$spec, null];
-    }
-
-    private function run_banal($filename, $args) {
-        global $Opt;
-        if (isset($Opt["pdftohtml"]))
-            putenv("PHP_PDFTOHTML=" . $Opt["pdftohtml"]);
+    function run_banal($filename) {
+        if (($pdftohtml = opt("pdftohtml")))
+            putenv("PHP_PDFTOHTML=" . $pdftohtml);
         $banal_run = "perl src/banal -no_app -json ";
-        if ($args)
-            $banal_run .= $args . " ";
+        if (self::$banal_args)
+            $banal_run .= self::$banal_args . " ";
         $pipes = null;
         $banal_proc = proc_open($banal_run . escapeshellarg($filename),
                                 [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes);
@@ -150,235 +59,355 @@ class CheckFormat {
         fclose($pipes[1]);
         fclose($pipes[2]);
         $this->banal_status = proc_close($banal_proc);
+        ++self::$runcount;
         return json_decode($this->banal_stdout);
+    }
+
+    protected function body_error_status($error_pages) {
+        if ($this->body_pages >= 0.5 * $this->pages
+            && $error_pages >= 0.16 * $this->body_pages)
+            return self::ERROR;
+        else
+            return self::WARNING;
+    }
+
+    static function banal_page_is_body($pg) {
+        return get($pg, "pagetype", "body") == "body"
+            && (!isset($pg->d) || $pg->d >= 16000 || !isset($pg->columns) || $pg->columns <= 2);
     }
 
     private function check_banal_json($bj, $spec) {
         if (!$bj || !isset($bj->pages) || !isset($bj->papersize)
             || !is_array($bj->pages) || !is_array($bj->papersize)
             || count($bj->papersize) != 2)
-            return $this->msg("error", "Analysis failure: no pages or paper size.");
-
-        // report results
-        $banal_desired = explode(";", $spec);
-        $pie = array();
+            return $this->msg_fail("Analysis failure: no pages or paper size.");
 
         // paper size
-        if (count($banal_desired) > 0 && $banal_desired[0]) {
+        if ($spec->papersize) {
             $papersize = $bj->papersize;
             $psdefs = array();
             $ok = false;
-            foreach (explode(" OR ", $banal_desired[0]) as $p) {
-                if (!($p = self::parse_dimen($p, 2)))
-                    continue;
+            foreach ($spec->papersize as $p)
                 if (abs($p[0] - $papersize[1]) < 9
                     && abs($p[1] - $papersize[0]) < 9) {
                     $ok = true;
                     break;
                 }
-                $psdefs[] = self::unparse_dimen($p, "paper");
-            }
-            if (!$ok && count($psdefs)) {
-                $pie[] = "Paper size mismatch: expected " . commajoin($psdefs, "or") . ", got " . self::unparse_dimen([$papersize[1], $papersize[0]], "paper");
-                $this->errors |= self::ERR_PAPERSIZE;
-            }
+            if (!$ok)
+                $this->msg("papersize", "Paper size mismatch: expected " . commajoin(array_map(function ($d) { return FormatSpec::unparse_dimen($d, "paper"); }, $spec->papersize), "or") . ", got " . FormatSpec::unparse_dimen([$papersize[1], $papersize[0]], "paper") . ".", self::WARNING);
         }
 
         // number of pages
         $minpages = $maxpages = null;
-        if (count($banal_desired) > 1 && $banal_desired[1]
-            && preg_match('/\A(\d+)(?:-(\d+))?\z/', $banal_desired[1], $m)) {
-            $m[2] = (isset($m[2]) ? $m[2] : 0);
-            $minpages = ($m[2] ? $m[1] : null);
-            $maxpages = ($m[2] ? $m[2] : $m[1]);
-            if ($m[2] && count($bj->pages) < $m[1]) {
-                $pie[] = "Too few pages: expected " . plural($m[1], "or more page") . ", found " . count($bj->pages);
-                $this->errors |= self::ERR_PAGELIMIT;
-            } else if (count($bj->pages) > ($m[2] ? $m[2] : $m[1])) {
-                $pie[] = "Too many pages: the limit is " . plural($m[2] ? $m[2] : $m[1], "page") . ", found " . count($bj->pages);
-                $this->errors |= self::ERR_PAGELIMIT;
-            }
+        if ($spec->pagelimit) {
+            if (count($bj->pages) < $spec->pagelimit[0])
+                $this->msg("pagelimit", "Too few pages: expected " . plural($spec->pagelimit[0], "or more page") . ", found " . count($bj->pages) . ".", self::WARNING);
+            else if (count($bj->pages) > $spec->pagelimit[1])
+                $this->msg("pagelimit", "Too many pages: the limit is " . plural($spec->pagelimit[1], "page") . ", found " . count($bj->pages) . ".", self::ERROR);
         }
         $this->pages = count($bj->pages);
+        $this->body_pages = count(array_filter($bj->pages, function ($pg) {
+            return CheckFormat::banal_page_is_body($pg);
+        }));
+
+        // body pages exist
+        if (($spec->columns || $spec->bodyfontsize || $spec->bodylineheight)
+            && $this->body_pages < 0.5 * count($bj->pages)) {
+            if ($this->body_pages == 0)
+                $this->msg(false, "Warning: No pages seemed to contain body text; results may be off.", self::WARNING);
+            else
+                $this->msg(false, "Warning: Only " . plural($this->body_pages, "page") . " seemed to contain body text; results may be off.", self::WARNING);
+            $nd0_pages = count(array_filter($bj->pages, function ($pg) {
+                return isset($pg->d) && $pg->d == 0;
+            }));
+            if ($nd0_pages == $this->pages)
+                $this->msg("notext", "This document appears to contain no text. Perhaps the PDF software used renders pages as images. PDFs like this are less efficient to transfer and harder to search.", self::ERROR);
+        }
 
         // number of columns
-        if (count($banal_desired) > 2 && $banal_desired[2]
-            && ($p = cvtint($banal_desired[2])) > 0) {
+        if ($spec->columns) {
             $px = array();
             $ncol = get($bj, "columns", 0);
             foreach ($bj->pages as $i => $pg)
                 if (($pp = cvtint(get($pg, "columns", $ncol))) > 0
-                    && $pp != $p
-                    && defval($pg, "pagetype", "body") == "body")
+                    && $pp != $spec->columns
+                    && self::banal_page_is_body($pg)
+                    && $spec->is_checkable($i + 1, "columns"))
                     $px[] = $i + 1;
-            if (count($px) > ($maxpages ? max(0, $maxpages * 0.75) : 0)) {
-                $pie[] = "Wrong number of columns: expected " . plural($p, "column") . ", different on " . pluralx($px, "page") . " " . numrangejoin($px);
-                $this->errors |= self::ERR_COLUMNS;
-            }
+            if (count($px) > ($maxpages ? max(0, $maxpages * 0.75) : 0))
+                $this->msg("columns", "Wrong number of columns: expected " . plural($spec->columns, "column") . ", different on " . pluralx($px, "page") . " " . numrangejoin($px) . ".", self::WARNING);
         }
 
         // text block
-        if (count($banal_desired) > 3 && $banal_desired[3]
-            && ($p = self::parse_dimen($banal_desired[3], 2))) {
+        if ($spec->textblock) {
             $px = array();
             $py = array();
-            $maxx = $maxy = 0;
-            $tb = get($bj, "textblock");
+            $maxx = $maxy = $nbadx = $nbady = 0;
+            $docpsiz = get($bj, "papersize");
+            $docmarg = get($bj, "margin");
             foreach ($bj->pages as $i => $pg)
-                if (($pp = defval($pg, "textblock", $tb)) && is_array($pp)) {
-                    if ($pp[1] - $p[0] >= 9) {
+                if (($psiz = defval($pg, "papersize", $docpsiz)) && is_array($psiz)
+                    && ($marg = defval($pg, "margin", $docmarg)) && is_array($marg)
+                    && $spec->is_checkable($i + 1, "textblock")) {
+                    $pwidth = $psiz[1] - $marg[1] - $marg[3];
+                    $pheight = $psiz[0] - $marg[0] - $marg[2];
+                    if ($pwidth - $spec->textblock[0] >= 9) {
                         $px[] = $i + 1;
-                        $maxx = max($maxx, $pp[0]);
+                        $maxx = max($maxx, $pwidth);
+                        if ($pwidth >= 1.05 * $spec->textblock[0])
+                            ++$nbadx;
                     }
-                    if ($pp[0] - $p[1] >= 9) {
+                    if ($pheight - $spec->textblock[1] >= 9) {
                         $py[] = $i + 1;
-                        $maxy = max($maxy, $pp[1]);
+                        $maxy = max($maxy, $pheight);
+                        if ($pheight >= 1.05 * $spec->textblock[1])
+                            ++$nbady;
                     }
                 }
-            if (count($px) > 0) {
-                $pie[] = "Margins too small: text width exceeds "
-                    . self::unparse_dimen($p[0]) . " by "
+            if (!empty($px))
+                $this->msg("textblock", "Margins too small: text width exceeds "
+                    . FormatSpec::unparse_dimen($spec->textblock[0]) . " by "
                     . (count($px) > 1 ? "up to " : "")
-                    . ((int) (100 * $maxx / $p[0] + .5) - 100)
+                    . ((int) (100 * $maxx / $spec->textblock[0] + .5) - 100)
                     . "% on " . pluralx($px, "page") . " "
-                    . numrangejoin($px);
-                $this->errors |= self::ERR_TEXTBLOCK;
-            }
-            if (count($py) > 0) {
-                $pie[] = "Margins too small: text height exceeds "
-                    . self::unparse_dimen($p[1]) . " by "
+                    . numrangejoin($px) . ".", $this->body_error_status($nbadx));
+            if (!empty($py))
+                $this->msg("textblock", "Margins too small: text height exceeds "
+                    . FormatSpec::unparse_dimen($spec->textblock[1]) . " by "
                     . (count($py) > 1 ? "up to " : "")
-                    . ((int) (100 * $maxy / $p[1] + .5) - 100)
+                    . ((int) (100 * $maxy / $spec->textblock[1] + .5) - 100)
                     . "% on " . pluralx($py, "page") . " "
-                    . numrangejoin($py);
-                $this->errors |= self::ERR_TEXTBLOCK;
-            }
+                    . numrangejoin($py) . ".", $this->body_error_status($nbady));
         }
 
         // font size
-        if (count($banal_desired) > 4 && $banal_desired[4]
-            && ($p = cvtnum($banal_desired[4])) > 0) {
-            $px = array();
-            $bodypages = 0;
+        if ($spec->bodyfontsize) {
+            $lopx = $hipx = [];
             $minval = 1000;
+            $maxval = 0;
+            $nbadsize = 0;
             $bfs = get($bj, "bodyfontsize");
-            foreach ($bj->pages as $i => $pg) {
-                if (get($pg, "pagetype", "body") == "body")
-                    $bodypages++;
-                if (($pp = cvtnum(get($pg, "bodyfontsize", $bfs))) > 0
-                    && $pp < $p
-                    && get($pg, "pagetype", "body") == "body") {
-                    $px[] = $i + 1;
-                    $minval = min($minval, $pp);
+            foreach ($bj->pages as $i => $pg)
+                if (self::banal_page_is_body($pg)
+                    && $spec->is_checkable($i + 1, "bodyfontsize")) {
+                    $pp = cvtnum(get($pg, "bodyfontsize", $bfs));
+                    if ($pp > 0 && $pp < $spec->bodyfontsize[0] - $spec->bodyfontsize[2]) {
+                        $lopx[] = $i + 1;
+                        $minval = min($minval, $pp);
+                        if ($pp <= 0.97 * $spec->bodyfontsize[0])
+                            ++$nbadsize;
+                    }
+                    if ($pp > 0 && $spec->bodyfontsize[1] > 0
+                        && $pp > $spec->bodyfontsize[1] + $spec->bodyfontsize[2]) {
+                        $hipx[] = $i + 1;
+                        $maxval = max($maxval, $pp);
+                    }
                 }
-            }
-            if ($bodypages == 0)
-                $pie[] = "Warning: No pages seemed to contain body text; results may be off";
-            else if ($bodypages <= 0.5 * count($bj->pages))
-                $pie[] = "Warning: Only " . plural($bodypages, "page") . " seemed to contain body text; results may be off";
-            if (count($px) > 0) {
-                $pie[] = "Body font too small: minimum ${p}pt, saw values as small as ${minval}pt on " . pluralx($px, "page") . " " . numrangejoin($px);
-                $this->errors |= self::ERR_BODYFONTSIZE;
-            }
+            if (!empty($lopx))
+                $this->msg("bodyfontsize", "Body font too small: minimum {$spec->bodyfontsize[0]}pt, saw values as small as {$minval}pt on " . pluralx($lopx, "page") . " " . numrangejoin($lopx) . ".", $this->body_error_status($nbadsize));
+            if (!empty($hipx))
+                $this->msg("bodyfontsize", "Body font too large: maximum {$spec->bodyfontsize[1]}pt, saw values as large as {$maxval}pt on " . pluralx($hipx, "page") . " " . numrangejoin($hipx) . ".", self::WARNING);
         }
 
-        // leading
-        if (count($banal_desired) > 5 && $banal_desired[5]
-            && ($p = cvtnum($banal_desired[5])) > 0) {
-            $px = array();
+        // line height
+        if ($spec->bodylineheight) {
+            $lopx = $hipx = [];
             $minval = 1000;
+            $maxval = 0;
+            $nbadsize = 0;
             $l = get($bj, "leading");
             foreach ($bj->pages as $i => $pg)
-                if (($pp = cvtnum(get($pg, "leading", $l))) > 0
-                    && $pp < $p
-                    && get($pg, "pagetype", "body") == "body") {
-                    $px[] = $i + 1;
-                    $minval = min($minval, $pp);
+                if (self::banal_page_is_body($pg)
+                    && $spec->is_checkable($i + 1, "bodylineheight")) {
+                    $pp = cvtnum(get($pg, "leading", $l));
+                    if ($pp > 0 && $pp < $spec->bodylineheight[0] - $spec->bodylineheight[2]) {
+                        $lopx[] = $i + 1;
+                        $minval = min($minval, $pp);
+                        if ($pp <= 0.97 * $spec->bodylineheight[0])
+                            ++$nbadsize;
+                    }
+                    if ($pp > 0 && $spec->bodylineheight[1] > 0
+                        && $pp > $spec->bodylineheight[1] + $spec->bodylineheight[2]) {
+                        $hipx[] = $i + 1;
+                        $maxval = max($maxval, $pp);
+                    }
                 }
-            if (count($px) > 0) {
-                $pie[] = "<a href='http://en.wikipedia.org/wiki/Leading'>Leading</a> (line spacing) too small: minimum ${p}pt, saw values as small as ${minval}pt on " . pluralx($px, "page") . " " . numrangejoin($px);
-                $this->errors |= self::ERR_BODYLEADING;
+            if (!empty($lopx))
+                $this->msg("bodylineheight", "Line height too small: minimum {$spec->bodylineheight[0]}pt, saw values as small as {$minval}pt on " . pluralx($lopx, "page") . " " . numrangejoin($lopx) . ".", $this->body_error_status($nbadsize));
+            if (!empty($hipx))
+                $this->msg("bodylineheight", "Line height too large: minimum {$spec->bodylineheight[1]}pt, saw values as large as {$maxval}pt on " . pluralx($hipx, "page") . " " . numrangejoin($hipx) . ".", self::WARNING);
+        }
+    }
+
+    function clear() {
+        parent::clear();
+        $this->metadata_updates = [];
+        $this->need_run = $this->possible_run = false;
+        $this->failed = false;
+    }
+
+    function check_file($filename, $spec) {
+        if (is_string($spec))
+            $spec = new FormatSpec($spec);
+        $this->clear();
+        $bj = $this->run_banal($filename);
+        $this->check_banal_json($bj, $spec);
+    }
+
+    function load_to_filestore($doc) {
+        if ($doc->docclass->load_to_filestore($doc))
+            return true;
+        $this->msg_fail(isset($doc->error_html) ? $doc->error_html : "Paper cannot be loaded.");
+        return false;
+    }
+
+    function check(CheckFormat $cf, FormatSpec $spec, PaperInfo $prow, $doc) {
+        global $Now;
+        $bj = null;
+        if (($m = $doc->metadata()) && isset($m->banal))
+            $bj = $m->banal;
+        $bj_ok = $bj && $bj->at >= @filemtime("src/banal") && get($bj, "args") == self::$banal_args;
+        if (!$bj_ok || $bj->at < $Now - 86400) {
+            $cf->possible_run = true;
+            if ($cf->allow_run == CheckFormat::RUN_YES
+                || (!$bj_ok && $cf->allow_run == CheckFormat::RUN_PREFER_NO))
+                $bj = null;
+        }
+
+        if (!$bj && $cf->allow_run == CheckFormat::RUN_NO)
+            $cf->need_run = true;
+        else if (!$bj && $cf->load_to_filestore($doc)) {
+            // constrain the number of concurrent banal executions to banalLimit
+            // (counter resets every 2 seconds)
+            $t = (int) (time() / 2);
+            $n = ($doc->conf->setting_data("__banal_count") == $t ? $doc->conf->setting("__banal_count") + 1 : 1);
+            $limit = opt("banalLimit", 8);
+            if ($limit > 0 && $n > $limit)
+                return $cf->msg_fail("Server too busy to check paper formats at the moment.  This is a transient error; feel free to try again.");
+            if ($limit > 0)
+                $doc->conf->q("insert into Settings (name,value,data) values ('__banal_count',$n,'$t') on duplicate key update value=$n, data='$t'");
+
+            $bj = $cf->run_banal($doc->filestore);
+            if ($bj && is_object($bj) && isset($bj->pages)) {
+                $cf->metadata_updates["npages"] = count($bj->pages);
+                $cf->metadata_updates["banal"] = $bj;
             }
+
+            if ($limit > 0)
+                $doc->conf->q("update Settings set value=value-1 where name='__banal_count' and data='$t'");
         }
 
-        // results
-        if (count($pie) > 0) {
-            $this->msg("warn", "This paper may violate the submission format requirements.  Errors are:\n<ul><li>" . join("</li>\n<li>", $pie) . "</li></ul>\nOnly submissions that comply with the requirements will be considered.  However, the automated format checker uses heuristics and can make mistakes, especially on figures.  If you are confident that the paper already complies with all format requirements, you may submit it as is.");
-            return 1;
-        } else {
-            $this->msg("confirm", "Congratulations, this paper seems to comply with the basic submission format guidelines. However, the automated checker may not verify all formatting requirements. It is your responsibility to ensure that the paper is correctly formatted.");
-            return 2;
-        }
+        if ($bj)
+            $cf->check_banal_json($bj, $spec);
+        else
+            $cf->msg_fail(null);
     }
 
-    public function check_file($filename, $spec) {
-        list($spec, $args) = self::split_spec($spec);
-        $bj = $this->run_banal($filename, $args);
-        return $this->check_banal_json($bj, $spec);
+    function has_spec($dtype) {
+        return ($spec = $this->spec($dtype)) && !$spec->is_empty();
     }
 
-    function _analyzePaper($paperId, $documentType, $spec, &$tmpdir) {
-        global $Conf, $Opt;
-        $result = $Conf->document_result($paperId, $documentType);
-        if (!($row = $Conf->document_row($result))
-            || $row->paperStorageId <= 1)
-            return $this->msg("error", "No such paper.");
-        if ($row->mimetype != "application/pdf")
-            return $this->msg("error", "The format checker only works for PDF files.");
-        list($spec, $banal_args) = self::split_spec($spec);
-        if ($row->infoJson && isset($row->infoJson->banal)
-            && $row->infoJson->banal->at >= @filemtime("src/banal")
-            && get($row->infoJson->banal, "args") == $banal_args)
-            $bj = $row->infoJson->banal;
-        else {
-            if (!$row->docclass->load($row))
-                return $this->msg("error", "Paper cannot be loaded.");
-            if (!isset($row->filestore)) {
-                if (!$tmpdir && ($tmpdir = tempdir()) == false)
-                    return $this->msg("error", "Cannot create temporary directory.");
-                if (file_put_contents("$tmpdir/paper.pdf", $row->content) != strlen($row->content))
-                    return $this->msg("error", "Failed to save PDF to temporary file for analysis.");
-                $row->filestore = "$tmpdir/paper.pdf";
-            }
-            $bj = $this->run_banal($row->filestore, $banal_args);
-            if ($bj && is_object($bj) && isset($bj->pages))
-                $Conf->update_document_metadata($row, ["npages" => count($bj->pages), "banal" => $bj]);
-        }
-        return $this->check_banal_json($bj, $spec);
-    }
-
-    function analyzePaper($paperId, $documentType, $spec = "") {
-        global $Conf, $Opt;
-        // constrain the number of concurrent banal executions to banalLimit
-        // (counter resets every 2 seconds)
-        $t = (int) (time() / 2);
-        $n = ($Conf->setting_data("__banal_count") == $t ? $Conf->setting("__banal_count") + 1 : 1);
-        $limit = get($Opt, "banalLimit", 8);
-        if ($limit > 0 && $n > $limit)
-            return $this->msg("error", "Server too busy to check paper formats at the moment.  This is a transient error; feel free to try again.");
-        if ($limit > 0)
-            Dbl::q("insert into Settings (name,value,data) values ('__banal_count',$n,'$t') on duplicate key update value=$n, data='$t'");
-
-        $tmpdir = null;
-        $status = $this->_analyzePaper($paperId, $documentType, $spec, $tmpdir);
-        if ($tmpdir)
-            exec("/bin/rm -rf $tmpdir");
-
-        if ($limit > 0)
-            Dbl::q("update Settings set value=value-1 where name='__banal_count' and data='$t'");
-        return $status;
-    }
-
-    function reportMessages() {
+    function spec($dtype, Conf $conf = null) {
         global $Conf;
-        foreach ($this->msgs as $m)
-            if ($m[0] == "error")
-                Conf::msg_error($m[1]);
-            else if ($m[0] == "warn")
-                $Conf->warnMsg($m[1]);
-            else if ($m[0] == "confirm")
-                $Conf->confirmMsg($m[1]);
-            else if ($m[0] == "info")
-                $Conf->infoMsg($m[1]);
+        $conf = $conf ? : $Conf;
+        if ($conf !== $this->conf)
+            $this->conf = $conf;
+        return $this->conf->format_spec($dtype);
+    }
+
+    function fetch_document(PaperInfo $prow, $dtype, $docid = 0) {
+        $doc = $prow->document($dtype, $docid, true);
+        if (!$doc || $doc->paperStorageId <= 1)
+            $this->msg_fail("No such document.");
+        else if ($doc->paperId != $prow->paperId || $doc->documentType != $dtype)
+            $this->msg_fail("The document has changed.");
+        else
+            return $doc;
+        return null;
+    }
+
+    private function checker($chk) {
+        if ($chk === "banal" || $chk === "CheckFormat")
+            return $this;
+        else {
+            if (!isset($this->checkers[$chk]))
+                $this->checkers[$chk] = new $chk;
+            return $this->checkers[$chk];
+        }
+    }
+
+    function check_document(PaperInfo $prow, $doc) {
+        $this->clear();
+        if (!$doc) {
+            if (!isset($this->errf["error"]))
+                $this->msg_fail("No such document.");
+            return;
+        } else if ($doc->mimetype != "application/pdf")
+            return $this->msg_fail("The format checker only works for PDF files.");
+
+        $done_me = false;
+        $spec = $this->spec($doc->documentType, $prow->conf);
+        foreach ($spec->checkers ? : [] as $chk) {
+            $checker = $this->checker($chk);
+            $done_me = $done_me || $checker === $this;
+            $checker->check($this, $spec, $prow, $doc);
+        }
+        if (!$done_me)
+            $this->check($this, $spec, $prow, $doc);
+
+        // save information about the run
+        if (!empty($this->metadata_updates))
+            $doc->update_metadata($this->metadata_updates);
+        // record check status in `Paper` table
+        if ($prow->is_joindoc($doc)
+            && !$this->failed
+            && $spec->timestamp) {
+            $x = $this->has_error() ? -$spec->timestamp : $spec->timestamp;
+            if ($x != $prow->pdfFormatStatus) {
+                $prow->pdfFormatStatus = $x;
+                $prow->conf->qe("update Paper set pdfFormatStatus=? where paperId=?", $prow->pdfFormatStatus, $prow->paperId);
+            }
+        }
+    }
+
+    function report(CheckFormat $cf, FormatSpec $spec, PaperInfo $prow, $doc) {
+        $t = "";
+        if ($this->failed)
+            $t .= Ht::xmsg("error", '<div>' . join('</div><div>', $this->messages_at("error")) . '</div>');
+        $msgs = array_filter($this->messages(true), function ($mx) { return $mx[0] != "error" && $mx[2] > MessageSet::INFO; });
+        if ($msgs) {
+            $msgs = array_map(function ($m) {
+                return $m[2] > MessageSet::WARNING ? "<strong>$m[1]</strong>" : $m[1];
+            }, $msgs);
+            if ($this->has_error()) {
+                $status = "error";
+                $start = "This document violates the submission format requirements. The most serious errors are in bold.";
+            } else {
+                $status = "warning";
+                $start = "This document may violate the submission format requirements.";
+            }
+            $t .= Ht::xmsg($status, "$start\n<ul><li>" . join("</li>\n<li>", $msgs) . "</li></ul>\nSubmissions that violate the requirements will not be considered. However, the automated format checker uses heuristics and can make mistakes, especially on figures. If you are confident that the paper already complies with all format requirements, you may submit it as is.");
+        } else if (!$this->has_problem())
+            $t .= Ht::xmsg("confirm", "Congratulations, this document seems to comply with the format guidelines. However, the automated checker may not verify all formatting requirements. It is your responsibility to ensure correct formatting.");
+        return $t;
+    }
+    function document_report(PaperInfo $prow, $doc) {
+        $spec = $this->spec($doc ? $doc->documentType : DTYPE_SUBMISSION, $prow->conf);
+        if ($doc) {
+            foreach ($spec->checkers ? : [] as $chk)
+                if (($checker = $this->checker($chk)) && $checker !== $this
+                    && ($report = $checker->report($this, $spec, $prow, $doc)))
+                    return $report;
+        }
+        return $this->report($this, $spec, $prow, $doc);
+    }
+
+    function spec_error_kinds($dtype, Conf $conf) {
+        $spec = $this->spec($dtype, $conf);
+        $ekinds = $this->error_kinds($spec);
+        foreach ($spec->checkers ? : [] as $chk)
+            if (($checker = $this->checker($chk)) && $checker !== $this)
+                $ekinds = $ekinds + $checker->error_kinds($spec);
+        return $ekinds;
     }
 }

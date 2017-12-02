@@ -1,11 +1,12 @@
 <?php
 // ht.php -- HotCRP HTML helper functions
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class Ht {
 
     public static $img_base = "";
+    public static $default_button_class = "";
     private static $_controlid = 0;
     private static $_lastcontrolid = 0;
     private static $_stash = "";
@@ -14,24 +15,26 @@ class Ht {
     const ATTR_SKIP = 1;
     const ATTR_BOOL = 2;
     const ATTR_BOOLTEXT = 3;
+    const ATTR_NOEMPTY = 4;
     private static $_attr_type = array("accept-charset" => self::ATTR_SKIP,
                                        "action" => self::ATTR_SKIP,
+                                       "class" => self::ATTR_NOEMPTY,
                                        "disabled" => self::ATTR_BOOL,
                                        "enctype" => self::ATTR_SKIP,
                                        "method" => self::ATTR_SKIP,
-                                       "name" => self::ATTR_SKIP,
                                        "optionstyles" => self::ATTR_SKIP,
                                        "spellcheck" => self::ATTR_BOOLTEXT,
-                                       "type" => self::ATTR_SKIP,
-                                       "value" => self::ATTR_SKIP);
+                                       "type" => self::ATTR_SKIP);
 
     static function extra($js) {
         $x = "";
         if ($js)
             foreach ($js as $k => $v) {
                 $t = get(self::$_attr_type, $k);
-                if ($v === null || $t === self::ATTR_SKIP
-                    || ($v === false && $t !== self::ATTR_BOOLTEXT))
+                if ($v === null
+                    || $t === self::ATTR_SKIP
+                    || ($v === false && $t !== self::ATTR_BOOLTEXT)
+                    || ($v === "" && $t === self::ATTR_NOEMPTY))
                     /* nothing */;
                 else if ($t === self::ATTR_BOOL)
                     $x .= ($v ? " $k=\"$k\"" : "");
@@ -41,6 +44,10 @@ class Ht {
                     $x .= " $k=\"" . str_replace("\"", "&quot;", $v) . "\"";
             }
         return $x;
+    }
+
+    static function script($script) {
+        return '<script>' . $script . '</script>';
     }
 
     static function script_file($src, $js = null) {
@@ -55,6 +62,10 @@ class Ht {
     }
 
     static function form($action, $extra = null) {
+        if (is_array($action)) {
+            $extra = $action;
+            $action = get($extra, "action", "");
+        }
         $method = get($extra, "method") ? : "post";
         if ($method === "get" && strpos($action, "?") !== false)
             error_log(caller_landmark() . ": GET form action $action params will be ignored");
@@ -102,9 +113,12 @@ class Ht {
         $disabled = get($js, "disabled");
         if (is_array($disabled))
             unset($js["disabled"]);
-        $x = '<select name="' . $name . '"' . self::extra($js) . ">";
         if ($selected === null || !isset($opt[$selected]))
             $selected = key($opt);
+        $x = '<select name="' . $name . '"' . self::extra($js);
+        if (!isset($js["data-default-value"]))
+            $x .= ' data-default-value="' . htmlspecialchars($selected) . '"';
+        $x .= '>';
         $optionstyles = get($js, "optionstyles", null);
         $optgroup = "";
         foreach ($opt as $value => $info) {
@@ -132,15 +146,18 @@ class Ht {
                 } else
                     $optgroup = "";
             } else {
-                $x .= '<option value="' . $value . '"';
+                $x .= '<option';
+                if (get($info, "id"))
+                    $x .= ' id="' . $info->id . '"';
+                $x .= ' value="' . htmlspecialchars($value) . '"';
                 if (strcmp($value, $selected) == 0)
                     $x .= ' selected="selected"';
                 if (get($info, "disabled"))
                     $x .= ' disabled="disabled"';
+                if (get($info, "class"))
+                    $x .= ' class="' . $info->class . '"';
                 if (get($info, "style"))
-                    $x .= ' style="' . $info->style . '"';
-                if (get($info, "id"))
-                    $x .= ' id="' . $info->id . '"';
+                    $x .= ' style="' . htmlspecialchars($info->style) . '"';
                 $x .= '>' . $info->label . '</option>';
             }
         }
@@ -155,17 +172,25 @@ class Ht {
             $js = $checked;
             $checked = false;
         }
-        $js = $js ? $js : array();
+        $js = $js ? : array();
         if (!get($js, "id"))
             $js["id"] = "htctl" . ++self::$_controlid;
         self::$_lastcontrolid = $js["id"];
-        if (!isset($js["class"]))
-            $js["class"] = "cb";
+        assert($checked !== null);
+        if ($checked === null)
+            $checked = isset($_REQUEST[$name]) && $_REQUEST[$name] === $value;
+        if (isset($js["data-default-checked"]) || isset($js["data-default-value"])) {
+            $dc = get($js, "data-default-checked");
+            if ($dc === null)
+                $dc = get($js, "data-default-value");
+            $dc = $dc ? "1" : "";
+            if (!!$checked === !!$dc)
+                $dc = null;
+            $js["data-default-checked"] = $dc;
+        }
         $t = '<input type="checkbox"'; /* NB see Ht::radio */
         if ($name)
             $t .= " name=\"$name\" value=\"" . htmlspecialchars($value) . "\"";
-        if ($checked === null)
-            $checked = isset($_REQUEST[$name]) && $_REQUEST[$name] === $value;
         if ($checked)
             $t .= " checked=\"checked\"";
         return $t . self::extra($js) . " />";
@@ -176,86 +201,67 @@ class Ht {
         return '<input type="radio"' . substr($t, 22);
     }
 
-    static function checkbox_h($name, $value = 1, $checked = false, $js = null) {
-        $js = $js ? $js : array();
-        if (!isset($js["onchange"]))
-            $js["onchange"] = "hiliter(this)";
-        return self::checkbox($name, $value, $checked, $js);
-    }
-
-    static function radio_h($name, $value = 1, $checked = false, $js = null) {
-        $t = self::checkbox_h($name, $value, $checked, $js);
-        return '<input type="radio"' . substr($t, 22);
-    }
-
     static function label($html, $id = null, $js = null) {
         if (!$id || $id === true)
             $id = self::$_lastcontrolid;
         return '<label for="' . $id . '"' . self::extra($js) . '>' . $html . "</label>";
     }
 
-    static function button($name, $html, $js = null) {
-        if (!$js && is_array($html)) {
+    static function button($html, $js = null) {
+        if ($js === null && is_array($html)) {
             $js = $html;
             $html = null;
-        } else if (!$js)
+        } else if ($js === null)
             $js = array();
-        if (!isset($js["class"]))
-            $js["class"] = "b";
+        if (!isset($js["class"]) && self::$default_button_class)
+            $js["class"] = self::$default_button_class;
         $type = isset($js["type"]) ? $js["type"] : "button";
-        if ($name && !$html) {
-            $html = $name;
-            $name = "";
-        } else
-            $name = $name ? " name=\"$name\"" : "";
-        if ($type === "button" || preg_match("_[<>]_", $html) || isset($js["value"]))
-            return "<button type=\"$type\"$name value=\""
-                . get($js, "value", 1) . "\"" . self::extra($js)
+        if ($type === "button" || preg_match("_[<>]_", $html) || isset($js["value"])) {
+            if (!isset($js["value"]))
+                $js["value"] = 1;
+            return "<button type=\"$type\"" . self::extra($js)
                 . ">" . $html . "</button>";
-        else
-            return "<input type=\"$type\"$name value=\"$html\""
-                . self::extra($js) . " />";
+        } else {
+            $js["value"] = $html;
+            return "<input type=\"$type\"" . self::extra($js) . " />";
+        }
     }
 
     static function submit($name, $html = null, $js = null) {
-        if (!$js && is_array($html)) {
+        if ($js === null && is_array($html)) {
             $js = $html;
             $html = null;
-        } else if (!$js)
+        } else if ($js === null)
             $js = array();
         $js["type"] = "submit";
-        return self::button($html ? $name : "", $html ? : $name, $js);
+        if ($html === null)
+            $html = $name;
+        else if ((string) $name !== "")
+            $js["name"] = $name;
+        return self::button($html, $js);
     }
 
-    static function js_button($html, $onclick, $js = null) {
-        if (!$js && is_array($onclick)) {
-            $js = $onclick;
-            $onclick = null;
-        } else if (!$js)
-            $js = array();
-        if ($onclick)
-            $js["onclick"] = $onclick;
-        return self::button("", $html, $js);
-    }
-
-    static function hidden_default_submit($name, $text = null, $js = null) {
-        if (!$js && is_array($text)) {
-            $js = $text;
-            $text = null;
-        } else if (!$js)
+    static function hidden_default_submit($name, $value = null, $js = null) {
+        if ($js === null && is_array($value)) {
+            $js = $value;
+            $value = null;
+        } else if ($js === null)
             $js = array();
         $js["class"] = trim(get_s($js, "class") . " hidden");
-        return self::submit($name, $text, $js);
+        return self::submit($name, $value, $js);
     }
 
     private static function apply_placeholder(&$value, &$js) {
+        if ($value === null)
+            $value = "";
         if (($temp = get($js, "placeholder"))) {
-            if ($value === null || $value === "" || $value === $temp)
+            if ($value === "" || $value === $temp)
                 $js["class"] = trim(get_s($js, "class") . " temptext");
-            if ($value === null || $value === "")
-                $value = $temp;
             self::stash_script("jQuery(hotcrp_load.temptext)", "temptext");
         }
+        if (($default = get($js, "data-default-value")) !== null
+            && $value === $default)
+            unset($js["data-default-value"]);
     }
 
     static function entry($name, $value, $js = null) {
@@ -263,15 +269,7 @@ class Ht {
         self::apply_placeholder($value, $js);
         $type = get($js, "type") ? : "text";
         return '<input type="' . $type . '" name="' . $name . '" value="'
-            . htmlspecialchars($value === null ? "" : $value) . '"'
-            . self::extra($js) . ' />';
-    }
-
-    static function entry_h($name, $value, $js = null) {
-        $js = $js ? $js : array();
-        if (!isset($js["onchange"]))
-            $js["onchange"] = "hiliter(this)";
-        return self::entry($name, $value, $js);
+            . htmlspecialchars($value) . '"' . self::extra($js) . ' />';
     }
 
     static function password($name, $value, $js = null) {
@@ -284,55 +282,32 @@ class Ht {
         $js = $js ? $js : array();
         self::apply_placeholder($value, $js);
         return '<textarea name="' . $name . '"' . self::extra($js)
-            . '>' . htmlspecialchars($value === null ? "" : $value)
-            . '</textarea>';
+            . '>' . htmlspecialchars($value) . '</textarea>';
     }
 
     static function actions($actions, $js = array(), $extra_text = "") {
-        if (!count($actions))
+        if (empty($actions))
             return "";
+        $actions = array_values($actions);
         $js = $js ? : array();
         if (!isset($js["class"]))
-            $js["class"] = "aa";
+            $js["class"] = "aab";
         $t = "<div" . self::extra($js) . ">";
-        if ($js["class"] === "aab") {
-            foreach ($actions as $a) {
-                $t .= '<div class="aabut">';
-                if (is_array($a)) {
-                    $t .= $a[0];
-                    if (count($a) > 1)
-                        $t .= '<br><span class="hint">' . $a[1] . '</span>';
-                } else
-                    $t .= $a;
-                $t .= '</div>';
-            }
-            $t .= '<hr class="c">';
-        } else if (count($actions) > 1 || is_array($actions[0])) {
-            $t .= "<table class=\"pt_buttons\"><tr>";
-            $explains = 0;
-            foreach ($actions as $a) {
-                $t .= "<td class=\"ptb_button\">";
-                if (is_array($a)) {
-                    $t .= $a[0];
-                    $explains += count($a) > 1;
-                } else
-                    $t .= $a;
-                $t .= "</td>";
-            }
-            $t .= "</tr>";
-            if ($explains) {
-                $t .= "<tr>";
-                foreach ($actions as $a) {
-                    $t .= "<td class=\"ptb_explain\">";
-                    if (is_array($a) && count($a) > 1)
-                        $t .= $a[1];
-                    $t .= "</td>";
-                }
-                $t .= "</tr>";
-            }
-            $t .= "</table>";
-        } else
-            $t .= $actions[0];
+        foreach ($actions as $i => $a) {
+            if ($a === "")
+                continue;
+            $t .= '<div class="aabut';
+            if ($i + 1 < count($actions) && $actions[$i + 1] === "")
+                $t .= ' aabutsp';
+            $t .= '">';
+            if (is_array($a)) {
+                $t .= $a[0];
+                if (count($a) > 1)
+                    $t .= '<br /><span class="hint">' . $a[1] . '</span>';
+            } else
+                $t .= $a;
+            $t .= '</div>';
+        }
         return $t . $extra_text . "</div>\n";
     }
 
@@ -352,9 +327,10 @@ class Ht {
     }
 
     static function pre_text_wrap($text) {
-        if (is_array($text))
+        if (is_array($text) && !is_associative_array($text)
+            && array_reduce($text, function ($x, $s) { return $x && is_string($s); }, true))
             $text = join("\n", $text);
-        else if (is_object($text))
+        else if (is_array($text) || is_object($text))
             $text = var_export($text, true);
         return "<pre style=\"white-space:pre-wrap\">" . htmlspecialchars($text) . "</pre>";
     }
@@ -372,24 +348,36 @@ class Ht {
             . self::extra($js) . " />";
     }
 
-    static function js_link($html, $onclick, $js = null) {
-        if (!$js && is_array($onclick)) {
-            $js = $onclick;
-            $onclick = null;
-        } else if (!$js)
-            $js = array();
-        if ($onclick && !preg_match('/(?:^return|;)/', $onclick))
-            $onclick = "return " . $onclick;
-        if ($onclick)
-            $js["onclick"] = $onclick;
-        if (!get($js, "href"))
+    static private function make_link($html, $href, $js) {
+        if ($js === null)
+            $js = [];
+        if ($href !== null && !isset($js["href"]))
+            $js["href"] = $href;
+        if (isset($js["onclick"]) && !preg_match('/(?:^return|;)/', $js["onclick"]))
+            $js["onclick"] = "return " . $js["onclick"];
+        if (isset($js["onclick"])
+            && (!isset($js["class"]) || !preg_match('/(?:\A|\s)(?:ui|btn|tla)(?=\s|\z)/', $js["class"])))
+            error_log(caller_landmark(2) . ": JS Ht::link lacks class");
+        if (get($js, "href") === null)
             $js["href"] = "#";
         return "<a" . self::extra($js) . ">" . $html . "</a>";
+    }
+
+    static function link($html, $href, $js = null) {
+        if ($js === null && is_array($href))
+            return self::make_link($html, null, $href);
+        else
+            return self::make_link($html, $href, $js);
     }
 
     static function link_urls($html) {
         return preg_replace('@((?:https?|ftp)://(?:[^\s<>"&]|&amp;)*[^\s<>"().,:;&])(["().,:;]*)(?=[\s<>&]|\z)@s',
                             '<a href="$1" rel="noreferrer">$1</a>$2', $html);
+    }
+
+    static function format0($html_text) {
+        $html_text = self::link_urls(Text::single_line_paragraphs($html_text));
+        return preg_replace('/(?:\r\n?){2,}|\n{2,}/', "</p>\n<p>", "<p>$html_text</p>");
     }
 
     static function check_stash($uniqueid) {
@@ -425,7 +413,7 @@ class Ht {
         }
     }
 
-    static function take_stash() {
+    static function unstash() {
         $stash = self::$_stash;
         if (self::$_stash_inscript)
             $stash .= "</script>";
@@ -434,12 +422,27 @@ class Ht {
         return $stash;
     }
 
+    static function unstash_script($js) {
+        self::stash_script($js);
+        return self::unstash();
+    }
+
+    static function take_stash() {
+        return self::unstash();
+    }
+
 
     static function xmsg($type, $content) {
+        if (is_int($type))
+            $type = $type >= 2 ? "merror" : ($type > 0 ? "warning" : "info");
         if (substr($type, 0, 1) === "x")
             $type = substr($type, 1);
         if ($type === "error")
             $type = "merror";
+        if (is_array($content))
+            $content = join('</div><div class="xmsgc">', $content);
+        if ($content === "")
+            return "";
         return '<div class="xmsg x' . $type . '"><div class="xmsg0"></div>'
             . '<div class="xmsgc">' . $content . '</div>'
             . '<div class="xmsg1"></div></div>';

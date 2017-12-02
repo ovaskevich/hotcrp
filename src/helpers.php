@@ -1,6 +1,6 @@
 <?php
 // helpers.php -- HotCRP non-class helper functions
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 function defappend(&$var, $str) {
@@ -56,128 +56,42 @@ function cvtnum($value, $default = -1) {
 
 // web helpers
 
-global $_hoturl_defaults;
-$_hoturl_defaults = null;
-
 function hoturl_defaults($options = array()) {
-    global $_hoturl_defaults;
     foreach ($options as $k => $v)
         if ($v !== null)
-            $_hoturl_defaults[$k] = urlencode($v);
+            Conf::$hoturl_defaults[$k] = urlencode($v);
         else
-            unset($_hoturl_defaults[$k]);
+            unset(Conf::$hoturl_defaults[$k]);
     $ret = array();
-    if ($_hoturl_defaults)
-        foreach ($_hoturl_defaults as $k => $v)
+    if (Conf::$hoturl_defaults)
+        foreach (Conf::$hoturl_defaults as $k => $v)
             $ret[$k] = urldecode($v);
     return $ret;
 }
 
 function hoturl_site_relative($page, $options = null) {
-    global $Conf, $Me, $_hoturl_defaults;
-    $t = $page . Navigation::php_suffix();
-    // parse options, separate anchor; see also redirectSelf
-    $anchor = "";
-    if ($options && is_array($options)) {
-        $x = "";
-        foreach ($options as $k => $v)
-            if ($v !== null && $k !== "anchor")
-                $x .= ($x === "" ? "" : "&amp;") . $k . "=" . urlencode($v);
-            else if ($v !== null)
-                $anchor = "#" . urlencode($v);
-        $options = $x;
-    } else if (preg_match('/\A(.*?)(#.*)\z/', $options, $m))
-        list($options, $anchor) = array($m[1], $m[2]);
-    // append defaults
-    $are = '/\A(|.*?(?:&|&amp;))';
-    $zre = '(?:&(?:amp;)?|\z)(.*)\z/';
-    if ($_hoturl_defaults)
-        foreach ($_hoturl_defaults as $k => $v)
-            if (!preg_match($are . preg_quote($k) . '=/', $options))
-                $options .= "&amp;" . $k . "=" . $v;
-    // append forceShow to links to same paper if appropriate
-    $is_paper_page = preg_match('/\A(?:paper|review|comment|assign)\z/', $page);
-    if ($is_paper_page && $Conf->paper
-        && preg_match($are . 'p=' . $Conf->paper->paperId . $zre, $options)
-        && $Me->can_administer($Conf->paper)
-        && $Conf->paper->has_conflict($Me)
-        && !preg_match($are . 'forceShow=/', $options))
-        $options .= "&amp;forceShow=1";
-    // create slash-based URLs if appropriate
-    if ($options) {
-        if ($page == "review"
-            && preg_match($are . 'r=(\d+[A-Z]+)' . $zre, $options, $m)) {
-            $t .= "/" . $m[2];
-            $options = $m[1] . $m[3];
-            if (preg_match($are . 'p=\d+' . $zre, $options, $m))
-                $options = $m[1] . $m[2];
-        } else if ($page == "paper"
-                   && preg_match($are . 'p=(\d+|%\w+%|new)' . $zre, $options, $m)
-                   && preg_match($are . 'm=(\w+)' . $zre, $m[1] . $m[3], $m2)) {
-            $t .= "/" . $m[2] . "/" . $m2[2];
-            $options = $m2[1] . $m2[3];
-        } else if (($is_paper_page
-                    && preg_match($are . 'p=(\d+|%\w+%|new)' . $zre, $options, $m))
-                   || ($page == "profile"
-                       && preg_match($are . 'u=([^&?]+)' . $zre, $options, $m))
-                   || ($page == "help"
-                       && preg_match($are . 't=(\w+)' . $zre, $options, $m))
-                   || ($page == "settings"
-                       && preg_match($are . 'group=(\w+)' . $zre, $options, $m))
-                   || ($page == "graph"
-                       && preg_match($are . 'g=([^&?]+)' . $zre, $options, $m))
-                   || ($page == "doc"
-                       && preg_match($are . 'file=([^&]+)' . $zre, $options, $m))
-                   || preg_match($are . '__PATH__=([^&]+)' . $zre, $options, $m)) {
-            $t .= "/" . str_replace("%2F", "/", $m[2]);
-            $options = $m[1] . $m[3];
-        }
-        $options = preg_replace('/&(?:amp;)?\z/', "", $options);
-    }
-    if ($options && preg_match('/\A&(?:amp;)?(.*)\z/', $options, $m))
-        $options = $m[1];
-    if ($options)
-        return $t . "?" . $options . $anchor;
-    else
-        return $t . $anchor;
+    global $Conf;
+    return $Conf->hoturl($page, $options, Conf::HOTURL_SITE_RELATIVE);
 }
 
 function hoturl($page, $options = null) {
-    $siteurl = Navigation::siteurl();
-    $t = hoturl_site_relative($page, $options);
-    if ($page !== "index")
-        return $siteurl . $t;
-    $trail = substr($t, 5 + strlen(Navigation::php_suffix()));
-    if (@$trail[0] === "/")
-        return $siteurl . $t;
-    else if ($siteurl !== "")
-        return $siteurl . $trail;
-    else
-        return Navigation::site_path() . $trail;
+    global $Conf;
+    return $Conf->hoturl($page, $options);
 }
 
 function hoturl_post($page, $options = null) {
-    if (is_array($options))
-        $options["post"] = post_value();
-    else if ($options)
-        $options .= "&amp;post=" . post_value();
-    else
-        $options = "post=" . post_value();
-    return hoturl($page, $options);
+    global $Conf;
+    return $Conf->hoturl($page, $options, Conf::HOTURL_POST);
 }
 
 function hoturl_absolute($page, $options = null) {
-    global $Opt;
-    return $Opt["paperSite"] . "/" . hoturl_site_relative($page, $options);
+    global $Conf;
+    return $Conf->hoturl($page, $options, Conf::HOTURL_ABSOLUTE);
 }
 
 function hoturl_absolute_nodefaults($page, $options = null) {
-    global $Opt, $_hoturl_defaults;
-    $defaults = $_hoturl_defaults;
-    $_hoturl_defaults = null;
-    $url = hoturl_absolute($page, $options);
-    $_hoturl_defaults = $defaults;
-    return $url;
+    global $Conf;
+    return $Conf->hoturl($page, $options, Conf::HOTURL_ABSOLUTE | Conf::HOTURL_NO_DEFAULTS);
 }
 
 function hoturl_site_relative_raw($page, $options = null) {
@@ -197,7 +111,7 @@ function hoturl_absolute_raw($page, $options = null) {
 }
 
 
-function fileUploaded(&$var) {
+function file_uploaded(&$var) {
     global $Conf;
     if (!isset($var) || ($var['error'] != UPLOAD_ERR_OK && !$Conf))
         return false;
@@ -220,41 +134,126 @@ function fileUploaded(&$var) {
     }
 }
 
-function selfHref($extra = array(), $options = null) {
-    global $Opt;
-    // clean parameters from pathinfo URLs
-    foreach (array("paperId" => "p", "pap" => "p", "reviewId" => "r", "commentId" => "c") as $k => $v)
-        if (isset($_REQUEST[$k]) && !isset($_REQUEST[$v]))
-            $_REQUEST[$v] = $_REQUEST[$k];
+class SelfHref {
+    static private $argmap = null;
+    static private function set_argmap() {
+        self::$argmap = [
+            "p" => true, "paperId" => "p", "pap" => "p",
+            "r" => true, "reviewId" => "r",
+            "c" => true, "commentId" => "c",
+            "m" => true, "mode" => true,
+            "u" => true,
+            "g" => true,
+            "q" => true, "t" => true, "qa" => true, "qo" => true, "qx" => true, "qt" => true,
+            "fx" => true, "fy" => true,
+            "forceShow" => true, "validator" => true, "ls" => true,
+            "tab" => true, "atab" => true, "sort" => true,
+            "group" => true, "monreq" => true, "noedit" => true,
+            "contact" => true, "reviewer" => true,
+            "editcomment" => true
+        ];
+    }
+    static function make(Qrequest $qreq = null, $params = [], $options = null) {
+        if (self::$argmap === null)
+            self::set_argmap();
 
-    $param = "";
-    foreach (array("p", "r", "c", "m", "u", "g", "fx", "fy", "mode", "forceShow", "validator", "ls", "list", "t", "q", "qa", "qo", "qx", "qt", "tab", "atab", "group", "sort", "monreq", "noedit", "contact", "reviewer") as $what)
-        if (isset($_REQUEST[$what]) && !array_key_exists($what, $extra)
-            && !is_array($_REQUEST[$what]))
-            $param .= "&$what=" . urlencode($_REQUEST[$what]);
-    foreach ($extra as $key => $value)
-        if ($key != "anchor" && $value !== null)
-            $param .= "&$key=" . urlencode($value);
-    if (!isset($_REQUEST["ls"]) && !array_key_exists("ls", $extra)
-        && ($list = SessionList::active()))
-        $param .= "&ls=" . $list->listno;
+        $x = [];
+        $args = $qreq ? $qreq->make_array() : $_REQUEST;
+        foreach ($args as $k => $v) {
+            $ak = get(self::$argmap, $k);
+            if ($ak === true)
+                $ak = $k;
+            if ($ak
+                && ($ak === $k || !isset($args[$ak]))
+                && !array_key_exists($ak, $params)
+                && ($qreq || isset($_GET[$k]) || isset($_POST[$k]))
+                && !is_array($v))
+                $x[$ak] = $v;
+        }
+        foreach ($params as $k => $v)
+            if ($v !== null)
+                $x[$k] = $v;
 
-    $param = $param ? substr($param, 1) : "";
-    if (!$options || !@$options["site_relative"])
-        $uri = hoturl(Navigation::page(), $param);
-    else
-        $uri = hoturl_site_relative(Navigation::page(), $param);
-    if (isset($extra["anchor"]))
-        $uri .= "#" . $extra["anchor"];
-    $uri = str_replace("&amp;", "&", $uri);
-    if (!$options || @$options["raw"])
-        return $uri;
-    else
-        return htmlspecialchars($uri);
+        $page = Navigation::page();
+        if ($options && get($options, "site_relative")) {
+            if (get($options, "raw"))
+                return hoturl_site_relative_raw($page, $x);
+            else
+                return hoturl_site_relative($page, $x);
+        } else if ($options && get($options, "raw"))
+            return hoturl_raw($page, $x);
+        else
+            return hoturl($page, $x);
+    }
+    static function redirect(Qrequest $qreq = null, $params = []) {
+        Navigation::redirect(self::make($qreq, $params, ["raw" => true]));
+    }
 }
 
-function redirectSelf($extra = array()) {
-    go(selfHref($extra, array("raw" => true)));
+function selfHref($params = [], $options = null) {
+    return SelfHref::make(null, $params, $options);
+}
+
+function redirectSelf($params = []) {
+    SelfHref::redirect(null, $params);
+}
+
+class JsonResult {
+    public $status;
+    public $content;
+    public $has_messages = false;
+
+    function __construct($values = null) {
+        if (is_int($values)) {
+            $this->status = $values;
+            if (func_num_args() === 2)
+                $values = func_get_arg(1);
+            else
+                $values = null;
+        }
+        if ($values === true || $values === false)
+            $this->content = ["ok" => $values];
+        else if ($values === null)
+            $this->content = [];
+        else if (is_object($values)) {
+            assert(!($values instanceof JsonResult));
+            $this->content = (array) $values;
+        } else if (is_string($values)) {
+            if ($this->status && $this->status > 299)
+                $this->content = ["ok" => false, "error" => $values];
+            else
+                $this->content = ["ok" => true, "response" => $values];
+        } else
+            $this->content = $values;
+    }
+    static function make($json, Conf $conf = null, $arg2 = null) {
+        if (is_int($json))
+            $json = new JsonResult($json, $arg2);
+        else if (!is_object($json) || !($json instanceof JsonResult))
+            $json = new JsonResult($json);
+        if (!$json->has_messages && $conf)
+            $json->transfer_messages($conf);
+        return $json;
+    }
+    function transfer_messages(Conf $conf, $div = false) {
+        if (session_id() !== ""
+            && ($msgs = $conf->session("msgs", []))) {
+            $conf->save_session("msgs", null);
+            $t = "";
+            foreach ($msgs as $msg) {
+                if (($msg[0] === "merror" || $msg[0] === "xmerror")
+                    && !isset($this->content["error"]))
+                    $this->content["error"] = $msg[1];
+                if ($div)
+                    $t .= Ht::xmsg($msg[0], $msg[1]);
+                else
+                    $t .= "<span class=\"$msg[0]\">$msg[1]</span>";
+            }
+            if ($t !== "")
+                $this->content["response"] = $t . get_s($this->content, "response");
+            $this->has_messages = true;
+        }
+    }
 }
 
 class JsonResultException extends Exception {
@@ -265,19 +264,30 @@ class JsonResultException extends Exception {
     }
 }
 
-function json_exit($json, $div = false) {
+function json_exit($json, $arg2 = null) {
     global $Conf;
+    $json = JsonResult::make($json, $Conf, $arg2);
     if (JsonResultException::$capturing)
         throw new JsonResultException($json);
-    else
-        $Conf->ajaxExit($json, $div);
+    else {
+        if ($json->status)
+            http_response_code($json->status);
+        if (isset($_GET["jsontext"]) && $_GET["jsontext"])
+            header("Content-Type: text/plain");
+        else
+            header("Content-Type: application/json");
+        if (check_post())
+            header("Access-Control-Allow-Origin: *");
+        echo json_encode_browser($json->content);
+        exit;
+    }
 }
 
-function foldbutton($foldtype, $foldnum = 0, $content = "") {
-    $foldnumid = ($foldnum ? ",$foldnum" : "");
-    return '<a href="#" class="q" onclick="return fold(\''
-        . $foldtype . '\',null' . $foldnumid . ')">'
-        . expander(null, $foldnum) . $content . '</a>';
+function foldupbutton($foldnum = 0, $content = "", $js = null) {
+    if ($foldnum)
+        $js["data-fold-target"] = $foldnum;
+    $js["class"] = "ui q js-foldup";
+    return Ht::link(expander(null, $foldnum) . $content, "#", $js);
 }
 
 function expander($open, $foldnum = null) {
@@ -285,97 +295,10 @@ function expander($open, $foldnum = null) {
     $foldnum = ($foldnum !== 0 ? $foldnum : "");
     $t = '<span class="expander">';
     if ($open === null || !$open)
-        $t .= '<span class="in0' . ($f ? " fx$foldnum" : "") . '">&#x25BC;</span>';
+        $t .= '<span class="in0' . ($f ? " fx$foldnum" : "") . '">' . Icons::ui_triangle(2) . '</span>';
     if ($open === null || $open)
-        $t .= '<span class="in1' . ($f ? " fn$foldnum" : "") . '">&#x25B6;</span>';
+        $t .= '<span class="in1' . ($f ? " fn$foldnum" : "") . '">' . Icons::ui_triangle(1) . '</span>';
     return $t . '</span>';
-}
-
-function reviewType($paperId, $row, $long = 0) {
-    if ($row->reviewType == REVIEW_PRIMARY)
-        return "<span class='rtype rtype_pri'>Primary</span>";
-    else if ($row->reviewType == REVIEW_SECONDARY)
-        return "<span class='rtype rtype_sec'>Secondary</span>";
-    else if ($row->reviewType == REVIEW_EXTERNAL)
-        return "<span class='rtype rtype_req'>External</span>";
-    else if ($row->conflictType >= CONFLICT_AUTHOR)
-        return "<span class='author'>Author</span>";
-    else if ($row->conflictType > 0)
-        return "<span class='conflict'>Conflict</span>";
-    else if (!($row->reviewId === null) || $long)
-        return "<span class='rtype rtype_pc'>PC</span>";
-    else
-        return "";
-}
-
-function documentDownload($doc, $dlimg_class = "dlimg", $text = null, $no_size = false) {
-    global $Conf;
-    $p = HotCRPDocument::url($doc);
-    $finalsuffix = ($doc->documentType == DTYPE_FINAL ? "f" : "");
-    $sp = "&nbsp;";
-    $imgsize = ($dlimg_class[0] == "s" ? "" : "24");
-    if ($doc->mimetype == "application/postscript")
-        $x = "<a href=\"$p\" class=\"q\">" . Ht::img("postscript${finalsuffix}${imgsize}.png", "[PS]", $dlimg_class);
-    else if ($doc->mimetype == "application/pdf")
-        $x = "<a href=\"$p\" class=\"q\">" . Ht::img("pdf${finalsuffix}${imgsize}.png", "[PDF]", $dlimg_class);
-    else
-        $x = "<a href=\"$p\" class=\"q\">" . Ht::img("generic${finalsuffix}${imgsize}.png", "[Download]", $dlimg_class);
-    if ($text)
-        $x .= $sp . $text;
-    if (isset($doc->size) && $doc->size > 0 && !$no_size) {
-        $x .= "&nbsp;<span class=\"dlsize\">" . ($text ? "(" : "");
-        if ($doc->size > 921)
-            $x .= round($doc->size / 1024);
-        else
-            $x .= max(round($doc->size / 102.4), 1) / 10;
-        $x .= "kB" . ($text ? ")" : "") . "</span>";
-    }
-    return $x . "</a>";
-}
-
-function paperDownload($prow, $final = false) {
-    global $Conf, $Me;
-    // don't let PC download papers in progress
-    if ($prow->timeSubmitted <= 0 && !$Me->can_view_pdf($prow))
-        return "";
-    $doc = $prow->document($final ? DTYPE_FINAL : DTYPE_SUBMISSION);
-    return $doc ? documentDownload($doc) : "";
-}
-
-function topicTable($prow, $active = 0) {
-    global $Conf;
-    $paperId = ($prow ? $prow->paperId : -1);
-
-    // get current topics
-    $paperTopic = array();
-    $tmap = $Conf->topic_map();
-    if ($paperId > 0) {
-        $result = Dbl::q("select topicId from PaperTopic where paperId=$paperId");
-        while ($row = edb_row($result))
-            $paperTopic[$row[0]] = $tmap[$row[0]];
-    }
-    $allTopics = ($active < 0 ? $paperTopic : $tmap);
-    if (count($allTopics) == 0)
-        return "";
-
-    $out = '<div class="ctable">';
-    $i = 0;
-    foreach ($tmap as $tid => $tname) {
-        if (!isset($allTopics[$tid]))
-            continue;
-        $out .= '<div class="ctelt"><div class="ctelti">';
-        $tname = '<span class="topic0">' . htmlspecialchars($tname) . '</span>';
-        if ($paperId <= 0 || $active >= 0) {
-            $out .= '<table><tr><td class="nw">'
-                . Ht::checkbox_h("top$tid", 1, ($active > 0 ? isset($_REQUEST["top$tid"]) : isset($paperTopic[$tid])),
-                                 array("disabled" => $active < 0))
-                . "&nbsp;</td><td>" . Ht::label($tname) . "</td></tr></table>";
-        } else
-            $out .= $tname;
-        $out .= "</div></div>\n";
-        $i++;
-    }
-    return $out . "</div>";
 }
 
 function actas_link($cid, $contact = null) {
@@ -383,7 +306,7 @@ function actas_link($cid, $contact = null) {
     $contact = !$contact && is_object($cid) ? $cid : $contact;
     $cid = is_object($contact) ? $contact->email : $cid;
     return '<a href="' . selfHref(array("actas" => $cid))
-        . '">' . Ht::img("viewas.png", "[Act as]", array("title" => "Act as " . Text::name_text($contact))) . '</a>';
+        . '" tabindex="-1">' . Ht::img("viewas.png", "[Act as]", array("title" => "Act as " . Text::name_text($contact))) . '</a>';
 }
 
 function decorateNumber($n) {
@@ -397,12 +320,20 @@ function decorateNumber($n) {
 
 
 class SessionList {
+    public $listid;
+    public $ids;
+    public $cid;
+    public $description;
+    public $url;
+    public $urlbase;
+    public $timestamp;
+    public $highlight;
     static private $active_listid = null;
     static private $active_list = null;
     static private $requested_list = false;
-    static private function decode_ids($ids) {
-        if (($a = json_decode($ids)) !== null)
-            return $a;
+    static function decode_ids($ids) {
+        if (strpos($ids, "-") === false && ($a = json_decode($ids)) !== null)
+            return is_array($a) ? $a : [$a];
         $a = [];
         preg_match_all('/[-\d]+/', $ids, $m);
         foreach ($m[0] as $p)
@@ -414,9 +345,7 @@ class SessionList {
                 $a[] = (int) $p;
         return $a;
     }
-    static private function encode_ids($ids) {
-        if (count($ids) < 30)
-            return json_encode($ids);
+    static function encode_ids($ids) {
         $a = array();
         $p0 = $p1 = -100;
         foreach ($ids as $p) {
@@ -429,52 +358,62 @@ class SessionList {
         }
         if ($p0 > 0)
             $a[] = ($p0 == $p1 ? $p0 : "$p0-$p1");
-        return "[" . join(",", $a) . "]";
+        return join("'", $a);
     }
-    static function lookup($idx) {
-        global $Conf, $Me;
-        $lists = $Conf->session("l", array());
-        $l = get($lists, $idx);
-        if ($l && $l->cid == ($Me ? $Me->contactId : 0)) {
-            $l = clone $l;
-            if (is_string($l->ids))
-                $l->ids = self::decode_ids($l->ids);
-            $l->listno = (int) $idx;
-            return $l;
+    static function decode_info_string($info) {
+        if (($j = json_decode($info)) && isset($j->ids)) {
+            $list = new SessionList;
+            foreach ($j as $key => $value)
+                $list->$key = $value;
+            if (is_string($list->ids))
+                $list->ids = self::decode_ids($list->ids);
+            return $list;
         } else
             return null;
     }
-    static function change($idx, $l) {
-        global $Conf;
-        $l = is_object($l) ? get_object_vars($l) : $l;
-        if (isset($l["ids"]) && !is_string($l["ids"]))
-            $l["ids"] = self::encode_ids($l["ids"]);
-        $Conf->save_session_array("l", $idx, (object) $l);
-        return true;
+    function full_site_relative_url() {
+        $args = Conf::$hoturl_defaults ? : [];
+        if ($this->url)
+            $url = $this->url;
+        else if ($this->urlbase) {
+            $url = $this->urlbase;
+            if (preg_match(',\Ap/[^/]*/([^/]*)(?:|/([^/]*))\z,', $this->listid, $m)) {
+                if ($m[1] !== "" || str_starts_with($url, "search"))
+                    $url .= (strpos($url, "?") ? "&" : "?") . "q=" . $m[1];
+                if (isset($m[2]) && $m[2] !== "")
+                    foreach (explode("&", $m[2]) as $kv) {
+                        $eq = strpos($kv, "=");
+                        $args[substr($kv, 0, $eq)] = substr($kv, $eq + 1);
+                    }
+            }
+        } else
+            return null;
+        foreach ($args as $k => $v) {
+            if (!preg_match('{\A[&?]' . preg_quote($k) . '=}', $url))
+                $url .= (strpos($url, "?") ? "&" : "?") . $k . "=" . $v;
+        }
+        return $url;
     }
-    static function allocate($listid) {
-        global $Conf, $Me;
-        $lists = $Conf->session("l", array());
-        $cid = $Me ? $Me->contactId : 0;
-        $oldest = $empty = 0;
-        for ($i = 1; $i <= 8; ++$i)
-            if (($l = get($lists, $i))) {
-                if (!isset($l->timestamp))
-                    error_log("missing timestamp " . json_encode($l));
-                if ($listid && $l->listid == $listid && $l->cid == $cid)
-                    return $i;
-                else if (!$oldest || $l->timestamp < $lists[$oldest]->timestamp)
-                    $oldest = $i;
-            } else if (!$empty)
-                $empty = $i;
-        return $empty ? : $oldest;
+    function info_string($minimal = false) {
+        $j = ["ids" => self::encode_ids($this->ids)];
+        $urlkey = $this->urlbase ? "urlbase" : "url";
+        foreach (get_object_vars($this) as $k => $v)
+            if ($v != null
+                && $k !== "ids" && $k !== "cid" && $k !== "timestamp" && $k !== "id_position"
+                && (!$minimal || $k === "listid" || $k === "description" || $k === $urlkey))
+                $j[$k] = $v;
+        return json_encode_browser($j);
     }
-    static function create($listid, $ids, $description, $url) {
+    static function create($listid, $ids, $description, $urlbase) {
         global $Me, $Now;
-        return (object) array("listid" => $listid, "ids" => $ids,
-                              "description" => $description,
-                              "url" => $url, "timestamp" => $Now,
-                              "cid" => $Me ? $Me->contactId : 0);
+        $lx = new SessionList;
+        $lx->listid = $listid;
+        $lx->ids = $ids;
+        $lx->cid = $Me ? $Me->contactId : 0;
+        $lx->description = $description;
+        $lx->urlbase = $urlbase;
+        $lx->timestamp = $Now;
+        return $lx;
     }
     static private function try_list($opt, $listtype, $sort = null) {
         global $Conf, $Me;
@@ -482,7 +421,7 @@ class SessionList {
             $searchtype = (defval($opt, "t") === "all" ? "all" : "pc");
             $q = "select contactId from ContactInfo";
             if ($searchtype == "pc")
-                $q .= " where (roles&" . Contact::ROLE_PC . ")!=0";
+                $q .= " where roles!=0 and (roles&" . Contact::ROLE_PC . ")!=0";
             $result = Dbl::ql("$q order by lastName, firstName, email");
             $a = array();
             while (($row = edb_row($result)))
@@ -492,57 +431,55 @@ class SessionList {
                                 ($searchtype == "pc" ? "Program committee" : "Users"),
                                 hoturl_site_relative_raw("users", "t=$searchtype"));
         } else {
-            $search = new PaperSearch($Me, $opt);
-            $x = $search->session_list_object($sort);
-            if ($sort || $search->has_sort()) {
-                $pl = new PaperList($search, array("sort" => $sort));
-                $x->ids = $pl->id_array();
-            }
-            return $x;
+            return (new PaperSearch($Me, $opt))->session_list_object($sort);
         }
     }
-    static public function set_requested($listno) {
+    function set_cookie() {
         global $Now;
-        if ($listno)
-            setcookie("hotcrp_ls", $listno, $Now + 2, Navigation::site_path());
-        else if (isset($_COOKIE["hotcrp_ls"]))
-            setcookie("hotcrp_ls", "", $Now - 86400, Navigation::site_path());
+        $s = $this->info_string();
+        if (strlen($s) > 1500)
+            $s = $this->info_string(true);
+        setcookie("hotlist-info", $s, $Now + 20, Navigation::site_path());
     }
-    static public function requested() {
+    static function clear_cookie() {
+        global $Now;
+        if (isset($_COOKIE["hotlist-info"]))
+            setcookie("hotlist-info", "", $Now - 86400, Navigation::site_path());
+    }
+    static function requested() {
         global $Me;
-        if (self::$requested_list === false) {
-            // look up list ID
-            $listdesc = req("ls");
-            if (isset($_COOKIE["hotcrp_ls"]))
-                $listdesc = $listdesc ? : $_COOKIE["hotcrp_ls"];
+        if (self::$requested_list !== false)
+            return self::$requested_list;
 
-            $list = null;
-            if (($listno = cvtint($listdesc, null))
-                && ($xlist = self::lookup($listno))
-                && (!get($xlist, "cid") || $xlist->cid == ($Me ? $Me->contactId : 0)))
-                $list = $xlist;
+        if (isset($_COOKIE["hotlist-info"])
+            && ($list = self::decode_info_string($_COOKIE["hotlist-info"])))
+            return (self::$requested_list = $list);
 
-            // look up list description
-            if (!$list && $listdesc) {
-                $listtype = "p";
-                if (Navigation::page() === "profile" || Navigation::page() === "users")
-                    $listtype = "u";
-                if (preg_match('_\Ap/([^/]*)/([^/]*)/?(.*)\z_', $listdesc, $m))
-                    $list = self::try_list(["t" => $m[1], "q" => urldecode($m[2])],
-                                           "p", $m[3]);
-                if (!$list && preg_match('/\A(all|s):(.*)\z/s', $listdesc, $m))
-                    $list = self::try_list(["t" => $m[1], "q" => $m[2]], "p");
-                if (!$list && preg_match('/\A[a-z]+\z/', $listdesc))
-                    $list = self::try_list(["t" => $listdesc], $listtype);
-                if (!$list)
-                    $list = self::try_list(["q" => $listdesc], $listtype);
-            }
-
-            self::$requested_list = $list;
+        // look up list description
+        $list = null;
+        $listdesc = req("ls");
+        if (!$listdesc && isset($_COOKIE["hotlist-info"]))
+            $listdesc = $_COOKIE["hotlist-info"];
+        else if (!$listdesc && isset($_COOKIE["hotcrp_ls"]))
+            $listdesc = $_COOKIE["hotcrp_ls"];
+        if ($listdesc) {
+            $listtype = "p";
+            if (Navigation::page() === "profile" || Navigation::page() === "users")
+                $listtype = "u";
+            if (preg_match('_\Ap/([^/]*)/([^/]*)/?(.*)\z_', $listdesc, $m))
+                $list = self::try_list(["t" => $m[1], "q" => urldecode($m[2])],
+                                       "p", $m[3]);
+            if (!$list && preg_match('/\A(all|s):(.*)\z/s', $listdesc, $m))
+                $list = self::try_list(["t" => $m[1], "q" => $m[2]], "p");
+            if (!$list && preg_match('/\A[a-z]+\z/', $listdesc))
+                $list = self::try_list(["t" => $listdesc], $listtype);
+            if (!$list)
+                $list = self::try_list(["q" => $listdesc], $listtype);
         }
-        return self::$requested_list;
+
+        return (self::$requested_list = $list);
     }
-    static public function active($listtype = null, $id = null) {
+    static function active($listtype = null, $id = null) {
         global $Conf, $Me, $Now;
 
         // check current-list cache
@@ -578,12 +515,9 @@ class SessionList {
         if ($k === false)
             $list = null;
 
-        // save list changes
-        if ($list && !get($list, "listno"))
-            $list->listno = self::allocate($list->listid);
+        // completion
         if ($list) {
             $list->timestamp = $Now;
-            self::change($list->listno, $list);
             $list->id_position = $k;
         }
         self::$active_listid = $listid;
@@ -605,37 +539,11 @@ function _one_quicklink($id, $baseUrl, $urlrest, $listtype, $isprev) {
         $urlrest["p"] = $id;
     }
     return "<a id=\"quicklink_" . ($isprev ? "prev" : "next")
-        . "\" class=\"x\" href=\"" . hoturl($baseUrl, $urlrest)
-        . "\" onclick=\"return !Miniajax.isoutstanding('revprevform', make_link_callback(this))\">"
+        . "\" class=\"x\" href=\"" . hoturl($baseUrl, $urlrest) . "\">"
         . ($isprev ? Ht::img("_.gif", "<-", "prev") : "")
         . $paperText
         . ($isprev ? "" : Ht::img("_.gif", "->", "next"))
         . "</a>";
-}
-
-function quicklinks($id, $baseUrl, $args, $listtype) {
-    global $Me, $Conf;
-
-    $list = SessionList::active($listtype, $id);
-    if (!$list)
-        return "";
-
-    $args["ls"] = null;
-    $x = '<td class="quicklinks nw has_hotcrp_list" data-hotcrp-list="' . $list->listno . '">';
-    if ($list->id_position > 0)
-        $x .= _one_quicklink($list->ids[$list->id_position - 1], $baseUrl, $args, $listtype, true);
-    if (@$list->description) {
-        $x .= ($list->id_position > 0 ? "&nbsp;&nbsp;" : "");
-        if (@$list->url)
-            $x .= '<a id="quicklink_list" class="x" href="' . htmlspecialchars(Navigation::siteurl() . $list->url) . "\">" . $list->description . "</a>";
-        else
-            $x .= '<span id="quicklink_list">' . $list->description . '</span>';
-    }
-    if (isset($list->ids[$list->id_position + 1])) {
-        $x .= ($list->id_position > 0 || @$list->description ? "&nbsp;&nbsp;" : "");
-        $x .= _one_quicklink($list->ids[$list->id_position + 1], $baseUrl, $args, $listtype, false);
-    }
-    return $x . '</td>';
 }
 
 function goPaperForm($baseUrl = null, $args = array()) {
@@ -643,16 +551,20 @@ function goPaperForm($baseUrl = null, $args = array()) {
     if ($Me->is_empty())
         return "";
     $list = SessionList::active();
-    $x = Ht::form_div(hoturl($baseUrl ? : "paper", array("ls" => null)),
-                      array("method" => "get", "class" => "gopaper" . ($list ? " has_hotcrp_list" : ""), "data-hotcrp-list" => $list ? $list->listno : null));
+    $x = Ht::form_div(hoturl($baseUrl ? : "paper", ["ls" => null]), ["method" => "get", "class" => "gopaper"]);
     if ($baseUrl == "profile")
-        $x .= Ht::entry("u", "(User)", array("id" => "quicksearchq", "size" => 10, "placeholder" => "(User)"));
+        $x .= Ht::entry("u", "", array("id" => "quicksearchq", "size" => 10, "placeholder" => "(User)", "class" => "need-autogrow"));
     else
-        $x .= Ht::entry("p", "(All)", array("id" => "quicksearchq", "size" => 10, "placeholder" => "(All)", "class" => "hotcrp_searchbox"));
+        $x .= Ht::entry("p", "", array("id" => "quicksearchq", "size" => 10, "placeholder" => "(All)", "class" => "hotcrp_searchbox need-autogrow"));
     foreach ($args as $what => $val)
         $x .= Ht::hidden($what, $val);
     $x .= "&nbsp; " . Ht::submit("Search") . "</div></form>";
     return $x;
+}
+
+function rm_rf_tempdir($tempdir) {
+    assert(substr($tempdir, 0, 1) === "/");
+    exec("/bin/rm -rf " . escapeshellarg($tempdir));
 }
 
 function clean_tempdirs() {
@@ -669,13 +581,8 @@ function clean_tempdirs() {
         if (preg_match('/\Ahotcrptmp\d+\z/', $fname)
             && is_dir("$dir/$fname")
             && ($mtime = @filemtime("$dir/$fname")) !== false
-            && $mtime < $now - 1800) {
-            $xdirh = @opendir("$dir/$fname");
-            while (($xfname = readdir($xdirh)) !== false)
-                @unlink("$dir/$fname/$xfname");
-            @closedir("$dir/$fname");
-            @rmdir("$dir/$fname");
-        }
+            && $mtime < $now - 1800)
+            rm_rf_tempdir("$dir/$fname");
     closedir($dirh);
 }
 
@@ -689,23 +596,25 @@ function tempdir($mode = 0700) {
         $dir = substr($dir, 0, -1);
     for ($i = 0; $i < 100; $i++) {
         $path = $dir . "/hotcrptmp" . mt_rand(0, 9999999);
-        if (mkdir($path, $mode))
+        if (mkdir($path, $mode)) {
+            register_shutdown_function("rm_rf_tempdir", $path);
             return $path;
+        }
     }
     return false;
 }
 
 
 // watch functions
-function saveWatchPreference($paperId, $contactId, $watchtype, $on) {
-    global $Conf, $OK;
-    $explicit = ($watchtype << WATCHSHIFT_EXPLICIT);
-    $selected = ($watchtype << WATCHSHIFT_NORMAL);
-    $onvalue = $explicit | ($on ? $selected : 0);
-    Dbl::qe("insert into PaperWatch (paperId, contactId, watch)
-                values ($paperId, $contactId, $onvalue)
-                on duplicate key update watch = (watch & ~" . ($explicit | $selected) . ") | $onvalue");
-    return $OK;
+function saveWatchPreference($paperId, $contactId, $watchtype, $on, $explicit) {
+    $isset_val = ($watchtype << WATCHSHIFT_ISSET);
+    $on_val = ($watchtype << WATCHSHIFT_ON);
+    $want_val = ($on ? $on_val : 0) | ($explicit ? $isset_val : 0);
+    $mod = "(watch&~$on_val)|$want_val";
+    if (!$explicit)
+        $mod = "if(watch&$isset_val,watch,$mod)";
+    Dbl::qe("insert into PaperWatch set paperId=$paperId, contactId=$contactId, watch=$want_val on duplicate key update watch=$mod");
+    return !Dbl::has_error();
 }
 
 
@@ -730,19 +639,39 @@ function prefix_commajoin($what, $prefix, $joinword = "and") {
 }
 
 function numrangejoin($range) {
-    $i = 0;
-    $a = array();
-    while ($i < count($range)) {
-        for ($j = $i + 1;
-             $j < count($range) && $range[$j-1] == $range[$j] - 1;
-             $j++)
-            /* nada */;
-        if ($j == $i + 1)
-            $a[] = $range[$i];
-        else
-            $a[] = $range[$i] . "&ndash;" . $range[$j - 1];
-        $i = $j;
+    $a = [];
+    $format = null;
+    foreach ($range as $current) {
+        if ($format !== null
+            && sprintf($format, $intval + 1) === (string) $current) {
+            ++$intval;
+            $last = $current;
+            continue;
+        } else {
+            if ($format !== null && $first === $last)
+                $a[] = $first;
+            else if ($format !== null)
+                $a[] = $first . "–" . substr($last, $plen);
+            if ($current !== "" && ctype_digit($current)) {
+                $format = "%0" . strlen($current) . "d";
+                $plen = 0;
+                $first = $last = $current;
+                $intval = intval($current);
+            } else if (preg_match('/\A(\D*)(\d+)\z/', $current, $m)) {
+                $format = str_replace("%", "%%", $m[1]) . "%0" . strlen($m[2]) . "d";
+                $plen = strlen($m[1]);
+                $first = $last = $current;
+                $intval = intval($m[2]);
+            } else {
+                $format = null;
+                $a[] = $current;
+            }
+        }
     }
+    if ($format !== null && $first === $last)
+        $a[] = $first;
+    else if ($format !== null)
+        $a[] = $first . "–" . substr($last, $plen);
     return commajoin($a);
 }
 
@@ -761,7 +690,7 @@ function pluralize($what) {
         return "are";
     else if (str_ends_with($what, ")") && preg_match('/\A(.*?)(\s*\([^)]*\))\z/', $what, $m))
         return pluralize($m[1]) . $m[2];
-    else if (preg_match('/\A.*?(?:s|sh|ch|[bcdfgjklmnpqrstvxz][oy])\z/', $what)) {
+    else if (preg_match('/\A.*?(?:s|sh|ch|[bcdfgjklmnpqrstvxz]y)\z/', $what)) {
         if (substr($what, -1) == "y")
             return substr($what, 0, -1) . "ies";
         else
@@ -775,10 +704,12 @@ function plural($n, $what) {
 }
 
 function ordinal($n) {
-    if ($n >= 1 && $n <= 3)
-        return $n . ($n == 1 ? "st" : ($n == 2 ? "nd" : "rd"));
-    else
-        return $n . "th";
+    $x = $n;
+    if ($x > 100)
+        $x = $x % 100;
+    if ($x > 20)
+        $x = $x % 10;
+    return $n . ($x < 1 || $x > 3 ? "th" : ($x == 1 ? "st" : ($x == 2 ? "nd" : "rd")));
 }
 
 function tabLength($text, $all) {
@@ -795,140 +726,156 @@ function tabLength($text, $all) {
     return $len;
 }
 
-function ini_get_bytes($varname) {
-    // from PHP manual
-    $val = trim(ini_get($varname));
-    $last = strtolower($val[strlen($val)-1]);
-    switch ($last) {
-    case 'g':
-        $val *= 1024; // fallthru
-    case 'm':
-        $val *= 1024; // fallthru
-    case 'k':
-        $val *= 1024;
-    }
-    return $val;
+function ini_get_bytes($varname, $value = null) {
+    $val = trim($value !== null ? $value : ini_get($varname));
+    $last = strlen($val) ? strtolower($val[strlen($val) - 1]) : ".";
+    return (int) ceil(floatval($val) * (1 << (+strpos(".kmg", $last) * 10)));
 }
 
-function whyNotText($whyNot, $action) {
+function filter_whynot($whyNot, $keys) {
+    $revWhyNot = [];
+    foreach ($whyNot as $k => $v) {
+        if ($k === "fail" || $k === "paperId" || $k === "conf" || in_array($k, $keys))
+            $revWhyNot[$k] = $v;
+    }
+    return $revWhyNot;
+}
+
+function whyNotText($whyNot, $action, $suggest_redirection = false) {
     global $Conf, $Now;
+    $conf = get($whyNot, "conf") ? : $Conf;
     if (!is_array($whyNot))
         $whyNot = array($whyNot => 1);
-    $paperId = (isset($whyNot['paperId']) ? $whyNot['paperId'] : -1);
-    $reviewId = (isset($whyNot['reviewId']) ? $whyNot['reviewId'] : -1);
-    $thisPaper = ($paperId < 0 ? "this paper" : "paper #$paperId");
-    $text = '';
-    if (isset($whyNot['invalidId'])) {
-        $x = $whyNot['invalidId'] . "Id";
-        $xid = (isset($whyNot[$x]) ? " \"" . $whyNot[$x] . "\"" : "");
-        $text .= "Invalid " . $whyNot['invalidId'] . " number" . htmlspecialchars($xid) . ". ";
+    $paperId = (isset($whyNot["paperId"]) ? $whyNot["paperId"] : -1);
+    $reviewId = (isset($whyNot["reviewId"]) ? $whyNot["reviewId"] : -1);
+    $ms = [];
+    if (isset($whyNot["invalidId"])) {
+        $x = $whyNot["invalidId"] . "Id";
+        if (isset($whyNot[$x]))
+            $ms[] = $conf->_("Invalid " . $whyNot["invalidId"] . " number “%s”.", htmlspecialchars($whyNot[$x]));
+        else
+            $ms[] = $conf->_("Invalid " . $whyNot["invalidId"] . " number.");
     }
-    if (isset($whyNot['noPaper']))
-        $text .= "No such paper" . ($paperId < 0 ? "" : " #$paperId") . ". ";
-    if (isset($whyNot['noReview']))
-        $text .= "No such review" . ($reviewId < 0 ? "" : " #$reviewId") . ". ";
+    if (isset($whyNot["noPaper"]))
+        $ms[] = $conf->_("No such submission #%d.", $paperId);
+    if (isset($whyNot["noReview"]))
+        $ms[] = $conf->_("No such review #%s.", $reviewId);
     if (isset($whyNot["dbError"]))
-        $text .= $whyNot["dbError"] . " ";
+        $ms[] = $whyNot["dbError"];
+    if (isset($whyNot["administer"]))
+        $ms[] = $conf->_("You can’t administer submission #%d.", $paperId);
     if (isset($whyNot["permission"]))
-        $text .= "You don’t have permission to $action $thisPaper. ";
+        $ms[] = $conf->_("You don’t have permission to $action submission #%d.", $paperId);
+    if (isset($whyNot["pdfPermission"]))
+        $ms[] = $conf->_("You don’t have permission to view uploaded documents for submission #%d.", $paperId);
+    if (isset($whyNot["optionPermission"]))
+        $ms[] = $conf->_("You don’t have permission to view the %2\$s for submission #%1\$d.", $paperId, $whyNot["optionPermission"]->message_title);
+    if (isset($whyNot["optionNotAccepted"]))
+        $ms[] = $conf->_("Non-accepted submission #%d can have no %s.", $paperId, $whyNot["optionNotAccepted"]->message_title);
     if (isset($whyNot["signin"]))
-        $text .= "You must sign in to $action $thisPaper. ";
+        $ms[] = $conf->_("You must sign in to $action submission #%d.", $paperId);
     if (isset($whyNot["withdrawn"]))
-        $text .= ucfirst($thisPaper) . " has been withdrawn. ";
-    if (isset($whyNot['notWithdrawn']))
-        $text .= ucfirst($thisPaper) . " has not been withdrawn. ";
-    if (isset($whyNot['notSubmitted']))
-        $text .= ucfirst($thisPaper) . " is not submitted. ";
+        $ms[] = $conf->_("Submission #%d has been withdrawn.", $paperId);
+    if (isset($whyNot["notWithdrawn"]))
+        $ms[] = $conf->_("Submission #%d is not withdrawn.", $paperId);
+    if (isset($whyNot["notSubmitted"]))
+        $ms[] = $conf->_("Submission #%d is only a draft.", $paperId);
     if (isset($whyNot["rejected"]))
-        $text .= ucfirst($thisPaper) . " was not accepted for publication. ";
+        $ms[] = $conf->_("Submission #%d was not accepted for publication.", $paperId);
     if (isset($whyNot["decided"]))
-        $text .= "The review process for $thisPaper has completed. ";
-    if (isset($whyNot['updateSubmitted']))
-        $text .= ucfirst($thisPaper) . " has already been submitted and can no longer be updated. ";
-    if (isset($whyNot['notUploaded']))
-        $text .= ucfirst($thisPaper) . " can’t be submitted because you haven’t yet uploaded the paper itself. Upload the paper and try again. ";
-    if (isset($whyNot['reviewNotSubmitted']))
-        $text .= "This review is not yet ready for others to see. ";
-    if (isset($whyNot['reviewNotComplete']))
-        $text .= "Your own review for $thisPaper is not complete, so you can’t view other people’s reviews. ";
-    if (isset($whyNot['responseNotReady']))
-        $text .= "The authors’ response for $thisPaper is not yet ready for reviewers to view. ";
-    if (isset($whyNot['reviewsOutstanding']))
-        $text .= "You will get access to the reviews once you complete <a href=\"" . hoturl("search", "q=&amp;t=r") . "\">your assigned reviews for other papers</a>.  If you can’t complete your reviews, please let the conference organizers know via the “Refuse review” links. ";
-    if (isset($whyNot['reviewNotAssigned']))
-        $text .= "You are not assigned to review $thisPaper. ";
-    if (isset($whyNot['deadline'])) {
-        $dname = $whyNot['deadline'];
+        $ms[] = $conf->_("The review process for submission #%d has completed.", $paperId);
+    if (isset($whyNot["updateSubmitted"]))
+        $ms[] = $conf->_("Submission #%d can no longer be updated.", $paperId);
+    if (isset($whyNot["notUploaded"]))
+        $ms[] = $conf->_("A PDF upload is required to submit.");
+    if (isset($whyNot["reviewNotSubmitted"]))
+        $ms[] = $conf->_("This review is not yet ready for others to see.");
+    if (isset($whyNot["reviewNotComplete"]))
+        $ms[] = $conf->_("Your own review for #%d is not complete, so you can’t view other people’s reviews.", $paperId);
+    if (isset($whyNot["responseNotReady"]))
+        $ms[] = $conf->_("The authors’ response is not yet ready for reviewers to view.");
+    if (isset($whyNot["reviewsOutstanding"]))
+        $ms[] = $conf->_("You will get access to the reviews once you complete <a href=\"%s\">your assigned reviews</a>. If you can’t complete your reviews, please let the organizers know via the “Refuse review” links.", hoturl("search", "q=&amp;t=r"));
+    if (isset($whyNot["reviewNotAssigned"]))
+        $ms[] = $conf->_("You are not assigned to review submission #%d.", $paperId);
+    if (isset($whyNot["deadline"])) {
+        $dname = $whyNot["deadline"];
         if ($dname[0] == "s")
-            $start = $Conf->setting("sub_open", -1);
+            $start = $conf->setting("sub_open", -1);
         else if ($dname[0] == "p" || $dname[0] == "e")
-            $start = $Conf->setting("rev_open", -1);
+            $start = $conf->setting("rev_open", -1);
         else
             $start = 1;
-        $end = $Conf->setting($dname, -1);
-        if ($start <= 0 || $start == $end)
-            $text .= "You can’t $action $thisPaper yet. ";
-        else if ($start > 0 && $Now < $start)
-            $text .= "You can’t $action $thisPaper until " . $Conf->printableTime($start, "span") . ". ";
+        $end = $conf->setting($dname, -1);
+        if ($dname == "au_seerev") {
+            if ($conf->au_seerev == Conf::AUSEEREV_UNLESSINCOMPLETE)
+                $ms[] = $conf->_("Authors who are also reviewers can’t see reviews for their papers while they still have <a href=\"%s\">incomplete reviews</a> of their own.", hoturl("search", "t=rout&amp;q="));
+            else
+                $ms[] = $conf->_("Authors can’t view reviews at the moment.");
+        } else if ($start <= 0 || $start == $end) {
+            if ($dname[0] == "p" || $dname[0] == "e")
+                $ms[] = $conf->_("You can’t $action submission #%d because the site is not open for reviewing.", $paperId);
+            else
+                $ms[] = $conf->_("You can’t $action submission #%d yet.", $paperId);
+        } else if ($start > 0 && $Now < $start)
+            $ms[] = $conf->_("You can’t $action submission #%d until %s.", $paperId, $conf->printableTime($start, "span"));
         else if ($end > 0 && $Now > $end) {
             if ($dname == "sub_reg")
-                $text .= "The paper registration deadline has passed. ";
+                $ms[] = $conf->_("The registration deadline has passed.");
             else if ($dname == "sub_update")
-                $text .= "The deadline to update papers has passed. ";
+                $ms[] = $conf->_("The update deadline has passed.");
             else if ($dname == "sub_sub")
-                $text .= "The paper submission deadline has passed. ";
+                $ms[] = $conf->_("The submission deadline has passed.");
             else if ($dname == "extrev_hard")
-                $text .= "The external review deadline has passed. ";
+                $ms[] = $conf->_("The external review deadline has passed.");
             else if ($dname == "pcrev_hard")
-                $text .= "The PC review deadline has passed. ";
+                $ms[] = $conf->_("The PC review deadline has passed.");
             else if ($dname == "final_done")
-                $text .= "The deadline to update final versions has passed. ";
+                $ms[] = $conf->_("The deadline to update final versions has passed.");
             else
-                $text .= "The deadline to $action $thisPaper has passed. ";
-            $text .= "It was " . $Conf->printableTime($end, "span") . ". ";
-        } else if ($dname == "au_seerev") {
-            if ($Conf->au_seerev == Conf::AUSEEREV_UNLESSINCOMPLETE)
-                $text .= "Authors who are also reviewers can’t see reviews for their papers while they still have <a href='" . hoturl("search", "t=rout&amp;q=") . "'>incomplete reviews</a> of their own. ";
-            else
-                $text .= "Authors can’t view paper reviews at the moment. ";
+                $ms[] = $conf->_("The deadline to $action submission #%d has passed.", $paperId);
+            $ms[] = $conf->_("It was %s.", $conf->printableTime($end, "span"));
         } else
-            $text .= "You can’t $action $thisPaper at the moment. ";
-        $text .= "(<a class='nw' href='" . hoturl("deadlines") . "'>View deadlines</a>) ";
+            $ms[] = $conf->_("You can’t $action submission #%d at the moment.", $paperId);
     }
     if (isset($whyNot["override"]))
-        $text .= "“Override deadlines” can override this restriction. ";
-    if (isset($whyNot['blindSubmission']))
-        $text .= "Submission to this conference is blind. ";
-    if (isset($whyNot['author']))
-        $text .= "You aren’t a contact for $thisPaper. ";
-    if (isset($whyNot['conflict']))
-        $text .= "You have a conflict with $thisPaper. ";
-    if (isset($whyNot['externalReviewer']))
-        $text .= "External reviewers may not view other reviews for the papers they review. ";
-    if (isset($whyNot['differentReviewer']))
-        $text .= "You didn’t write this review, so you can’t change it. ";
-    if (isset($whyNot['reviewToken']))
-        $text .= "If you know a valid review token, enter it above to edit that review. ";
+        $ms[] = $conf->_("“Override deadlines” can override this restriction.");
+    if (isset($whyNot["blindSubmission"]))
+        $ms[] = $conf->_("Submission to this conference is blind.");
+    if (isset($whyNot["author"]))
+        $ms[] = $conf->_("You aren’t a contact for #%d.", $paperId);
+    if (isset($whyNot["conflict"]))
+        $ms[] = $conf->_("You have a conflict with #%d.", $paperId);
+    if (isset($whyNot["externalReviewer"]))
+        $ms[] = $conf->_("External reviewers cannot view other reviews.");
+    if (isset($whyNot["differentReviewer"]))
+        $ms[] = $conf->_("You didn’t write this review, so you can’t change it.");
+    if (isset($whyNot["unacceptableReviewer"]))
+        $ms[] = $conf->_("That user can’t be assigned to review #%d.", $paperId);
+    if (isset($whyNot["reviewToken"]))
+        $ms[] = $conf->_("If you know a valid review token, enter it above to edit that review.");
     if (isset($whyNot["clickthrough"]))
-        $text .= "You can’t do that until you agree to the current terms. ";
+        $ms[] = $conf->_("You can’t do that until you agree to the terms.");
     if (isset($whyNot["otherTwiddleTag"]))
-        $text .= "Tag “#" . htmlspecialchars($whyNot["tag"]) . "” doesn’t belong to you. ";
+        $ms[] = $conf->_("Tag “#%s” doesn’t belong to you.", htmlspecialchars($whyNot["tag"]));
     if (isset($whyNot["chairTag"]))
-        $text .= "Tag “#" . htmlspecialchars($whyNot["tag"]) . "” can only be set by administrators. ";
+        $ms[] = $conf->_("Tag “#%s” can only be changed by administrators.", htmlspecialchars($whyNot["tag"]));
     if (isset($whyNot["voteTag"]))
-        $text .= "The voting tag “#" . htmlspecialchars($whyNot["tag"]) . "” shouldn’t be changed directly. To vote for this paper, change the “#~" . htmlspecialchars($whyNot["tag"]) . "” tag. ";
+        $ms[] = $conf->_("The voting tag “#%s” shouldn’t be changed directly. To vote for this paper, change the “#~%1\$s” tag.", htmlspecialchars($whyNot["tag"]));
     if (isset($whyNot["voteTagNegative"]))
-        $text .= "Negative votes aren’t allowed. ";
+        $ms[] = $conf->_("Negative votes aren’t allowed.");
+    if (isset($whyNot["autosearchTag"]))
+        $ms[] = $conf->_("Tag “#%s” cannot be changed since the system sets it automatically.", htmlspecialchars($whyNot["tag"]));
     // finish it off
     if (isset($whyNot["chairMode"]))
-        $text .= "(<a class='nw' href=\"" . selfHref(array("forceShow" => 1)) . "\">" . ucfirst($action) . " the paper anyway</a>) ";
+        $ms[] = $conf->_("(<a class=\"nw\" href=\"%s\">" . ucfirst($action) . " anyway</a>)", selfHref(["forceShow" => 1]));
     if (isset($whyNot["forceShow"]) && $whyNot["forceShow"] === true)
-        $text .= "(As an administrator, you can override your conflict.) ";
+        $ms[] = $conf->_("(As an administrator, you can override your conflict.)");
     else if (isset($whyNot["forceShow"]))
-        $text .= "(<a class='nw' href=\"". selfHref(array("forceShow" => 1)) . "\">Override conflict</a>) ";
-    if ($text && $action == "view")
-        $text .= "Enter a paper number above, or <a href='" . hoturl("search", "q=") . "'>list the papers you can view</a>. ";
-    return rtrim($text);
+        $ms[] = $conf->_("(<a class=\"nw\" href=\"%s\">Override conflict</a>)", selfHref(array("forceShow" => 1)));
+    if (!empty($ms) && $suggest_redirection)
+        $ms[] = $conf->_("Enter a submission number above, or <a href=\"%s\">list the submissions you can view</a>.", hoturl("search", "q="));
+    return join(" ", $ms);
 }
 
 function whyNotHtmlToText($e) {
@@ -958,23 +905,33 @@ function actionBar($mode = null, $prow = null) {
     } else if (($wantmode = defval($_REQUEST, "m", defval($_REQUEST, "mode"))))
         $xmode["m"] = $wantmode;
 
-    $quicklinks_txt = "";
-    if ($prow) {
-        $id = ($listtype === "u" ? $prow->contactId : $prow->paperId);
-        $quicklinks_txt = quicklinks($id, $goBase, $xmode, $listtype);
-    }
-
-    // collect actions
     $x = '<table class="vbar"><tr>';
 
-    if ($quicklinks_txt)
-        $x .= $quicklinks_txt;
-    if ($quicklinks_txt && $Me->privChair && $listtype == "p")
-        $x .= "  <td id=\"trackerconnect\" class=\"nw\"><a id=\"trackerconnectbtn\" href=\"#\" onclick=\"return hotcrp_deadlines.tracker(1)\" class=\"btn btn-default hottooltip\" data-hottooltip=\"Start meeting tracker\">&#9759;</a><td>\n";
+    // quicklinks
+    if ($prow
+        && ($list = SessionList::active($listtype, $listtype === "u" ? $prow->contactId : $prow->paperId))) {
+        $x .= '<td class="vbar quicklinks">';
+        if ($list->id_position > 0)
+            $x .= _one_quicklink($list->ids[$list->id_position - 1], $goBase, $xmode, $listtype, true);
+        if ($list->description) {
+            $x .= ($list->id_position > 0 ? "&nbsp;&nbsp;" : "");
+            $url = $list->full_site_relative_url();
+            if ($url)
+                $x .= '<a id="quicklink_list" class="x" href="' . htmlspecialchars(Navigation::siteurl() . $url) . "\">" . $list->description . "</a>";
+            else
+                $x .= '<span id="quicklink_list">' . $list->description . '</span>';
+        }
+        if (isset($list->ids[$list->id_position + 1])) {
+            $x .= ($list->id_position > 0 || $list->description ? "&nbsp;&nbsp;" : "");
+            $x .= _one_quicklink($list->ids[$list->id_position + 1], $goBase, $xmode, $listtype, false);
+        }
+        $x .= '</td>';
 
-    $x .= "  <td class='gopaper nw'>" . goPaperForm($goBase, $xmode) . "</td>\n";
+        if ($Me->privChair && $listtype == "p")
+            $x .= "  <td id=\"trackerconnect\" class=\"vbar\"><a id=\"trackerconnectbtn\" class=\"ui tracker-ui start tbtn need-tooltip\" href=\"\" data-tooltip=\"Start meeting tracker\">&#9759;</a><td>\n";
+    }
 
-    return $x . "</tr></table>";
+    return $x . '<td class="vbar gopaper">' . goPaperForm($goBase, $xmode) . "</td></tr></table>";
 }
 
 function parseReviewOrdinal($text) {
@@ -989,8 +946,8 @@ function parseReviewOrdinal($text) {
 }
 
 function unparseReviewOrdinal($ord) {
-    if ($ord === null)
-        return "x";
+    if (!$ord)
+        return ".";
     else if (is_object($ord)) {
         if ($ord->reviewOrdinal)
             return $ord->paperId . unparseReviewOrdinal($ord->reviewOrdinal);
@@ -1003,8 +960,8 @@ function unparseReviewOrdinal($ord) {
 }
 
 function downloadCSV($info, $header, $filename, $options = array()) {
-    global $Opt;
-    if (defval($options, "type", "csv") == "csv" && !isset($Opt["disableCsv"]))
+    global $Conf;
+    if (defval($options, "type", "csv") == "csv" && !opt("disableCsv"))
         $csvt = CsvGenerator::TYPE_COMMA;
     else
         $csvt = CsvGenerator::TYPE_TAB;
@@ -1012,12 +969,12 @@ function downloadCSV($info, $header, $filename, $options = array()) {
         $csvt |= CsvGenerator::FLAG_ALWAYS_QUOTE;
     if (get($options, "crlf"))
         $csvt |= CsvGenerator::FLAG_CRLF;
-    $csvg = new CsvGenerator($csvt);
+    $csvg = new CsvGenerator($csvt, "# ");
     if ($header)
         $csvg->set_header($header, true);
     if (get($options, "selection"))
         $csvg->set_selection($options["selection"] === true ? $header : $options["selection"]);
-    $csvg->download_headers($Opt["downloadPrefix"] . $filename . $csvg->extension(), !get($options, "inline"));
+    $csvg->download_headers($Conf->download_prefix . $filename . $csvg->extension(), !get($options, "inline"));
     if ($info === false)
         return $csvg;
     else {
@@ -1030,44 +987,14 @@ function downloadCSV($info, $header, $filename, $options = array()) {
 }
 
 function downloadText($text, $filename, $inline = false) {
-    global $Opt;
+    global $Conf;
     $csvg = new CsvGenerator(CsvGenerator::TYPE_TAB);
-    $csvg->download_headers($Opt["downloadPrefix"] . $filename . $csvg->extension(), !$inline);
+    $csvg->download_headers($Conf->download_prefix . $filename . $csvg->extension(), !$inline);
     if ($text !== false) {
-        $csvg->add($text);
+        $csvg->add_string($text);
         $csvg->download();
         exit;
     }
-}
-
-function parse_preference($n) {
-    $n = trim($n);
-    if (preg_match(',\A(-+|\++|[-+]?\d+(?:\.\d*)?|)\s*([xyz]|)\z,i', $n, $m)) {
-        if ($m[1] === "")
-            $p = 0;
-        else if (is_numeric($m[1])) {
-            if ($m[1] <= 1000000)
-                $p = round($m[1]);
-            else
-                return null;
-        } else if ($m[1][0] === "-")
-            $p = -strlen($m[1]);
-        else
-            $p = strlen($m[1]);
-        if ($m[2] === "")
-            $e = null;
-        else
-            $e = 9 - (ord($m[2]) & 15);
-        return array($p, $e);
-    } else if (strpos($n, "\xE2") !== false)
-        // Translate UTF-8 for minus sign into a real minus sign ;)
-        return parse_preference(str_replace("\xE2\x88\x92", '-', $n));
-    else if (strcasecmp($n, "none") == 0 || strcasecmp($n, "n/a") == 0)
-        return array(0, null);
-    else if (strcasecmp($n, "conflict") == 0)
-        return array(-100, null);
-    else
-        return null;
 }
 
 function unparse_expertise($expertise) {
@@ -1125,70 +1052,6 @@ function decisionSelector($curOutcome = 0, $id = null, $extra = "") {
     return $text . "  </select>";
 }
 
-function pcMembers() {
-    global $Conf, $Opt, $PcMembersCache;
-    if (!@$PcMembersCache
-        || $Conf->setting("pc") <= 0
-        || $PcMembersCache[0] < $Conf->setting("pc")
-        || $PcMembersCache[1] != @$Opt["sortByLastName"]) {
-        $pc = array();
-        $result = Dbl::q("select firstName, lastName, affiliation, email, contactId, roles, contactTags, disabled from ContactInfo where (roles&" . Contact::ROLE_PC . ")!=0");
-        $by_name_text = array();
-        $pctags = array("pc" => "pc");
-        while ($result && ($row = Contact::fetch($result))) {
-            $pc[$row->contactId] = $row;
-            if ($row->firstName || $row->lastName) {
-                $name_text = Text::name_text($row);
-                if (isset($by_name_text[$name_text]))
-                    $row->nameAmbiguous = $by_name_text[$name_text]->nameAmbiguous = true;
-                $by_name_text[$name_text] = $row;
-            }
-            if ($row->contactTags)
-                foreach (explode(" ", $row->contactTags) as $t) {
-                    list($tag, $value) = TagInfo::split_index($t);
-                    if ($tag)
-                        $pctags[strtolower($tag)] = $tag;
-                }
-        }
-        uasort($pc, "Contact::compare");
-        ksort($pctags);
-        $order = 0;
-        foreach ($pc as $row) {
-            $row->sort_position = $order;
-            ++$order;
-        }
-        $PcMembersCache = array($Conf->setting("pc"), @$Opt["sortByLastName"], $pc, $pctags);
-    }
-    return $PcMembersCache[2];
-}
-
-function pcTags($tag = null) {
-    global $PcMembersCache;
-    pcMembers();
-    if ($tag === null)
-        return $PcMembersCache[3];
-    else
-        return isset($PcMembersCache[3][strtolower($tag)]);
-}
-
-function pcByEmail($email) {
-    foreach (pcMembers() as $id => $row)
-        if (strcasecmp($row->email, $email) == 0)
-            return $row;
-    return null;
-}
-
-function pc_members_selector_options($include_none) {
-    global $Opt;
-    $sel = array();
-    if ($include_none)
-        $sel["0"] = is_string($include_none) ? $include_none : "None";
-    $textarg = array("lastFirst" => @$Opt["sortByLastName"]);
-    foreach (pcMembers() as $p)
-        $sel[htmlspecialchars($p->email)] = Text::name_html($p, $textarg);
-    return $sel;
-}
-
 function review_type_icon($revtype, $unfinished = null, $title = null) {
     // see also script.js:review_form
     static $revtypemap = array(-3 => array("&minus;", "Refused"),
@@ -1197,55 +1060,36 @@ function review_type_icon($revtype, $unfinished = null, $title = null) {
                                1 => array("E", "External review"),
                                2 => array("P", "PC review"),
                                3 => array("2", "Secondary review"),
-                               4 => array("1", "Primary review"));
+                               4 => array("1", "Primary review"),
+                               5 => array("M", "Metareview"));
     if (!$revtype)
         return '<span class="rt0"></span>';
     $x = $revtypemap[$revtype];
-    return '<span class="rt' . $revtype
+    return '<span class="rto rt' . $revtype
         . ($revtype > 0 && $unfinished ? "n" : "")
         . '" title="' . ($title ? $title : $revtypemap[$revtype][1])
         . '"><span class="rti">' . $revtypemap[$revtype][0] . '</span></span>';
 }
 
 function review_lead_icon() {
-    return '<span class="rtlead" title="Lead"><span class="rti">L</span></span>';
+    return '<span class="rto rtlead" title="Lead"><span class="rti">L</span></span>';
 }
 
 function review_shepherd_icon() {
-    return '<span class="rtshep" title="Shepherd"><span class="rti">S</span></span>';
-}
-
-function scoreCounts($values, $max = null) {
-    $merit = ($max ? array_fill(1, $max, 0) : array());
-    $n = $sum = $sumsq = 0;
-    if (is_string($values))
-        $values = preg_split('/[\s,]+/', $values);
-    foreach ($values ? : array() as $i)
-        if (($i = (int) $i) > 0) {
-            while ($i > count($merit))
-                $merit[count($merit) + 1] = 0;
-            $merit[$i]++;
-            $sum += $i;
-            $sumsq += $i * $i;
-            $n++;
-        }
-    $avg = ($n > 0 ? $sum / $n : 0);
-    $dev = ($n > 1 ? sqrt(($sumsq - $sum*$sum/$n) / ($n - 1)) : 0);
-    return (object) array("v" => $merit, "max" => count($merit),
-                          "n" => $n, "avg" => $avg, "stddev" => $dev);
+    return '<span class="rto rtshep" title="Shepherd"><span class="rti">S</span></span>';
 }
 
 function displayOptionsSet($sessionvar, $var = null, $val = null) {
     global $Conf;
     if (($x = $Conf->session($sessionvar)) !== null)
         /* use session value */;
-    else if ($sessionvar == "pldisplay")
+    else if ($sessionvar === "pldisplay")
         $x = $Conf->setting_data("pldisplay_default", "");
     else
         $x = "";
     if ($x == null || strpos($x, " ") === false) {
         if ($sessionvar == "pldisplay")
-            $x = " overAllMerit ";
+            $x = $Conf->review_form()->default_display();
         else if ($sessionvar == "uldisplay")
             $x = " tags overAllMerit ";
         else
@@ -1257,6 +1101,10 @@ function displayOptionsSet($sessionvar, $var = null, $val = null) {
         $x = str_replace(" $var ", " ", $x);
         if ($val)
             $x .= "$var ";
+        if (($sessionvar === "pldisplay" || $sessionvar === "pfdisplay")
+            && ($f = $Conf->find_review_field($var))
+            && $var !== $f->id)
+            $x = str_replace(" {$f->id} ", " ", $x);
     }
 
     // store list in $_SESSION
@@ -1265,32 +1113,24 @@ function displayOptionsSet($sessionvar, $var = null, $val = null) {
 }
 
 
-function hotcrp_random_bytes($length = 16, $secure_only = false) {
-    $key = @file_get_contents("/dev/urandom", false, null, 0, $length);
-    if (($key === false || $key === "")
-        && function_exists("openssl_random_pseudo_bytes")) {
-        $key = openssl_random_pseudo_bytes($length, $strong);
-        $key = ($strong ? $key : false);
+if (!function_exists("random_bytes")) {
+    function random_bytes($length) {
+        $x = @file_get_contents("/dev/urandom", false, null, 0, $length);
+        if (($x === false || $x === "")
+            && function_exists("openssl_random_pseudo_bytes")) {
+            $x = openssl_random_pseudo_bytes($length, $strong);
+            $x = $strong ? $x : false;
+        }
+        return $x === "" ? false : $x;
     }
-    if (($key === false || $key === "") && !$secure_only) {
-        $key = "";
-        while (strlen($key) < $length)
-            $key .= pack("V", mt_rand());
-        $key = substr($key, 0, $length);
-    }
-    if ($key === false || $key === "")
-        return false;
-    else
-        return $key;
 }
 
 function hotcrp_random_password($length = 14) {
-    global $Opt;
-    $bytes = hotcrp_random_bytes($length + 10, true);
+    $bytes = random_bytes($length + 10);
     if ($bytes === false) {
         $bytes = "";
         while (strlen($bytes) < $length)
-            $bytes .= sha1($Opt["conferenceKey"] . pack("V", mt_rand()));
+            $bytes .= sha1(opt("conferenceKey") . pack("V", mt_rand()));
     }
 
     $l = "a e i o u y a e i o u y a e i o u y a e i o u y a e i o u y b c d g h j k l m n p r s t u v w trcrbrfrthdrchphwrstspswprslcl2 3 4 5 6 7 8 9 - @ _ + = ";

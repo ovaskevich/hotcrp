@@ -1,11 +1,12 @@
 <?php
 // papersaver.php -- HotCRP helper for mapping requests to JSON
-// HotCRP is Copyright (c) 2008-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2008-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class PaperSaver {
     static private $list = [];
-    static public function register($prio, PaperSaver $saver) {
+
+    static function register($prio, PaperSaver $saver) {
         self::$list[] = [$prio, count(self::$list), $saver];
         usort(self::$list, function ($a, $b) {
             if ($a[0] != $b[0])
@@ -14,48 +15,79 @@ class PaperSaver {
                 return $a[1] - $b[1];
         });
     }
-    static public function apply_all(Contact $user, $pj, $opj, $qreq, $action) {
+    static function apply_all(Contact $user, $prow, $opj, Qrequest $qreq, $action) {
+        $pj = PaperStatus::clone_json($opj);
+        if (!isset($pj->pid))
+            $pj->pid = -1;
         foreach (self::$list as $fn)
-            $fn[2]->apply($user, $pj, $opj, $qreq, $action);
+            $fn[2]->apply($user, $pj, $prow, $opj, $qreq, $action);
+        return $pj;
     }
-    static public function all_diffs($pj, $opj) {
+    static function diffs_all(Contact $user, $pj1, $pj2) {
         $diffs = [];
         foreach (self::$list as $fn)
-            $fn[2]->diffs($diffs, $pj, $opj);
+            $fn[2]->diffs($diffs, $user, $pj1, $pj2);
         return $diffs;
     }
 
-    public function apply(Contact $user, $pj, $opj, $qreq, $action) {
+    function apply(Contact $user, $pj, $prow, $opj, Qrequest $qreq, $action) {
     }
-    public function diffs(&$diffs, $pj, $opj) {
+    function diffs(&$diffs, Contact $user, $pj1, $pj2) {
     }
 
-    static public function replace_contacts($pj, $qreq) {
+    static function json_encode_nonempty($j) {
+        $j = json_encode_db($j);
+        if ($j === "{}")
+            $j = "null";
+        return $j;
+    }
+
+    static function replace_contacts($pj, $qreq) {
         $pj->contacts = array();
-        foreach ($qreq as $k => $v)
-            if (str_starts_with($k, "contact_")) {
-                $email = html_id_decode(substr($k, 8));
-                $pj->contacts[] = $email;
-            } else if (str_starts_with($k, "newcontact_email")
-                       && trim($v) !== ""
-                       && trim($v) !== "Email") {
-                $suffix = substr($k, strlen("newcontact_email"));
-                $email = trim($v);
-                $name = $qreq["newcontact_name$suffix"];
-                if ($name === "Name")
-                    $name = "";
-                $pj->contacts[] = (object) ["email" => $email, "name" => $name];
+        if (isset($qreq["contact_email_1"])) {
+            for ($i = 1; isset($qreq["contact_email_{$i}"]); ++$i) {
+                if ($qreq["contact_active_{$i}"])
+                    $pj->contacts[] = $qreq["contact_email_{$i}"];
             }
+            for ($i = 1; isset($qreq["newcontact_email_{$i}"]); ++$i) {
+                $email = trim((string) $qreq["newcontact_email_{$i}"]);
+                if ($qreq["newcontact_active_{$i}"]
+                    && $email !== ""
+                    && $email !== "Email") {
+                    $name = trim((string) $qreq["newcontact_name_{$i}"]);
+                    if ($name === "Name")
+                        $name = "";
+                    $pj->contacts[] = (object) ["email" => $email, "name" => $name];
+                }
+            }
+        } else {
+            // XXX backwards compat
+            foreach ($qreq as $k => $v)
+                if (str_starts_with($k, "contact_")) {
+                    $email = html_id_decode(substr($k, 8));
+                    $pj->contacts[] = $email;
+                } else if (str_starts_with($k, "newcontact_email")
+                           && trim($v) !== ""
+                           && trim($v) !== "Email") {
+                    $suffix = substr($k, strlen("newcontact_email"));
+                    $email = trim($v);
+                    $name = $qreq["newcontact_name$suffix"];
+                    if ($name === "Name")
+                        $name = "";
+                    $pj->contacts[] = (object) ["email" => $email, "name" => $name];
+                }
+        }
     }
 }
 
 class Default_PaperSaver extends PaperSaver {
-    public function apply(Contact $user, $pj, $opj, $qreq, $action) {
-        global $Conf;
+    function apply(Contact $user, $pj, $prow, $opj, Qrequest $qreq, $action) {
+        $admin = $prow ? $user->can_administer($prow) : $user->privChair;
+
         // Title, abstract, collaborators
         foreach (array("title", "abstract", "collaborators") as $k)
             if (isset($qreq[$k]))
-                $pj->$k = $qreq[$k];
+                $pj->$k = UnicodeHelper::remove_f_ligatures($qreq[$k]);
 
         // Authors
         $bad_author = ["name" => "Name", "email" => "Email", "aff" => "Affiliation"];
@@ -67,6 +99,24 @@ class Default_PaperSaver extends PaperSaver {
                 $au = $authors[$m[2]] = (get($authors, $m[2]) ? : (object) array());
                 $x = ($m[1] == "aff" ? "affiliation" : $m[1]);
                 $au->$x = $v;
+            }
+        // some people are idiots
+        foreach ($authors as $au)
+            if (isset($au->affiliation) && validate_email($au->affiliation)) {
+                $aff = $au->affiliation;
+                if (!isset($au->email)) {
+                    $au->email = $aff;
+                    unset($au->affiliation);
+                } else if (!validate_email($au->email)) {
+                    if (!isset($au->name) || strpos($au->name, " ") === false) {
+                        $au->name = trim(get($au, "name", "") . " " . $au->email);
+                        $au->email = $aff;
+                        unset($au->affiliation);
+                    } else {
+                        $au->affiliation = $au->email;
+                        $au->email = $aff;
+                    }
+                }
             }
         if (!empty($authors)) {
             ksort($authors, SORT_NUMERIC);
@@ -83,26 +133,26 @@ class Default_PaperSaver extends PaperSaver {
         if ($action === "submit")
             $pj->submitted = true;
         else if ($action === "final")
-            $pj->final_submitted = true;
+            $pj->final_submitted = $pj->submitted = true;
         else
             $pj->submitted = false;
 
         // Paper upload
-        if ($qreq->_FILES->paperUpload) {
+        if ($qreq->has_file("paperUpload")) {
             if ($action === "final")
-                $pj->final = Filer::file_upload_json($qreq->_FILES->paperUpload);
+                $pj->final = DocumentInfo::make_file_upload($pj->pid, DTYPE_FINAL, $qreq->file("paperUpload"));
             else if ($action === "update" || $action === "submit")
-                $pj->submission = Filer::file_upload_json($qreq->_FILES->paperUpload);
+                $pj->submission = DocumentInfo::make_file_upload($pj->pid, DTYPE_SUBMISSION, $qreq->file("paperUpload"));
         }
 
         // Blindness
-        if ($action !== "final" && $Conf->subBlindOptional())
+        if ($action !== "final" && $user->conf->subBlindOptional())
             $pj->nonblind = !$qreq->blind;
 
         // Topics
         if ($qreq->has_topics) {
             $pj->topics = (object) array();
-            foreach ($Conf->topic_map() as $tid => $tname)
+            foreach ($user->conf->topic_map() as $tid => $tname)
                 if (+$qreq["top$tid"] > 0)
                     $pj->topics->$tname = true;
         }
@@ -110,24 +160,22 @@ class Default_PaperSaver extends PaperSaver {
         // Options
         if (!isset($pj->options))
             $pj->options = (object) [];
-        foreach (PaperOption::option_list() as $o)
+        foreach ($user->conf->paper_opts->option_list() as $o)
             if ($qreq["has_opt$o->id"]
                 && (!$o->final || $action === "final")) {
-                $okey = $o->abbr;
+                $okey = $o->json_key();
                 $pj->options->$okey = $o->parse_request(get($pj->options, $okey), $qreq, $user, $pj);
             }
         if (!count(get_object_vars($pj->options)))
             unset($pj->options);
 
         // PC conflicts
-        if ($Conf->setting("sub_pcconf")
-            && ($action !== "final" || $user->privChair)
+        if ($user->conf->setting("sub_pcconf")
+            && ($action !== "final" || $admin)
             && $qreq->has_pcconf) {
-            $cmax = $user->privChair ? CONFLICT_CHAIRMARK : CONFLICT_MAXAUTHORMARK;
             $pj->pc_conflicts = (object) array();
-            foreach (pcMembers() as $pcid => $pc) {
-                $ctype = cvtint($qreq["pcc$pcid"], 0);
-                $ctype = max(min($ctype, $cmax), 0);
+            foreach ($user->conf->pc_members() as $pcid => $pc) {
+                $ctype = Conflict::constrain_editable($qreq["pcc$pcid"], $admin);
                 if ($ctype) {
                     $email = $pc->email;
                     $pj->pc_conflicts->$email = Conflict::$type_names[$ctype];
@@ -136,53 +184,92 @@ class Default_PaperSaver extends PaperSaver {
         }
     }
 
-    public function diffs(&$diffs, $pj, $opj) {
-        global $Conf;
-        if (!$opj) {
-            $diffs["new"] = true;
+    function diffs(&$diffs, Contact $user, $pj1, $pj2) {
+        if (!$pj1 && !$pj2)
             return;
+        else if (!$pj1) {
+            $diffs["deleted"] = true;
+            return;
+        } else if (!$pj2) {
+            $diffs["new"] = true;
+            $pj2 = (object) [];
         }
 
         foreach (array("title", "abstract", "collaborators") as $k)
-            if (get_s($pj, $k) !== get_s($opj, $k))
+            if (get_s($pj1, $k) !== get_s($pj2, $k))
                 $diffs[$k] = true;
-        if (!$this->same_authors($pj, $opj))
+
+        if (!$this->same_authors($pj1, $pj2))
             $diffs["authors"] = true;
-        if (json_encode(get($pj, "topics") ? : (object) array())
-            !== json_encode(get($opj, "topics") ? : (object) array()))
+
+        if (self::json_encode_nonempty(get($pj1, "topics"))
+            !== self::json_encode_nonempty(get($pj2, "topics")))
             $diffs["topics"] = true;
-        $pjopt = get($pj, "options", (object) []);
-        $opjopt = get($opj, "options", (object) []);
-        foreach (PaperOption::option_list() as $o) {
-            $oabbr = $o->abbr;
-            if (!get($pjopt, $oabbr) != !get($opjopt, $oabbr)
-                || (get($pjopt, $oabbr)
-                    && json_encode($pjopt->$oabbr) !== json_encode($opjopt->$oabbr))) {
-                $diffs["options"] = true;
-                break;
-            }
+
+        $opt1 = get($pj1, "options", (object) []);
+        $opt2 = get($pj2, "options", (object) []);
+        foreach ($user->conf->paper_opts->option_list() as $o) {
+            $oabbr = $o->json_key();
+            if (isset($opt1->$oabbr)) {
+                $same = isset($opt2->$oabbr)
+                    && json_encode_db($opt1->$oabbr) === json_encode_db($opt2->$oabbr);
+            } else
+                $same = !isset($opt2->$oabbr);
+            if (!$same)
+                $diffs[$oabbr] = true;
         }
-        if ($Conf->subBlindOptional() && !get($pj, "nonblind") !== !get($opj, "nonblind"))
-            $diffs["anonymity"] = true;
-        if (json_encode(get($pj, "pc_conflicts")) !== json_encode(get($opj, "pc_conflicts")))
-            $diffs["PC conflicts"] = true;
-        if (json_encode(get($pj, "submission")) !== json_encode(get($opj, "submission")))
+
+        if ($user->conf->subBlindOptional()
+            && !get($pj1, "nonblind") !== !get($pj2, "nonblind"))
+            $diffs["nonblind"] = true;
+
+        if (self::pc_conflicts($pj1, $user) !== self::pc_conflicts($pj2, $user))
+            $diffs["pc_conflicts"] = true;
+
+        if (json_encode(get($pj1, "submission")) !== json_encode(get($pj2, "submission")))
             $diffs["submission"] = true;
-        if (json_encode(get($pj, "final")) !== json_encode(get($opj, "final")))
-            $diffs["final copy"] = true;
+        if (json_encode(get($pj1, "final")) !== json_encode(get($pj2, "final")))
+            $diffs["final"] = true;
+
+        if (self::contact_emails($pj1) !== self::contact_emails($pj2))
+            $diffs["contacts"] = true;
     }
 
-    private function same_authors($pj, $opj) {
-        $pj_ct = count(get($pj, "authors"));
-        $opj_ct = count(get($opj, "authors"));
-        if ($pj_ct != $opj_ct)
+    private function same_authors($pj1, $pj2) {
+        $ct1 = count(get($pj1, "authors", []));
+        if ($ct1 != count(get($pj2, "authors", [])))
             return false;
-        for ($i = 0; $i != $pj_ct; ++$i)
-            if (get($pj->authors[$i], "email") !== get($opj->authors[$i], "email")
-                || get_s($pj->authors[$i], "affiliation") !== get_s($opj->authors[$i], "affiliation")
-                || Text::name_text($pj->authors[$i]) !== Text::name_text($opj->authors[$i]))
+        for ($i = 0; $i != $ct1; ++$i) {
+            $au1 = $pj1->authors[$i];
+            $au2 = $pj2->authors[$i];
+            if (strcasecmp(get_s($au1, "email"), get_s($au2, "email")) !== 0
+                || get_s($au1, "affiliation") !== get_s($au2, "affiliation")
+                || Text::name_text($au1) !== Text::name_text($au2))
                 return false;
+        }
         return true;
+    }
+
+    private function contact_emails($pj) {
+        $c = [];
+        foreach (get($pj, "contacts", []) as $v)
+            $c[strtolower(is_string($v) ? $v : $v->email)] = true;
+        foreach (get($pj, "authors", []) as $au)
+            if (get($au, "contact"))
+                $c[strtolower($au->email)] = true;
+        ksort($c);
+        return array_keys($c);
+    }
+
+    private function pc_conflicts($pj, Contact $user) {
+        $c = [];
+        foreach (get($pj, "pc_conflicts", []) as $e => $t)
+            $c[strtolower($e)] = $t;
+        foreach (self::contact_emails($pj) as $e)
+            if ($user->conf->pc_member_by_email($e))
+                $c[$e] = "author";
+        ksort($c);
+        return $c;
     }
 }
 

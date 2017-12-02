@@ -1,6 +1,6 @@
 <?php
 // test/setup.php -- HotCRP helper file to initialize tests
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 global $ConfSitePATH;
@@ -8,7 +8,7 @@ $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
 define("HOTCRP_OPTIONS", "$ConfSitePATH/test/options.php");
 define("HOTCRP_TESTHARNESS", true);
 require_once("$ConfSitePATH/src/init.php");
-$Opt["disablePrintEmail"] = true;
+$Conf->set_opt("disablePrintEmail", true);
 
 function die_hard($message) {
     fwrite(STDERR, $message);
@@ -21,7 +21,8 @@ if (!$Conf->dblink->multi_query(file_get_contents("$ConfSitePATH/src/schema.sql"
 while ($Conf->dblink->more_results())
     Dbl::free($Conf->dblink->next_result());
 // No setup phase.
-$Conf->qe("delete from Settings where name='setupPhase'");
+$Conf->qe_raw("delete from Settings where name='setupPhase'");
+$Conf->qe_raw("insert into Settings set name='options', value=1, data='{\"1\":{\"id\":1,\"name\":\"Calories\",\"abbr\":\"calories\",\"type\":\"numeric\",\"position\":1,\"display\":\"default\"}}'");
 $Conf->load_settings();
 // Contactdb.
 if (($cdb = Contact::contactdb())) {
@@ -32,8 +33,8 @@ if (($cdb = Contact::contactdb())) {
 }
 
 // Create initial administrator user.
-$Admin = Contact::create(array("email" => "chair@_.com", "name" => "Jane Chair",
-                               "password" => "testchair"));
+$Admin = Contact::create($Conf, ["email" => "chair@_.com", "name" => "Jane Chair",
+                                 "password" => "testchair"]);
 $Admin->save_roles(Contact::ROLE_ADMIN | Contact::ROLE_CHAIR | Contact::ROLE_PC, $Admin);
 
 // Load data.
@@ -46,13 +47,19 @@ foreach ($json->contacts as $c) {
         die_hard("* failed to create user $c->email\n");
 }
 foreach ($json->papers as $p) {
-    $ps = new PaperStatus(null);
+    $ps = new PaperStatus($Conf);
     if (!$ps->save_paper_json($p))
-        die_hard("* failed to create paper $p->title:\n" . htmlspecialchars_decode(join("\n", $ps->error_html())) . "\n");
+        die_hard("* failed to create paper $p->title:\n" . htmlspecialchars_decode(join("\n", $ps->messages())) . "\n");
 }
-$assignset = new AssignmentSet($Admin, true);
-$assignset->parse($json->assignments_1, null, null);
-$assignset->execute();
+function setup_assignments($assignments, Contact $user) {
+    if (is_array($assignments))
+        $assignments = join("\n", $assignments);
+    $assignset = new AssignmentSet($user, true);
+    $assignset->parse($assignments, null, null);
+    if (!$assignset->execute())
+        die_hard("* failed to run assignments:\n" . $assignset->errors_text(true));
+}
+setup_assignments($json->assignments_1, $Admin);
 
 class Xassert {
     static public $n = 0;
@@ -68,7 +75,7 @@ class Xassert {
 
 function xassert_error_handler($errno, $emsg, $file, $line) {
     if (error_reporting() || $errno != E_NOTICE) {
-        if (@Xassert::$emap[$errno])
+        if (get(Xassert::$emap, $errno))
             $emsg = Xassert::$emap[$errno] . ":  $emsg";
         else
             $emsg = "PHP Message $errno:  $emsg";
@@ -189,6 +196,9 @@ function search_text_col($user, $text, $col = "id") {
 function assert_search_papers($user, $text, $result) {
     if (is_array($result))
         $result = join(" ", $result);
+    $result = preg_replace_callback('/(\d+)-(\d+)/', function ($m) {
+        return join(" ", range(+$m[1], +$m[2]));
+    }, $result);
     xassert_eqq(join(" ", array_keys(search_json($user, $text))), $result);
 }
 
@@ -213,10 +223,10 @@ function tag_normalize_compare($a, $b) {
 
 function paper_tag_normalize($prow) {
     $t = array();
-    $pcm = pcMembers();
+    $pcm = $prow->conf->pc_members();
     foreach (explode(" ", $prow->all_tags_text()) as $tag) {
         if (($twiddle = strpos($tag, "~")) > 0
-            && ($c = @$pcm[substr($tag, 0, $twiddle)])) {
+            && ($c = get($pcm, substr($tag, 0, $twiddle)))) {
             $at = strpos($c->email, "@");
             $tag = ($at ? substr($c->email, 0, $at) : $c->email) . substr($tag, $twiddle);
         }
@@ -229,23 +239,35 @@ function paper_tag_normalize($prow) {
     return $t;
 }
 
-function xassert_assign($who, $override, $what) {
+function xassert_assign($who, $what, $override = false) {
     $assignset = new AssignmentSet($who, $override);
     $assignset->parse($what);
-    xassert($assignset->execute());
+    $xassert_success = $assignset->execute();
+    xassert($xassert_success);
+    if (!$xassert_success) {
+        foreach ($assignset->errors_text() as $line)
+            fwrite(STDERR, "  $line\n");
+    }
+}
+
+function xassert_assign_fail($who, $what, $override = false) {
+    $assignset = new AssignmentSet($who, $override);
+    $assignset->parse($what);
+    xassert(!$assignset->execute());
 }
 
 function call_api($fn, $user, $qreq, $prow) {
-    if (!($qreq instanceof Qobject))
-        $qreq = new Qobject($qreq);
-    xassert(isset(SiteLoader::$api_map[$fn]));
-    $uf = SiteLoader::$api_map[$fn];
+    if (!($qreq instanceof Qrequest))
+        $qreq = new Qrequest("POST", $qreq);
+    $uf = $user->conf->api($fn);
+    xassert($uf);
+    Conf::xt_resolve_require($uf);
     JsonResultException::$capturing = true;
     $result = null;
     try {
-        call_user_func($uf[0], $user, $qreq, $prow);
+        $result = (object) call_user_func($uf->function, $user, $qreq, $prow, $uf);
     } catch (JsonResultException $jre) {
-        $result = new Qobject($jre->result);
+        $result = (object) $jre->result;
     }
     JsonResultException::$capturing = false;
     return $result;
@@ -256,18 +278,19 @@ function fetch_paper($pid, $contact) {
     return $Conf->paperRow($pid, $contact);
 }
 
-function fetch_review($pid, $contact) {
-    global $Conf;
-    $pid = is_object($pid) ? $pid->paperId : $pid;
-    $cid = is_object($contact) ? $contact->contactId : $contact;
-    return $Conf->reviewRow(["paperId" => $pid, "contactId" => $cid]);
+function fetch_review(PaperInfo $prow, $contact) {
+    return $prow->fresh_review_of_user($contact);
 }
 
-function save_review($pid, $contact, $revreq) {
-    $pid = is_object($pid) ? $pid->paperId : $pid;
-    $rf = ReviewForm::get();
-    $rf->save_review($revreq, fetch_review($pid, $contact), fetch_paper($pid, $contact), $contact);
-    return fetch_review($pid, $contact);
+function save_review($paper, $contact, $revreq) {
+    global $Conf;
+    $pid = is_object($paper) ? $paper->paperId : $paper;
+    $prow = fetch_paper($pid, $contact);
+    $rf = $Conf->review_form();
+    $tf = new ReviewValues($rf);
+    $tf->parse_web(new Qrequest("POST", $revreq), false);
+    $tf->check_and_save($contact, $prow, fetch_review($prow, $contact));
+    return fetch_review($prow, $contact);
 }
 
 echo "* Tests initialized.\n";

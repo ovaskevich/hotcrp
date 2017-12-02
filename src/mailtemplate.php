@@ -1,6 +1,6 @@
 <?php
 // mailtemplate.php -- HotCRP mail templates
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 global $mailTemplates;
@@ -254,10 +254,10 @@ Contact %ADMIN% with any questions or concerns.
 %SIGNATURE%\n"),
 
      "reviewsubmit" =>
-     array("subject" => "[%CONFSHORTNAME%] Submitted review #%REVIEWNUMBER% %TITLEHINT%",
+     array("subject" => "[%CONFSHORTNAME%] Submitted %REVIEWNAME(SUBJECT)% %TITLEHINT%",
            "body" => "Greetings,
 
-Review #%REVIEWNUMBER% for %CONFNAME% paper #%NUMBER% has been submitted. The review is available at the paper site.
+%REVIEWNAME% for %CONFNAME% paper #%NUMBER% has been submitted. The review is available at the paper site.
 
   Paper site: %URL(paper, p=%NUMBER%)%
        Title: %TITLE%
@@ -273,10 +273,10 @@ Contact %ADMIN% with any questions or concerns.
 %REVIEWS%\n"),
 
      "reviewupdate" =>
-     array("subject" => "[%CONFSHORTNAME%] Updated review #%REVIEWNUMBER% %TITLEHINT%",
+     array("subject" => "[%CONFSHORTNAME%] Updated %REVIEWNAME(SUBJECT)% %TITLEHINT%",
            "body" => "Greetings,
 
-Review #%REVIEWNUMBER% for %CONFNAME% paper #%NUMBER% has been updated. The review is available at the paper site.
+%REVIEWNAME% for %CONFNAME% paper #%NUMBER% has been updated. The review is available at the paper site.
 
   Paper site: %URL(paper, p=%NUMBER%)%
        Title: %TITLE%
@@ -284,6 +284,59 @@ Review #%REVIEWNUMBER% for %CONFNAME% paper #%NUMBER% has been updated. The revi
    Review by: %OPT(REVIEWAUTHOR)%
 
 For the most up-to-date reviews and comments, or to unsubscribe from email notification, see the paper site.
+
+Contact %ADMIN% with any questions or concerns.
+
+%SIGNATURE%
+
+%REVIEWS%\n"),
+
+     "reviewapprovalrequest" =>
+     array("subject" => "[%CONFSHORTNAME%] Review approval requested for paper #%NUMBER% %TITLEHINT%",
+           "body" => "Greetings,
+
+%REVIEWAUTHOR%'s review for %CONFNAME% paper #%NUMBER% has been submitted for approval.
+
+ Review site: %URL(review, p=%NUMBER%&r=%REVIEWID%)%
+       Title: %TITLE%
+     Authors: %OPT(AUTHORS)%
+   Review by: %OPT(REVIEWAUTHOR)%
+
+Contact %ADMIN% with any questions or concerns.
+
+%SIGNATURE%
+
+%REVIEWS%\n"),
+
+     "reviewapprovalupdate" =>
+     array("subject" => "[%CONFSHORTNAME%] Review approval requested for paper #%NUMBER% %TITLEHINT%",
+           "body" => "Greetings,
+
+%REVIEWAUTHOR%'s review for %CONFNAME% paper #%NUMBER% has been resubmitted for approval.
+
+ Review site: %URL(review, p=%NUMBER%&r=%REVIEWID%)%
+       Title: %TITLE%
+     Authors: %OPT(AUTHORS)%
+   Review by: %OPT(REVIEWAUTHOR)%
+
+You can approve the review at the link above.
+
+Contact %ADMIN% with any questions or concerns.
+
+%SIGNATURE%
+
+%REVIEWS%\n"),
+
+     "reviewpreapprovaledit" =>
+     array("subject" => "[%CONFSHORTNAME%] Review edited for paper #%NUMBER% %TITLEHINT%",
+           "body" => "Greetings,
+
+%REVIEWAUTHOR%'s review for %CONFNAME% paper #%NUMBER% has been edited by its requester. The review has not yet been approved.
+
+ Review site: %URL(review, p=%NUMBER%&r=%REVIEWID%)%
+       Title: %TITLE%
+     Authors: %OPT(AUTHORS)%
+   Review by: %OPT(REVIEWAUTHOR)%
 
 Contact %ADMIN% with any questions or concerns.
 
@@ -474,8 +527,8 @@ Contact %ADMIN% with any questions or concerns.
 %SIGNATURE%\n"),
 
      "registerpaper" =>
-     array("subject" => "[%CONFSHORTNAME%] Registered paper #%NUMBER% %TITLEHINT%",
-           "body" => "Paper #%PAPER% has been registered at the %CONFNAME% submissions site.
+     array("subject" => "[%CONFSHORTNAME%] Registered #%NUMBER% %TITLEHINT%",
+           "body" => "Submission #%PAPER% has been registered at the %CONFNAME% site.
 
        Title: %TITLE%
      Authors: %OPT(AUTHORS)%
@@ -490,8 +543,8 @@ Contact %ADMIN% with any questions or concerns.
 %SIGNATURE%\n"),
 
      "updatepaper" =>
-     array("subject" => "[%CONFSHORTNAME%] Updated paper #%NUMBER% %TITLEHINT%",
-           "body" => "Paper #%PAPER% has been updated at the %CONFNAME% submissions site.
+     array("subject" => "[%CONFSHORTNAME%] Updated #%NUMBER% %TITLEHINT%",
+           "body" => "Submission #%PAPER% has been updated at the %CONFNAME% site.
 
        Title: %TITLE%
      Authors: %OPT(AUTHORS)%
@@ -506,8 +559,8 @@ Contact %ADMIN% with any questions or concerns.
 %SIGNATURE%\n"),
 
      "submitpaper" =>
-     array("subject" => "[%CONFSHORTNAME%] Submitted paper #%NUMBER% %TITLEHINT%",
-           "body" => "Paper #%PAPER% has been submitted to the %CONFNAME% submissions site.
+     array("subject" => "[%CONFSHORTNAME%] Submitted #%NUMBER% %TITLEHINT%",
+           "body" => "Submission #%PAPER% has been submitted for review at the %CONFNAME% site.
 
        Title: %TITLE%
      Authors: %OPT(AUTHORS)%
@@ -522,8 +575,8 @@ Contact %ADMIN% with any questions or concerns.
 %SIGNATURE%\n"),
 
      "submitfinalpaper" =>
-     array("subject" => "[%CONFSHORTNAME%] Updated final paper #%NUMBER% %TITLEHINT%",
-           "body" => "The final version for paper #%PAPER% has been updated at the %CONFNAME% submissions site.
+     array("subject" => "[%CONFSHORTNAME%] Updated accepted #%NUMBER% %TITLEHINT%",
+           "body" => "Accepted submission #%PAPER% has been updated at the %CONFNAME% submissions site.
 
        Title: %TITLE%
      Authors: %OPT(AUTHORS)%

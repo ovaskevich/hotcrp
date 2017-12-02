@@ -1,13 +1,13 @@
 <?php
 // login.php -- HotCRP login helpers
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class LoginHelper {
 
     static function logout($explicit) {
-        global $Me, $Conf, $Opt;
-        if (!$Me->is_empty() && $explicit && !isset($Opt["httpAuthLogin"]))
+        global $Me, $Conf;
+        if (!$Me->is_empty() && $explicit && !$Conf->opt("httpAuthLogin"))
             $Conf->confirmMsg("You have been signed out. Thanks for using the system.");
         unset($_SESSION["trueuser"]);
         unset($_SESSION["last_actas"]);
@@ -18,7 +18,7 @@ class LoginHelper {
             $Conf->save_session("capabilities", $capabilities);
         if ($explicit) {
             unset($_SESSION["login_bounce"]);
-            if (isset($Opt["httpAuthLogin"])) {
+            if ($Conf->opt("httpAuthLogin")) {
                 $_SESSION["reauth"] = true;
                 go("");
             }
@@ -28,15 +28,15 @@ class LoginHelper {
     }
 
     static function check_http_auth() {
-        global $Conf, $Opt, $Me;
-        assert(isset($Opt["httpAuthLogin"]));
+        global $Conf, $Me;
+        assert($Conf->opt("httpAuthLogin") !== null);
 
         // if user signed out of HTTP authentication, send a reauth request
         if (isset($_SESSION["reauth"])) {
             unset($_SESSION["reauth"]);
             header("HTTP/1.0 401 Unauthorized");
-            if (is_string($Opt["httpAuthLogin"]))
-                header("WWW-Authenticate: " . $Opt["httpAuthLogin"]);
+            if (is_string($Conf->opt("httpAuthLogin")))
+                header("WWW-Authenticate: " . $Conf->opt("httpAuthLogin"));
             else
                 header("WWW-Authenticate: Basic realm=\"HotCRP\"");
             exit;
@@ -56,9 +56,9 @@ class LoginHelper {
         $_REQUEST["email"] = $_SERVER["REMOTE_USER"];
         if (validate_email($_REQUEST["email"]))
             $_REQUEST["preferredEmail"] = $_REQUEST["email"];
-        else if (isset($Opt["defaultEmailDomain"])
-                 && validate_email($_REQUEST["email"] . "@" . $Opt["defaultEmailDomain"]))
-            $_REQUEST["preferredEmail"] = $_REQUEST["email"] . "@" . $Opt["defaultEmailDomain"];
+        else if (($x = $Conf->opt("defaultEmailDomain"))
+                 && validate_email($_REQUEST["email"] . "@" . $x))
+            $_REQUEST["preferredEmail"] = $_REQUEST["email"] . "@" . $x;
         $_REQUEST["action"] = "login";
         if (!self::check_login()) {
             $Conf->footer();
@@ -73,15 +73,15 @@ class LoginHelper {
     }
 
     static private function login() {
-        global $Conf, $Now, $Opt, $email_class, $password_class;
-        $external_login = isset($Opt["ldapLogin"]) || isset($Opt["httpAuthLogin"]);
+        global $Conf, $Now, $email_class, $password_class;
+        $external_login = $Conf->external_login();
 
         // In all cases, we need to look up the account information
         // to determine if the user is registered
         if (!isset($_REQUEST["email"])
             || ($_REQUEST["email"] = trim($_REQUEST["email"])) == "") {
             $email_class = " error";
-            if (isset($Opt["ldapLogin"]))
+            if ($Conf->opt("ldapLogin"))
                 return Conf::msg_error("Enter your LDAP username.");
             else
                 return Conf::msg_error("Enter your email address.");
@@ -102,7 +102,7 @@ class LoginHelper {
             return Conf::msg_error("You appear to have disabled cookies in your browser, but this site needs to set cookies to function.  Google has <a href='http://www.google.com/cookies.html'>an informative article on how to enable them</a>.");
 
         // do LDAP login before validation, since we might create an account
-        if (isset($Opt["ldapLogin"])) {
+        if ($Conf->opt("ldapLogin")) {
             $_REQUEST["action"] = "login";
             if (!self::ldap_login())
                 return null;
@@ -111,7 +111,7 @@ class LoginHelper {
         // look up user in our database
         if (strpos($_REQUEST["email"], "@") === false)
             self::unquote_double_quoted_request();
-        $user = Contact::find_by_email($_REQUEST["email"]);
+        $user = $Conf->user_by_email($_REQUEST["email"]);
 
         // look up or create user in contact database
         $cdb_user = null;
@@ -133,7 +133,7 @@ class LoginHelper {
         if (!$user && $external_login) {
             $reg = Contact::safe_registration($_REQUEST);
             $reg->no_validate_email = true;
-            if (!($user = Contact::create($reg)))
+            if (!($user = Contact::create($Conf, $reg)))
                 return Conf::msg_error($Conf->db_error_html(true, "while adding your account"));
             if ($Conf->setting("setupPhase", false))
                 return self::first_user($user, $msg);
@@ -157,7 +157,7 @@ class LoginHelper {
                 $Conf->confirmMsg("A password reset link has been emailed to " . htmlspecialchars($_REQUEST["email"]) . ". When you receive that email, follow its instructions to create a new password.");
             else if ($worked) {
                 $Conf->confirmMsg("Your password has been emailed to " . htmlspecialchars($_REQUEST["email"]) . ".  When you receive that email, return here to sign in.");
-                $Conf->log("Sent password", $xuser);
+                $Conf->log_for($xuser, null, "Sent password");
             }
             return null;
         }
@@ -200,7 +200,7 @@ class LoginHelper {
         global $Conf, $ConfSitePATH;
         // check for bogus configurations
         if (!function_exists("ldap_connect") || !function_exists("ldap_bind"))
-            return Conf::msg_error("Internal error: <code>\$Opt[\"ldapLogin\"]</code> is set, but this PHP installation doesn’t support LDAP.  Logins will fail until this error is fixed.");
+            return Conf::msg_error("Internal error: <code>\$Opt[\"ldapLogin\"]</code> is set, but this PHP installation doesn’t support LDAP. Logins will fail until this error is fixed.");
 
         // the body is elsewhere because we need LDAP constants, which might[?]
         // cause errors absent LDAP support
@@ -213,14 +213,14 @@ class LoginHelper {
         if (strpos($_REQUEST["email"], "@") !== false
             || strpos($_REQUEST["email"], "%40") === false)
             return false;
-        error_log("double-encoded request: " . json_encode($_REQUEST));
+        // error_log("double-encoded request: " . json_encode($_REQUEST));
         foreach ($_REQUEST as $k => &$v)
             $v = rawurldecode($v);
         return true;
     }
 
     static private function create_account($user, $cdb_user) {
-        global $Conf, $Opt, $email_class;
+        global $Conf, $email_class;
 
         // check for errors
         if ($user && $user->has_database_account() && $user->activity_at > 0) {
@@ -238,7 +238,7 @@ class LoginHelper {
 
         // create database account
         if (!$user || !$user->has_database_account()) {
-            if (!($user = Contact::create(Contact::safe_registration($_REQUEST))))
+            if (!($user = Contact::create($Conf, Contact::safe_registration($_REQUEST))))
                 return Conf::msg_error($Conf->db_error_html(true, "while adding your account"));
         }
 
@@ -256,7 +256,7 @@ class LoginHelper {
                 $msg .= " The email address you provided seems invalid.";
             else
                 $msg .= " The conference system is not set up to mail passwords at this time.";
-            $msg .= " Although an account was created for you, you need help to retrieve your password. Contact " . Text::user_html(Contact::site_contact()) . ".";
+            $msg .= " Although an account was created for you, you need help to retrieve your password. Contact " . Text::user_html($Conf->site_contact()) . ".";
         }
         if (isset($_REQUEST["password"]) && trim($_REQUEST["password"]) != "")
             $msg .= " Note that the password you supplied on the login screen was ignored.";
@@ -265,9 +265,9 @@ class LoginHelper {
     }
 
     static private function first_user($user, $msg) {
-        global $Conf, $Opt;
+        global $Conf;
         $msg .= " As the first user, you have been automatically signed in and assigned system administrator privilege.";
-        if (!isset($Opt["ldapLogin"]) && !isset($Opt["httpAuthLogin"]))
+        if (!$Conf->external_login())
             $msg .= " Your password is “<samp>" . htmlspecialchars($user->plaintext_password()) . "</samp>”. All later users will have to sign in normally.";
         $user->save_roles(Contact::ROLE_ADMIN, null);
         $Conf->save_setting("setupPhase", null);

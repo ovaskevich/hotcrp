@@ -1,6 +1,6 @@
 <?php
 // paperrank.php -- HotCRP helper functions for dealing with ranks
-// HotCRP is Copyright (c) 2009-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2009-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class PaperRank {
@@ -45,7 +45,7 @@ class PaperRank {
             $this->papershuffle = array();
 
         // load current ranks: $userrank maps user => [rank, paper]
-        $result = $Conf->qe("select paperId, tag, tagIndex from PaperTag where tag like '%~" . sqlq_for_like($source_tag) . "' and paperId in (" . join(",", $papersel) . ")");
+        $result = $Conf->qe_raw("select paperId, tag, tagIndex from PaperTag where tag like '%~" . sqlq_for_like($source_tag) . "' and paperId in (" . join(",", $papersel) . ")");
         $len = strlen($source_tag) + 1;
         while (($row = edb_row($result))) {
             $l = (int) substr($row[1], 0, strlen($row[1]) - $len);
@@ -89,12 +89,12 @@ class PaperRank {
             $this->info_printed = true;
         }
         if ($n < count($this->papersel)) {
-            echo "<script>document.getElementById('rankpercentage').innerHTML = '$pct'";
+            $x = '$("#rankpercentage").html("' . $pct . '")';
             if ($this->deletedpref > 0)
-                echo ";document.getElementById('rankdeletedpref').innerHTML = ', ", round(($this->totalpref - $this->deletedpref) / $this->totalpref * 100), "% of preferences remain'";
-            echo "</script>\n";
+                $x .= ';$("#rankdeletedpref").html(", ' . round(($this->totalpref - $this->deletedpref) / $this->totalpref * 100) . '% of preferences remain")';
         } else
-            echo "<script>document.getElementById('foldrankcalculation').className = 'foldo'</script>\n";
+            $x = '$("#foldrankcalculation").addClass("foldo")';
+        echo Ht::script($x), "\n";
         flush();
     }
 
@@ -717,12 +717,11 @@ class PaperRank {
 
 
     // save calculated ranks
-    function apply($assignset) {
-        $assignset->push_override(ALWAYS_OVERRIDE);
-        $assignset->apply(array("paper" => "all", "action" => "cleartag", "tag" => $this->dest_tag));
+    function unparse_assignment() {
+        $t = CsvGenerator::quote($this->dest_tag);
+        $a = ["paper,action,tag,index\nall,cleartag,$t\n"];
         foreach ($this->rank as $p => $rank)
-            $assignset->apply(array("paper" => $p, "action" => "tag", "tag" => $this->dest_tag, "index" => $rank));
-        $assignset->pop_override();
+            $a[] = "$p,tag,$t,$rank\n";
+        return join("", $a);
     }
-
 }

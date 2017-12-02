@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 #
 # Copyright (C) 2007 Geoffrey M. Voelker
-# Copyright (c) 2016 Eddie Kohler
+# Copyright (c) 2016-2017 Eddie Kohler
 #
 # banal -- analyze pdf formatting
 #
@@ -29,6 +29,7 @@ use Data::Dumper;
 use File::Basename;
 use File::Temp;
 use POSIX;
+use List::Util qw(min max);
 my($FILE, $banal_text_fudge);
 
 sub usage {
@@ -108,7 +109,7 @@ for (my $i = 0; $i < @ARGV; ) {
     no strict "refs";
     if ($ARGV[$i] =~ /\A--?(report|stats|judge|no[-_]app|json|version|debug[-_]pdftohtml)\z/) {
         my($name) = $1;
-        $name =~ s/_/-/;
+        $name =~ s/-/_/g;
         ${$name} = 1;
         splice @ARGV, $i, 1;
     } elsif ($ARGV[$i] =~ /\A--?(paper|pages|font|leading|cols|width|height|fudge|format|zoom)=(.*)\z/) {
@@ -225,10 +226,10 @@ sub bb_equal ($$) {
 sub bb_merge ($$) {
     my ($a, $b) = @_;
 
-    $b->{top} = $a->{top} if ($a->{top} < $b->{top});
-    $b->{left} = $a->{left} if ($a->{left} < $b->{left});
-    $b->{height} = $a->{height} if ($a->{height} > $b->{height});
-    $b->{width} = $a->{width} if ($a->{width} > $b->{width});
+    $b->{top} = min $a->{top}, $b->{top};
+    $b->{left} = min $a->{left}, $b->{left};
+    $b->{height} = max $a->{height}, $b->{height};
+    $b->{width} = max $a->{width}, $b->{width};
 }
 
 sub calc_page_body_font ($) {
@@ -658,11 +659,14 @@ sub calc_page_leading ($) {
 
 sub calc_page_columns ($) {
     my ($page) = @_;
-    my ($pagew);
     my ($segs, $maxw, $colw, $ncols);
 
     # use estimated width of text region as base
-    $pagew = $page->{pagespec}->{textbb}->{width};
+    my $pagew = $page->{pagespec}->{textbb}->{width};
+    my $leftmargin = $page->{pagespec}->{textbb}->{left};
+    my $paperw = $page->{pagespec}->{paperbb}->{width};
+    my $expected_pagew = $paperw - 2 * max(min($leftmargin, $paperw - $pagew - $leftmargin), 0);
+    $pagew = $expected_pagew if $pagew < 0.9 * $expected_pagew;
 
     # use the maximum width segment in the body font to estimate
     # column width
@@ -866,15 +870,10 @@ sub calc_doc_text_region ($) {
         next if ($page->{density} < $banal_min_density);
 
         $page = $doc->{pages}->{$i};
-        $maxw = $page->{pagespec}->{textbb}->{width} if
-            ($page->{pagespec}->{textbb}->{width} > $maxw);
-        $maxh = $page->{pagespec}->{textbb}->{height} if
-            ($page->{pagespec}->{textbb}->{height} > $maxh);
-        $minl = $page->{pagespec}->{textbb}->{left} if
-            ($page->{pagespec}->{textbb}->{left} < $minl);
-        $mint = $page->{pagespec}->{textbb}->{top} if
-            ($page->{pagespec}->{textbb}->{top} < $mint);
-
+        $maxw = max $maxw, $page->{pagespec}->{textbb}->{width};
+        $maxh = max $maxh, $page->{pagespec}->{textbb}->{height};
+        $minl = min $minl, $page->{pagespec}->{textbb}->{left};
+        $mint = min $mint, $page->{pagespec}->{textbb}->{top};
     }
     $doc->{textbb}->{width} = $maxw;
     $doc->{textbb}->{height} = $maxh;
@@ -990,7 +989,7 @@ sub report_json ($) {
     printf "  \"args\": %s,\n", json_quote(join(" ", @switches)) if @switches;
 
     my $dx = {"pw" => {}, "ph" => {}, "tw" => {}, "th" => {}, "mt" => {}, "ml" => {}};
-    my $px = {};
+    my $px = {}, $nummargin = 10000;
     for my $i (1 .. $doc->{npages}) {
         my $page = $doc->{pages}->{$i};
         my($pbb, $tbb) = ($page->{pagespec}->{paperbb}, $page->{pagespec}->{textbb});
@@ -1009,14 +1008,15 @@ sub report_json ($) {
         while (($k, $v) = each %$pd) {
             $dx->{$k}->{$v} += 1;
         }
+        my($pnummargin) = POSIX::floor($pd->{ph} - $page->{pagedata}->{lowest_number} * $p2h_to_points);
+        $nummargin = min($pnummargin, $nummargin) if $pnummargin < $pd->{ph} - $tb;
     }
     my($pw, $ph) = (modevalkey($dx->{pw}), modevalkey($dx->{ph}));
     my($tw, $th) = (modevalkey($dx->{tw}), modevalkey($dx->{th}));
     my($mt, $ml) = (modevalkey($dx->{mt}), modevalkey($dx->{ml}));
 
-    my ($doc_ps) = sprintf "\"papersize\": [%.0f, %.0f]", $ph, $pw;
-    my ($doc_tb) = sprintf "\"textblock\": [%.0f, %.0f]", $th, $tw;
-    my ($doc_margin) = sprintf "\"margin\": [%.0f, %.0f, %.0f, %.0f]", $mt, $pw - ($ml + $tw), $ph - ($mt + $th), $ml;
+    my ($doc_ps) = sprintf "\"papersize\": [%.0f,%.0f]", $ph, $pw;
+    my ($doc_margin) = sprintf "\"margin\": [%.0f,%.0f,%.0f,%.0f]", $mt, $pw - ($ml + $tw), $ph - ($mt + $th), $ml;
     my ($doc_bfs);
     if (p2h_font_bug($doc)) {
         $doc_bfs = "\"bodyfontsize\": null";
@@ -1025,7 +1025,9 @@ sub report_json ($) {
     }
     my ($doc_l) = sprintf "\"leading\": %g", $doc->{pagespec}->{lead};
     my ($doc_c) = sprintf "\"columns\": %d", $doc->{pages}->{1}->{pagespec}->{ncols};
-    print "  $doc_ps,\n  $doc_tb,\n  $doc_margin,\n  $doc_bfs,\n  $doc_l,\n  $doc_c,\n  \"pages\": [";
+    print "  $doc_ps,\n  $doc_margin,\n  $doc_bfs,\n  $doc_l,\n  $doc_c,\n";
+    printf "  \"nummargin\": %.0f,\n", $nummargin if $nummargin < 10000;
+    print "  \"pages\": [";
     $sep = "\n";
 
     my %pages;
@@ -1040,11 +1042,9 @@ sub report_json ($) {
         }
 
         my($pd) = $px->{$i};
-        my($page_ps) = sprintf "\"papersize\": [%.0f, %.0f]", $pd->{ph}, $pd->{pw};
+        my($page_ps) = sprintf "\"papersize\": [%.0f,%.0f]", $pd->{ph}, $pd->{pw};
         push @val, $page_ps if $page_ps ne $doc_ps;
-        my($page_tb) = sprintf "\"textblock\": [%.0f, %.0f]", $pd->{th}, $pd->{tw};
-        push @val, $page_tb if $page_tb ne $doc_tb;
-        my($page_margin) = sprintf "\"margin\": [%.0f, %.0f, %.0f, %.0f]", $pd->{mt}, $pd->{pw} - ($pd->{ml} + $pd->{tw}), $pd->{ph} - ($pd->{mt} + $pd->{th}), $pd->{ml};
+        my($page_margin) = sprintf "\"margin\": [%.0f,%.0f,%.0f,%.0f]", $pd->{mt}, $pd->{pw} - ($pd->{ml} + $pd->{tw}), $pd->{ph} - ($pd->{mt} + $pd->{th}), $pd->{ml};
         push @val, $page_margin if $page_margin ne $doc_margin;
         my($page_bfs) = sprintf "\"bodyfontsize\": %g", $page->{pagespec}->{bodyfont};
         push @val, $page_bfs if $page_bfs ne $doc_bfs;
@@ -1056,7 +1056,7 @@ sub report_json ($) {
         push @val, sprintf "\"pagetype\": %s", json_quote($page->{pagespec}->{type})
             if $page->{pagespec}->{type} ne "body";
 
-        print $sep, "    {\n      ", join(",\n      ", @val), "\n    }";
+        print $sep, "    {", join(", ", @val), "}";
         $sep = ",\n";
     }
     print "\n  ]\n}\n";
@@ -1415,6 +1415,7 @@ sub parse_p2h_text ($$) {
     $segs_byfont = {};
 
     $prevheight = 0;
+    $lowest_number = 0;
 
     while (1) {
 #       next if (check_p2h_error ($line));
@@ -1465,6 +1466,12 @@ sub parse_p2h_text ($$) {
         $segs_byfont{$seginfo[4]} = $byfont;
         update_segdata ($page, $segs_all, \@seginfo);
 
+        # page number detection
+        if ($line =~ /<text[^>]*>[- ,.\/]*[0-9][- ,.\/0-9]*<\/text>/) {
+            my($bottom) = $seginfo[0] + $seginfo[3];
+            $lowest_number = max $lowest_number, $bottom;
+        }
+
         # embedded newlines will split <text>...</text> across multiple lines
         if ($line !~ /<\/text>/) {
             while ($line = <$FILE>) {
@@ -1480,6 +1487,7 @@ sub parse_p2h_text ($$) {
     $page->{pagedata}->{nsegs} = $nsegs;
     $page->{pagedata}->{segdata} = $segs_all;
     $page->{pagedata}->{segdata_byfont} = $segs_byfont;
+    $page->{pagedata}->{lowest_number} = $lowest_number;
 
     calc_page_body_font ($page);
     calc_page_leading ($page);

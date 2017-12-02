@@ -18,7 +18,7 @@ if (!$Conf->setting_data("s3_bucket")) {
     exit(1);
 }
 
-$result = $Conf->qe("select paperStorageId from PaperStorage where paperStorageId>1");
+$result = $Conf->qe_raw("select paperStorageId from PaperStorage where paperStorageId>1");
 $sids = array();
 while (($row = edb_row($result)))
     $sids[] = (int) $row[0];
@@ -27,19 +27,19 @@ $failures = 0;
 foreach ($sids as $sid) {
     if ($active !== false && !isset($active[$sid]))
         continue;
-    $result = $Conf->qe("select paperStorageId, paperId, timestamp, mimetype,
-        compression, sha1, documentType, filename, infoJson,
-        paper is null as paper_null
+    $result = $Conf->qe_raw("select paperStorageId, paperId, timestamp, mimetype,
+        compression, sha1, documentType, filename, infoJson, paper
         from PaperStorage where paperStorageId=$sid");
-    $doc = $Conf->document_row($result, null);
-    if ($doc->paper_null && !$doc->docclass->filestore_check($doc))
+    $doc = DocumentInfo::fetch($result, $Conf);
+    Dbl::free($result);
+    if ($doc->content === null && !$doc->docclass->filestore_check($doc))
         continue;
     $saved = $checked = $doc->docclass->s3_check($doc);
     if (!$saved)
-        $saved = $doc->docclass->s3_store($doc, $doc);
+        $saved = $doc->docclass->s3_store($doc);
     if (!$saved) {
         sleep(0.5);
-        $saved = $doc->docclass->s3_store($doc, $doc);
+        $saved = $doc->docclass->s3_store($doc);
     }
     $front = "[" . $Conf->unparse_time_log($doc->timestamp) . "] "
         . HotCRPDocument::filename($doc) . " ($sid)";
@@ -52,7 +52,7 @@ foreach ($sids as $sid) {
         ++$failures;
     }
     if ($saved && $kill)
-        $Conf->qe("update PaperStorage set paper=null where paperStorageId=$sid");
+        $Conf->qe_raw("update PaperStorage set paper=null where paperStorageId=$sid");
 }
 if ($failures) {
     fwrite(STDERR, "Failed to save " . plural($failures, "document") . ".\n");

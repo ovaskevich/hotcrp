@@ -1,21 +1,20 @@
 <?php
 // comment.php -- HotCRP paper comment display/edit page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 $Error = array();
 require_once("src/initweb.php");
 require_once("src/papertable.php");
-if ($Me->is_empty())
+if (!$Me->email)
     $Me->escape();
 
 
 // header
 function exit_to_paper() {
     global $prow;
-    go(hoturl("paper", array("p" => $prow ? $prow->paperId : @$_REQUEST["p"],
-                             "c" => @$_REQUEST["c"],
-                             "ls" => @$_REQUEST["ls"])));
+    go(hoturl("paper", ["p" => $prow ? $prow->paperId : req("p"),
+                        "c" => req("c"), "response" => req("response")]));
 }
 
 
@@ -29,7 +28,7 @@ function loadRows() {
     $paperTable->resolveReview(false);
     $paperTable->resolveComments();
 
-    $cid = defval($_REQUEST, "commentId", "xxx");
+    $cid = defval($_GET, "commentId", "xxx");
     $crow = null;
     foreach ($paperTable->crows as $row) {
         if ($row->commentId == $cid
@@ -40,7 +39,7 @@ function loadRows() {
         /* following are obsolete */
         && $cid != "response" && $cid != "newresponse") {
         Conf::msg_error("No such comment.");
-        $Conf->ajaxExit(array("ok" => false));
+        json_exit(["ok" => false]);
     }
     if (isset($Error["paperId"]) && $Error["paperId"] != $prow->paperId)
         $Error = array();
@@ -62,16 +61,17 @@ function save_comment($text, $is_response, $roundnum) {
 
     // If I have a review token for this paper, save under that anonymous user.
     $user = $Me;
-    if ((!$crow || $crow->contactId != $Me->contactId)
-        && ($cid = $Me->review_token_cid($prow))
-        && (!$crow || $crow->contactId == $cid))
-        $user = Contact::find_by_id($cid);
+    if (($token = req("review_token"))
+        && ($token = decode_token($token, "V"))
+        && in_array($token, $Me->review_tokens())
+        && ($rrow = $prow->review_of_token($token)))
+        $user = $Conf->user_by_id($rrow->contactId);
 
-    $req = array("visibility" => @$_REQUEST["visibility"],
-                 "submit" => $is_response && @$_REQUEST["submitresponse"],
+    $req = array("visibility" => req("visibility"),
+                 "submit" => $is_response && !req("draft"),
                  "text" => $text,
-                 "tags" => @$_REQUEST["commenttags"],
-                 "blind" => @$_REQUEST["blind"]);
+                 "tags" => req("commenttags"),
+                 "blind" => req("blind"));
     if ($is_response && !$crow)
         $cinfo = new CommentInfo((object) array("commentType" => COMMENTTYPE_RESPONSE,
                                                 "commentRound" => $roundnum), $prow);
@@ -82,9 +82,9 @@ function save_comment($text, $is_response, $roundnum) {
 
     $confirm = false;
     if (!$ok && $is_response) {
-        $crows = $Conf->comment_rows($Conf->comment_query("paperId=$prow->paperId and (commentType&" . COMMENTTYPE_RESPONSE . ")!=0 and commentRound=$roundnum"), $Me);
+        $crows = $prow->fetch_comments("(commentType&" . COMMENTTYPE_RESPONSE . ")!=0 and commentRound=$roundnum");
         reset($crows);
-        $cur_response = @current($crows);
+        $cur_response = empty($crows) ? null : current($crows);
         if ($cur_response && $cur_response->comment == $text) {
             $cinfo = new CommentInfo($cur_response, $prow);
             $ok = true;
@@ -115,19 +115,19 @@ function save_comment($text, $is_response, $roundnum) {
         $j["cmt"] = $cinfo->unparse_json($Me);
     if ($confirm)
         $j["msg"] = $confirm;
-    $Conf->ajaxExit($j);
+    json_exit($j);
 }
 
 function handle_response() {
     global $Conf, $Me, $prow, $crow;
-    $rname = @trim($_REQUEST["response"]);
+    $rname = trim((string) req("response"));
     $rnum = $Conf->resp_round_number($rname);
     if ($rnum === false && $rname)
         return Conf::msg_error("No such response round “" . htmlspecialchars($rname) . "”.");
     $rnum = (int) $rnum;
-    if ($crow && @(int) $crow->commentRound !== $rnum) {
+    if ($crow && (int) get($crow, "commentRound") !== $rnum) {
         $Conf->warnMsg("Attempt to change response round ignored.");
-        $rnum = @+$crow->commentRound;
+        $rnum = (int) get($crow, "commentRound");
     }
 
     if (!($xcrow = $crow))
@@ -136,42 +136,43 @@ function handle_response() {
     if (($whyNot = $Me->perm_respond($prow, $xcrow, true)))
         return Conf::msg_error(whyNotText($whyNot, "respond to reviews for"));
 
-    $text = @rtrim($_REQUEST["comment"]);
+    $text = rtrim((string) req("comment"));
     if ($text === "" && !$crow)
         return Conf::msg_error("Enter a response.");
 
     save_comment($text, true, $rnum);
 }
 
+if (req("savedraftresponse"))
+    $_POST["draft"] = $_REQUEST["draft"] = 1;
+if (req("savedraftresponse") || req("submitresponse"))
+    $_GET["submitcomment"] = $_REQUEST["submitcomment"] = 1;
 
 if (!check_post())
     /* do nothing */;
-else if ((@$_REQUEST["submitcomment"] || @$_REQUEST["submitresponse"] || @$_REQUEST["savedraftresponse"])
-         && @$_REQUEST["response"]) {
+else if (req("submitcomment") && req("response")) {
     handle_response();
-    if (@$_REQUEST["ajax"])
-        $Conf->ajaxExit(array("ok" => false));
-} else if (@$_REQUEST["submitcomment"]) {
-    $text = @rtrim($_REQUEST["comment"]);
+    if (req("ajax"))
+        json_exit(["ok" => false]);
+} else if (req("submitcomment")) {
+    $text = rtrim((string) req("comment"));
     if (($whyNot = $Me->perm_submit_comment($prow, $crow)))
         Conf::msg_error(whyNotText($whyNot, "comment on"));
     else if ($text === "" && !$crow)
         Conf::msg_error("Enter a comment.");
     else
         save_comment($text, false, 0);
-    if (@$_REQUEST["ajax"])
-        $Conf->ajaxExit(array("ok" => false));
-} else if ((@$_REQUEST["deletecomment"] || @$_REQUEST["deleteresponse"]) && $crow) {
+    if (req("ajax"))
+        json_exit(["ok" => false]);
+} else if ((req("deletecomment") || req("deleteresponse")) && $crow) {
     if (($whyNot = $Me->perm_submit_comment($prow, $crow)))
         Conf::msg_error(whyNotText($whyNot, "comment on"));
     else
         save_comment("", ($crow->commentType & COMMENTTYPE_RESPONSE) != 0, $crow->commentRound);
-    if (@$_REQUEST["ajax"])
-        $Conf->ajaxExit(array("ok" => false));
-} else if (@$_REQUEST["cancel"] && $crow)
+    if (req("ajax"))
+        json_exit(["ok" => false]);
+} else if (req("cancel") && $crow)
     $_REQUEST["noedit"] = $_GET["noedit"] = $_POST["noedit"] = 1;
 
 
-go(hoturl("paper", array("p" => $prow->paperId,
-                         "c" => @$_REQUEST["c"],
-                         "ls" => @$_REQUEST["ls"])));
+exit_to_paper();

@@ -18,7 +18,7 @@ if (!$Conf->setting_data("s3_bucket")) {
 if (count($arg["_"]) == 0)
     $arg["_"] = array("-");
 
-$s3doc = HotCRPDocument::s3_document();
+$s3doc = $Conf->s3_docstore();
 $ok = 0;
 
 foreach ($arg["_"] as $fn) {
@@ -33,10 +33,12 @@ foreach ($arg["_"] as $fn) {
             echo "$fn: " . $error["message"] . "\n";
         $ok = 2;
     } else {
-        $doc = (object) array("sha1" => sha1($content, true));
-        if (!($extensions && preg_match('/(\.\w+)\z/', $fn, $m)
-              && ($doc->mimetype = Mimetype::lookup_extension($m[1]))))
-            $doc->mimetype = Mimetype::sniff($content);
+        $doc = new DocumentInfo(["content" => $content], $Conf);
+        if ($extensions && preg_match('/(\.\w+)\z/', $fn, $m)
+            && ($mtx = Mimetype::lookup($m[1])))
+            $doc->mimetype = $mtx->mimetype;
+        else
+            $doc->mimetype = Mimetype::content_type($content);
         $s3fn = HotCRPDocument::s3_filename($doc);
         if (!$s3doc->check($s3fn)) {
             if (!$quiet)

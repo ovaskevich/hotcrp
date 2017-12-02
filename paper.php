@@ -1,17 +1,20 @@
 <?php
 // paper.php -- HotCRP paper view and edit page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
-$Error = array();
+$ps = null;
 require_once("src/initweb.php");
 require_once("src/papertable.php");
 if ($Me->is_empty())
     $Me->escape();
-if (isset($_REQUEST["update"]) && check_post() && !$Me->has_database_account()
-    && $Me->can_start_paper())
-    $Me = $Me->activate_database_account();
-$useRequest = isset($_REQUEST["after_login"]);
+if (check_post() && !$Me->has_database_account()) {
+    if (isset($_REQUEST["update"]) && $Me->can_start_paper())
+        $Me = $Me->activate_database_account();
+    else
+        $Me->escape();
+}
+$useRequest = isset($_REQUEST["after_login"]) && isset($_REQUEST["title"]);
 foreach (array("emailNote", "reason") as $x)
     if (isset($_REQUEST[$x]) && $_REQUEST[$x] == "Optional explanation")
         unset($_REQUEST[$x], $_GET[$x], $_POST[$x]);
@@ -39,12 +42,12 @@ function confHeader() {
 
 function errorMsgExit($msg) {
     global $Conf;
-    if (@$_REQUEST["ajax"]) {
+    if (req("ajax")) {
         Conf::msg_error($msg);
-        $Conf->ajaxExit(array("ok" => false));
+        json_exit(["ok" => false]);
     } else {
         confHeader();
-        $Conf->footerScript("shortcut().add()");
+        Ht::stash_script("shortcut().add()");
         $msg && Conf::msg_error($msg);
         Conf::$g->footer();
         exit;
@@ -64,12 +67,10 @@ if (isset($_GET["post"]) && $_GET["post"] && !count($_POST))
 
 // grab paper row
 function loadRows() {
-    global $prow, $Conf, $Error;
+    global $prow, $Conf;
     $Conf->paper = $prow = PaperTable::paperRow($whyNot);
     if (!$prow)
-        errorMsgExit(whyNotText($whyNot, "view"));
-    if (isset($Error["paperId"]) && $Error["paperId"] != $prow->paperId)
-        $Error = array();
+        errorMsgExit(whyNotText($whyNot, "view", true));
 }
 $prow = null;
 if (!$newPaper)
@@ -77,46 +78,10 @@ if (!$newPaper)
 
 
 // paper actions
-if (isset($_REQUEST["setrevpref"]) && $prow && check_post()) {
-    PaperActions::setReviewPreference($prow);
-    loadRows();
-}
-if (isset($_REQUEST["setfollow"]) && $prow && check_post()) {
-    PaperActions::set_follow($prow);
-    loadRows();
-}
 if ($prow && isset($_GET["m"]) && $_GET["m"] === "api"
-    && isset($_GET["fn"]) && isset(SiteLoader::$api_map[$_GET["fn"]])) {
+    && isset($_GET["fn"]) && $Conf->has_api($_GET["fn"])) {
     $Qreq = make_qreq();
-    SiteLoader::call_api($Qreq->fn, $Me, $Qreq, $prow);
-    json_exit(["ok" => false, "error" => "Internal error."]);
-}
-
-
-// check paper action
-if (isset($_REQUEST["checkformat"]) && $prow && $Conf->setting("sub_banal")) {
-    $ajax = defval($_REQUEST, "ajax", 0);
-    $cf = new CheckFormat();
-    $dt = HotCRPDocument::parse_dtype(@$_REQUEST["dt"]);
-    if ($dt === null)
-        $dt = @$_REQUEST["final"] ? DTYPE_FINAL : DTYPE_SUBMISSION;
-    if ($Conf->setting("sub_banal$dt"))
-        $format = $Conf->setting_data("sub_banal$dt", "");
-    else
-        $format = $Conf->setting_data("sub_banal", "");
-    $status = $cf->analyzePaper($prow->paperId, $dt, $format);
-
-    // chairs get a hint message about multiple checking
-    if ($Me->privChair) {
-        $nbanal = $Conf->session("nbanal", 0) + 1;
-        $Conf->save_session("nbanal", $nbanal);
-        if ($nbanal >= 3 && $nbanal <= 6)
-            $cf->msg("info", "To run the format checker for many papers, use Download &gt; Format check on the <a href='" . hoturl("search", "q=") . "'>search page</a>.");
-    }
-
-    $cf->reportMessages();
-    if ($ajax)
-        $Conf->ajaxExit(array("status" => $status), true);
+    $Conf->call_api_exit($Qreq->fn, $Me, $Qreq, $prow);
 }
 
 
@@ -126,9 +91,8 @@ if (isset($_REQUEST["withdraw"]) && !$newPaper && check_post()) {
         $reason = defval($_REQUEST, "reason", "");
         if ($reason == "" && $Me->privChair && defval($_REQUEST, "doemail") > 0)
             $reason = defval($_REQUEST, "emailNote", "");
-        Dbl::qe("update Paper set timeWithdrawn=$Now, timeSubmitted=if(timeSubmitted>0,-100,0), withdrawReason=? where paperId=$prow->paperId", $reason != "" ? $reason : null);
-        $numreviews = Dbl::fetch_ivalue("select count(*) from PaperReview where paperId=$prow->paperId and reviewNeedsSubmit!=0");
-        $Conf->update_papersub_setting(false);
+        Dbl::qe("update Paper set timeWithdrawn=$Now, timeSubmitted=if(timeSubmitted>0,-timeSubmitted,0), withdrawReason=? where paperId=$prow->paperId", $reason != "" ? $reason : null);
+        $Conf->update_papersub_setting(-1);
         loadRows();
 
         // email contact authors themselves
@@ -137,16 +101,21 @@ if (isset($_REQUEST["withdraw"]) && !$newPaper && check_post()) {
                                         $prow, array("reason" => $reason, "infoNames" => 1));
 
         // email reviewers
-        if (($numreviews > 0 && $Conf->time_review_open())
-            || $prow->num_reviews_assigned() > 0)
+        if ($prow->reviews_by_id())
             HotCRPMailer::send_reviewers("@withdrawreviewer", $prow, array("reason" => $reason));
 
         // remove voting tags so people don't have phantom votes
-        if (TagInfo::has_vote()) {
-            $q = array();
-            foreach (TagInfo::vote_tags() as $t => $v)
-                $q[] = "tag='" . sqlq($t) . "' or tag like '%~" . sqlq_for_like($t) . "'";
-            Dbl::qe_raw("delete from PaperTag where paperId=$prow->paperId and (" . join(" or ", $q) . ")");
+        if ($Conf->tags()->has_vote) {
+            // XXX should do this in a_status.php
+            $acsv = ["paper,action,tag"];
+            foreach ($Conf->tags()->filter("vote") as $vt) {
+                array_push($acsv, "{$prow->paperId},cleartag,{$vt->tag}",
+                           "{$prow->paperId},cleartag,all~{$vt->tag}");
+            }
+            $assignset = new AssignmentSet($Conf->site_contact());
+            $assignset->enable_papers($prow);
+            $assignset->parse(join("\n", $acsv));
+            $assignset->execute();
         }
 
         $Me->log_activity("Withdrew", $prow->paperId);
@@ -156,8 +125,8 @@ if (isset($_REQUEST["withdraw"]) && !$newPaper && check_post()) {
 }
 if (isset($_REQUEST["revive"]) && !$newPaper && check_post()) {
     if (!($whyNot = $Me->perm_revive_paper($prow))) {
-        Dbl::qe("update Paper set timeWithdrawn=0, timeSubmitted=if(timeSubmitted=-100,$Now,0), withdrawReason=null where paperId=$prow->paperId");
-        $Conf->update_papersub_setting(true);
+        Dbl::qe("update Paper set timeWithdrawn=0, timeSubmitted=if(timeSubmitted=-100,$Now,if(timeSubmitted<-100,-timeSubmitted,0)), withdrawReason=null where paperId=$prow->paperId");
+        $Conf->update_papersub_setting(0);
         loadRows();
         $Me->log_activity("Revived", $prow->paperId);
         redirectSelf();
@@ -175,39 +144,20 @@ function final_submit_watch_callback($prow, $minic) {
         HotCRPMailer::send_to($minic, "@finalsubmitnotify", $prow);
 }
 
-function update_paper($pj, $opj, $qreq, $action, $diffs) {
-    global $Conf, $Me, $Opt, $OK, $Error, $prow;
+function update_paper(PaperStatus $ps, $pj, $opj, $qreq, $action, $diffs) {
+    global $Conf, $Me, $prow;
     // XXX lock tables
 
-    $ps = new PaperStatus($Me);
     $saved = $ps->save_paper_json($pj);
 
-    if (!$saved && !$prow && count($qreq->_FILES))
-        $ps->set_error_html("paper", "<strong>Your uploaded files were ignored.</strong>");
-    if (!get($pj, "collaborators") && $Conf->setting("sub_collab")) {
-        $field = ($Conf->setting("sub_pcconf") ? "Other conflicts" : "Potential conflicts");
-        $ps->set_warning_html("collaborators", "Please enter the authors’ potential conflicts in the $field field. If none of the authors have potential conflicts, just enter “None”.");
-    }
-
-    $Error = $ps->error_fields();
+    if (!$saved && !$prow && $qreq->has_files())
+        $ps->error_at("paper", "<strong>Your uploaded files were ignored.</strong>");
 
     if (!$saved) {
-        $emsg = $ps->error_html();
-        Conf::msg_error("There were errors in saving your paper. Please fix them and try again." . (count($emsg) ? "<ul><li>" . join("</li><li>", $emsg) . "</li></ul>" : ""));
+        $emsg = $ps->messages();
+        Conf::msg_error(space_join($Conf->_("There were errors in saving your paper."), $Conf->_("Please fix them and try again."), count($emsg) ? "<ul><li>" . join("</li><li>", $emsg) . "</li></ul>" : ""));
         return false;
     }
-
-    // note differences in contacts
-    $contacts = $ocontacts = [];
-    foreach (get($pj, "contacts", []) as $v)
-        $contacts[] = strtolower(is_string($v) ? $v : $v->email);
-    if ($opj && get($opj, "contacts"))
-        foreach ($opj->contacts as $v)
-            $ocontacts[] = strtolower($v->email);
-    sort($contacts);
-    sort($ocontacts);
-    if (json_encode($contacts) !== json_encode($ocontacts))
-        $diffs["contacts"] = true;
 
     // submit paper if no error so far
     $_REQUEST["paperId"] = $_GET["paperId"] = $qreq->paperId = $pj->pid;
@@ -221,70 +171,85 @@ function update_paper($pj, $opj, $qreq, $action, $diffs) {
     }
     $wasSubmitted = $opj && get($opj, "submitted");
     if (get($pj, "submitted") || $Conf->can_pc_see_all_submissions())
-        $Conf->update_papersub_setting(true);
-    if ($wasSubmitted != get($pj, "submitted"))
-        $diffs["submission"] = 1;
+        $Conf->update_papersub_setting(1);
 
     // confirmation message
     if ($action == "final") {
-        $actiontext = "Updated final version of";
+        $actiontext = "Updated final";
         $template = "@submitfinalpaper";
     } else if (get($pj, "submitted") && !$wasSubmitted) {
         $actiontext = "Submitted";
         $template = "@submitpaper";
     } else if (!$opj) {
-        $actiontext = "Registered new";
+        $actiontext = "Registered";
         $template = "@registerpaper";
     } else {
         $actiontext = "Updated";
         $template = "@updatepaper";
     }
+    if ($opj)
+        $difftext = join(", ", array_keys($diffs));
+    else // only mark submission
+        $difftext = join(", ", array_intersect(array_keys($diffs), ["submission", "final"]));
 
     // additional information
     $notes = array();
     if ($action == "final") {
         if ($prow->$submitkey === null || $prow->$submitkey <= 0)
-            $notes[] = "The final version has not yet been submitted.";
+            $notes[] = $Conf->_("The final version has not yet been submitted.");
         $deadline = $Conf->printableTimeSetting("final_soft", "span");
-        if ($deadline != "N/A" && $Conf->deadlinesAfter("final_soft"))
-            $notes[] = "<strong>The deadline for submitting final versions was $deadline.</strong>";
-        else if ($deadline != "N/A")
-            $notes[] = "You have until $deadline to make further changes.";
+        if ($deadline != "N/A" && $Conf->deadlinesAfter("final_soft")) {
+            $x = $Conf->_("The deadline for submitting final versions was %s.", $deadline);
+            if ($x != "")
+                $notes[] = "<strong>$x</strong>";
+        } else if ($deadline != "N/A")
+            $notes[] = $Conf->_("You have until %s to make further changes.", $deadline);
     } else {
         if (get($pj, "submitted"))
-            $notes[] = "You will receive email when reviews are available.";
+            $notes[] = $Conf->_("You will receive email when reviews are available.");
         else if ($prow->size == 0 && !opt("noPapers"))
-            $notes[] = "The submission has not yet been uploaded.";
+            $notes[] = $Conf->_("The submission has not yet been uploaded.");
         else if ($Conf->setting("sub_freeze") > 0)
-            $notes[] = "The submission has not yet been completed.";
+            $notes[] = $Conf->_("The submission has not yet been completed.");
         else
-            $notes[] = "The submission is marked as not ready for review.";
+            $notes[] = $Conf->_("The submission is marked as not ready for review.");
         $deadline = $Conf->printableTimeSetting("sub_update", "span");
         if ($deadline != "N/A" && ($prow->timeSubmitted <= 0 || $Conf->setting("sub_freeze") <= 0))
-            $notes[] = "Further updates are allowed until $deadline.";
+            $notes[] = $Conf->_("Further updates are allowed until %s.", $deadline);
         $deadline = $Conf->printableTimeSetting("sub_sub", "span");
-        if ($deadline != "N/A" && $prow->timeSubmitted <= 0)
-            $notes[] = "<strong>If the submission "
-                . ($Conf->setting("sub_freeze") > 0 ? "is not completed"
-                   : "is not ready for review")
-                . " by $deadline, it will not be considered.</strong>";
+        if ($deadline != "N/A" && $prow->timeSubmitted <= 0) {
+            if ($Conf->setting("sub_freeze") > 0)
+                $x = $Conf->_("If the submission is not completed by %s, it will not be considered.", $deadline);
+            else
+                $x = $Conf->_("If the submission is not ready for review by %s, it will not be considered.", $deadline);
+            if ($x != "")
+                $notes[] = "<strong>$x</strong>";
+        }
     }
-    $notes = join(" ", $notes);
+    $notes = join(" ", array_filter($notes, function ($n) { return $n !== ""; }));
 
     $webnotes = "";
-    if (count($ps->error_html()))
-        $webnotes .= " <ul><li>" . join("</li><li>", $ps->error_html()) . "</li></ul>";
+    if (count($ps->messages()))
+        $webnotes .= " <ul><li>" . join("</li><li>", $ps->messages()) . "</li></ul>";
 
-    if (!count($diffs)) {
-        $Conf->warnMsg("There were no changes to submission #$prow->paperId. " . $notes . $webnotes);
-        return true;
-    }
+    if ($wasSubmitted != get($pj, "submitted"))
+        $diffs["ready"] = true;
+
+    $logtext = $actiontext . ($difftext ? " $difftext" : "");
+    $Me->log_activity($logtext, $prow->paperId);
 
     // HTML confirmation
-    if ($prow->$submitkey > 0)
-        $Conf->confirmMsg($actiontext . " submission #$prow->paperId. " . $notes . $webnotes);
+    if (empty($diffs))
+        $webmsg = $Conf->_("No changes to submission #%d.", $prow->paperId);
     else
-        $Conf->warnMsg($actiontext . " submission #$prow->paperId. " . $notes . $webnotes);
+        $webmsg = $Conf->_("$actiontext submission #%d.", $prow->paperId);
+    if ($notes || $webnotes)
+        $webmsg .= " " . $notes . $webnotes;
+    $Conf->msg($prow->$submitkey > 0 ? "confirm" : "warning", $webmsg);
+
+    // No mail if no change
+    if (empty($diffs))
+        return true;
 
     // mail confirmation to all contact authors
     if (!$Me->privChair || $qreq->doemail > 0) {
@@ -299,10 +264,8 @@ function update_paper($pj, $opj, $qreq, $action, $diffs) {
     }
 
     // other mail confirmations
-    if ($action == "final" && $OK && !count($Error))
+    if ($action == "final" && !Dbl::has_error() && !$ps->has_error())
         $prow->notify(WATCHTYPE_FINAL_SUBMIT, "final_submit_watch_callback", $Me);
-
-    $Me->log_activity($actiontext, $prow->paperId);
     return true;
 }
 
@@ -314,15 +277,14 @@ if (($Qreq->update || $Qreq->submitfinal) && check_post($Qreq)) {
         $action = "final";
     else if ($Qreq->submitpaper
              && (($prow && $prow->size > 0)
-                 || $Qreq->_FILES->paperUpload
+                 || $Qreq->has_file("paperUpload")
                  || opt("noPapers")))
         $action = "submit";
 
-    $ps = new PaperStatus($Me);
-    $opj = $prow ? $ps->paper_json($prow) : null;
-    $pj = PaperStatus::clone_json($opj);
-    PaperSaver::apply_all($Me, $pj, $opj, $Qreq, $action);
-    $diffs = PaperSaver::all_diffs($pj, $opj);
+    $ps = new PaperStatus($Conf, $Me);
+    $opj = $prow ? $ps->paper_json($prow, ["forceShow" => true]) : null;
+    $pj = PaperSaver::apply_all($Me, $prow, $opj, $Qreq, $action);
+    $diffs = PaperSaver::diffs_all($Me, $pj, $opj);
 
     // check deadlines
     if ($newPaper)
@@ -332,13 +294,14 @@ if (($Qreq->update || $Qreq->submitfinal) && check_post($Qreq)) {
         $whyNot = $Me->perm_submit_final_paper($prow);
     else {
         $whyNot = $Me->perm_update_paper($prow);
-        if ($whyNot && $action == "submit" && empty($diffs))
+        if ($whyNot && $action == "submit"
+            && (empty($diffs) || join(" ", array_keys($diffs)) === "contacts"))
             $whyNot = $Me->perm_finalize_paper($prow);
     }
 
     // actually update
     if (!$whyNot) {
-        if (update_paper($pj, $opj, $Qreq, $action, $diffs))
+        if (update_paper($ps, $pj, $opj, $Qreq, $action, $diffs))
             redirectSelf(array("p" => $prow->paperId, "m" => "edit"));
     } else {
         if ($action == "final")
@@ -358,16 +321,18 @@ if (($Qreq->update || $Qreq->submitfinal) && check_post($Qreq)) {
 
 if ($Qreq->updatecontacts && check_post($Qreq) && $prow) {
     if ($Me->can_administer($prow) || $Me->act_author_view($prow)) {
-        $ps = new PaperStatus($Me);
-        $opj = $ps->paper_json($prow);
+        $ps = new PaperStatus($Conf, $Me);
+        $opj = $ps->paper_json($prow, ["forceShow" => true]);
         $pj = PaperStatus::clone_json($opj);
         PaperSaver::replace_contacts($pj, $Qreq);
-        if ($ps->save_paper_json($pj, $opj))
+        if (!PaperSaver::diffs_all($Me, $pj, $opj))
+            Conf::msg_warning($Conf->_("No changes to submission #%d.", $prow->paperId));
+        else if ($ps->save_paper_json($pj, $opj)) {
+            Conf::msg_confirm($Conf->_("Updated contacts for submission #%d.", $prow->paperId));
+            $Me->log_activity("Updated contacts", $prow->paperId);
             redirectSelf();
-        else {
-            Conf::msg_error("<ul><li>" . join("</li><li>", $ps->error_html()) . "</li></ul>");
-            $Error = $ps->error_fields();
-        }
+        } else
+            Conf::msg_error("<ul><li>" . join("</li><li>", $ps->messages()) . "</li></ul>");
     } else
         Conf::msg_error(whyNotText(array("permission" => 1), "update contacts for"));
 
@@ -387,6 +352,7 @@ if ($Qreq->delete && check_post()) {
         if (!$Me->privChair || $Qreq->doemail > 0)
             HotCRPMailer::send_contacts("@deletepaper", $prow, array("reason" => (string) $Qreq->emailNote, "infoNames" => 1));
         // XXX email self?
+        $rrows = $prow->reviews_by_id();
 
         $error = false;
         $tables = array('Paper', 'PaperStorage', 'PaperComment', 'PaperConflict', 'PaperReview', 'PaperReviewPreference', 'PaperTopic', 'PaperTag', "PaperOption");
@@ -396,9 +362,17 @@ if ($Qreq->delete && check_post()) {
         }
         if (!$error) {
             $Conf->confirmMsg("Paper #$prow->paperId deleted.");
-            $Conf->update_papersub_setting(false);
+            $Conf->update_papersub_setting(-1);
             if ($prow->outcome > 0)
-                $Conf->update_paperacc_setting(false);
+                $Conf->update_paperacc_setting(-1);
+            if ($prow->leadContactId > 0 || $prow->shepherdContactId > 0)
+                $Conf->update_paperlead_setting(-1);
+            if ($prow->managerContactId > 0)
+                $Conf->update_papermanager_setting(-1);
+            if ($rrows && array_filter($rrows, function ($rrow) { return $rrow->reviewToken > 0; }))
+                $Conf->update_rev_tokens_setting(-1);
+            if ($rrows && array_filter($rrows, function ($rrow) { return $rrow->reviewType == REVIEW_META; }))
+                $Conf->update_metareviews_setting(-1);
             $Me->log_activity("Deleted", $prow->paperId);
         }
 
@@ -419,18 +393,26 @@ if ($paperTable->can_view_reviews() || $paperTable->mode == "re") {
 
 // prepare paper table
 if ($paperTable->mode == "edit") {
-    $editable = $newPaper || $Me->can_update_paper($prow, true);
-    if ($prow && $prow->outcome > 0 && $Conf->collectFinalPapers()
-        && (($Conf->timeAuthorViewDecision() && $Conf->timeSubmitFinalPaper())
-            || $Me->allow_administer($prow)))
-        $editable = "f";
+    if ($newPaper)
+        $editable = true;
+    else {
+        $old_overrides = $Me->set_overrides($Me->overrides() | Contact::OVERRIDE_TIME);
+        $editable = $Me->can_update_paper($prow);
+        if ($prow->outcome > 0 && $Conf->collectFinalPapers() && $Me->can_submit_final_paper($prow))
+            $editable = "f";
+        $Me->set_overrides($old_overrides);
+    }
 } else
     $editable = false;
 
-if (get($Error, "author"))
-    $Error["authorInformation"] = true;
-
 $paperTable->initialize($editable, $editable && $useRequest);
+if ($ps && $paperTable->mode === "edit")
+    $paperTable->set_edit_status($ps);
+else if ($prow && $paperTable->mode === "edit") {
+    $ps = new PaperStatus($Conf, $Me, ["forceShow" => true]);
+    $ps->paper_json($prow, ["msgs" => true]);
+    $paperTable->set_edit_status($ps);
+}
 
 // produce paper table
 confHeader();
@@ -447,6 +429,39 @@ else {
     else {
         $paperTable->paptabEndWithReviewMessage();
         $paperTable->paptabComments();
+    }
+    // restore comment across logout bounce
+    if (req("editcomment")) {
+        $cid = req("c");
+        $preferred_resp_round = false;
+        if (($x = req("response")))
+            $preferred_resp_round = $Conf->resp_round_number($x);
+        if ($preferred_resp_round === false)
+            $preferred_resp_round = $Me->preferred_resp_round_number($prow);
+        $j = null;
+        foreach ($paperTable->viewable_comments() as $crow) {
+            if ($crow->commentId == $cid
+                || ($cid === null
+                    && ($crow->commentType & COMMENTTYPE_RESPONSE) != 0
+                    && $crow->commentRound === $preferred_resp_round))
+                $j = $crow->unparse_json($Me, true);
+        }
+        if (!$j) {
+            $j = (object) ["is_new" => true, "editable" => true];
+            if ($Me->act_author_view($prow))
+                $j->by_author = true;
+            if ($preferred_resp_round !== false)
+                $j->response = $Conf->resp_round_name($preferred_resp_round);
+        }
+        if (($x = req("comment")) !== null) {
+            $j->text = $x;
+            $j->visibility = req("visibility");
+            $tags = trim((string) req("commenttags"));
+            $j->tags = $tags === "" ? [] : preg_split('/\s+/', $tags);
+            $j->blind = !!req("blind");
+            $j->draft = !!req("draft");
+        }
+        Ht::stash_script("papercomment.edit(" . json_encode_browser($j) . ")");
     }
 }
 

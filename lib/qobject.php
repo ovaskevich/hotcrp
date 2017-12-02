@@ -1,10 +1,10 @@
 <?php
 // qobject.php -- HotCRP helper class for quiet objects (no warnings)
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class Qobject implements ArrayAccess, IteratorAggregate, Countable, JsonSerializable {
-    public function __construct($x = array()) {
+    function __construct($x = null) {
         if ($x) {
             if (is_object($x))
                 $x = (array) $x;
@@ -12,49 +12,57 @@ class Qobject implements ArrayAccess, IteratorAggregate, Countable, JsonSerializ
                 $this->$k = $v;
         }
     }
-    public function offsetExists($offset) {
+    function offsetExists($offset) {
         return isset($this->$offset);
     }
-    public function& offsetGet($offset) {
+    function& offsetGet($offset) {
         $x = null;
         if (property_exists($this, $offset))
             $x =& $this->$offset;
         return $x;
     }
-    public function offsetSet($offset, $value) {
+    function offsetSet($offset, $value) {
         $this->$offset = $value;
     }
-    public function offsetUnset($offset) {
+    function offsetUnset($offset) {
         unset($this->$offset);
     }
-    public function getIterator() {
+    function getIterator() {
         return new ArrayIterator(get_object_vars($this));
     }
-    public function __set($name, $value) {
+    function __set($name, $value) {
         $this->$name = $value;
     }
-    public function& __get($name) {
+    function& __get($name) {
         $x = null;
         if (property_exists($this, $name))
             $x =& $this->$name;
         return $x;
     }
-    public function __isset($name) {
+    function __isset($name) {
         return isset($this->$name);
     }
-    public function __unset($name) {
+    function __unset($name) {
         unset($this->$name);
     }
-    public function count() {
+    function get($name, $default = null) {
+        if (property_exists($this, $name))
+            $default = $this->$name;
+        return $default;
+    }
+    function count() {
         return count(get_object_vars($this));
     }
-    public function jsonSerialize() {
+    function jsonSerialize() {
         return get_object_vars($this);
     }
-    public function make_array() {
+    function make_array() {
         return get_object_vars($this);
     }
-    public function make_object() {
+    function make_object() {
         return (object) get_object_vars($this);
+    }
+    function contains($key) {
+        return property_exists($this, $offset);
     }
 }

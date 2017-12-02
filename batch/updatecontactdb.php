@@ -12,7 +12,7 @@ if (isset($arg["h"]) || isset($arg["help"])
            "Usage: php batch/updatecontactdb.php [-n CONFID] [--papers] [--users] [--collaborators]\n");
     exit($status);
 }
-if (!@$Opt["contactdb_dsn"]) {
+if (!opt("contactdb_dsn")) {
     fwrite(STDERR, "Conference has no contactdb_dsn\n");
     exit(1);
 }
@@ -22,39 +22,77 @@ $collaborators = isset($arg["collaborators"]);
 if (!$users && !$papers && !$collaborators)
     $users = $papers = true;
 
+$result = Dbl::ql(Contact::contactdb(), "select * from Conferences where `dbname`=?", $Conf->dbname);
+$confrow = Dbl::fetch_first_object($result);
+if (!$confrow) {
+    fwrite(STDERR, "Conference is not recorded in contactdb\n");
+    exit(1);
+}
+$confid = (int) $confrow->confid;
+if ($confrow->shortName !== $Conf->short_name || $confrow->longName !== $Conf->long_name)
+    Dbl::ql(Contact::contactdb(), "update Conferences set shortName=?, longName=? where confid=?", $Conf->short_name ? : $confrow->shortName, $Conf->long_name ? : $confrow->longName, $confid);
+
 if ($users) {
-    $result = Dbl::ql($Conf->dblink, "select ContactInfo.contactId, email from ContactInfo
-        left join PaperConflict on (PaperConflict.contactId=ContactInfo.contactId and PaperConflict.conflictType>=" . CONFLICT_AUTHOR . ")
-        left join PaperReview on (PaperReview.contactId=ContactInfo.contactId)
-        where roles!=0 or PaperConflict.conflictType is not null
-            or PaperReview.reviewId is not null
-        group by ContactInfo.contactId");
-    while (($row = edb_row($result))) {
-        $contact = Contact::find_by_id($row[0]);
-        $contact->contactdb_update();
+    // read current cdb roles
+    $result = Dbl::ql(Contact::contactdb(), "select Roles.*, email, password
+        from Roles
+        join ContactInfo using (contactDbId)
+        where confid=?", $confid);
+    $cdb_users = [];
+    while ($result && ($user = $result->fetch_object()))
+        $cdb_users[$user->email] = $user;
+    Dbl::free($result);
+
+    // read current db roles
+    Contact::$allow_nonexistent_properties = true;
+    $result = Dbl::ql($Conf->dblink, "select ContactInfo.contactId, email, firstName, lastName, unaccentedName, disabled, roles, password, passwordTime, passwordUseTime,
+        exists (select * from PaperConflict where contactId=ContactInfo.contactId and conflictType>=" . CONFLICT_AUTHOR . ") __isAuthor__,
+        exists (select * from PaperReview where contactId=ContactInfo.contactId) __hasReview__
+        from ContactInfo");
+    $cdbids = [];
+    $qv = [];
+    while (($contact = Contact::fetch($result, $Conf))) {
+        $cdbu = get($cdb_users, $contact->email);
+        $cdbid = $cdbu ? (int) $cdbu->contactDbId : 0;
+        $cdb_roles = $contact->contactdb_roles();
+        if ($cdbu
+            && ((int) $cdbu->disabled > 0) == $contact->disabled
+            && (int) $cdbu->roles === $cdb_roles)
+            /* skip */;
+        else if ($cdbu && $cdbu->password !== null)
+            $qv[] = [$cdbid, $confid, $cdb_roles, (int) $contact->disabled, $Now];
+        else
+            $cdbid = $contact->contactdb_update();
+        if ($cdbid)
+            $cdbids[] = $cdbid;
     }
     Dbl::free($result);
+
+    // perform role updates
+    if (!empty($qv))
+        Dbl::ql(Contact::contactdb(), "insert into Roles (contactDbId,confid,roles,disabled,updated_at) values ?v on duplicate key update roles=values(roles), disabled=values(disabled), updated_at=values(updated_at)", $qv);
+
+    // remove old roles
+    Dbl::ql(Contact::contactdb(), "delete from Roles where confid=? and contactDbId?A", $confid, $cdbids);
 }
 
 if ($papers) {
-    $result = Dbl::ql(Contact::contactdb(), "select confid from Conferences where `dbname`=?", $Opt["dbName"]);
-    $row = Dbl::fetch_first_row($result);
-    if (!$row) {
-        fwrite(STDERR, "Conference is not recored in contactdb\n");
-        exit(1);
+    $result = Dbl::ql($Conf->dblink, "select paperId, title, timeSubmitted from Paper");
+    $max_submitted = 0;
+    $pids = [];
+    $qv = [];
+    while (($row = edb_row($result))) {
+        $qv[] = [$confid, $row[0], $row[1]];
+        $pids[] = $row[0];
+        $max_submitted = max($max_submitted, (int) $row[2]);
     }
-    $confid = $row[0];
-
-    $result = Dbl::ql($Conf->dblink, "select paperId, title from Paper");
-    $q = array();
-    while (($row = edb_row($result)))
-        $q[] = "(" . $confid . "," . $row[0] . ",'" . sqlq($row[1]) . "')";
     Dbl::free($result);
 
-    for ($i = 0; $i < count($q); $i += 25) {
-        $xq = array_slice($q, $i, 25);
-        Dbl::ql_raw(Contact::contactdb(), "insert into ConferencePapers (confid,paperId,title) values " . join(",", $xq) . " on duplicate key update title=values(title)");
-    }
+    if (!empty($qv))
+        Dbl::ql(Contact::contactdb(), "insert into ConferencePapers (confid,paperId,title) values ?v on duplicate key update title=values(title)", $qv);
+    Dbl::ql(Contact::contactdb(), "delete from ConferencePapers where confid=? and paperId?A", $confid, $pids);
+    if ($confrow->last_submission_at != $max_submitted)
+        Dbl::ql(Contact::contactdb(), "update Conferences set last_submission_at=greatest(coalesce(last_submission_at,0), ?) where confid=?", $max_submitted, $confid);
 }
 
 if ($collaborators) {

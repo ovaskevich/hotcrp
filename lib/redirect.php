@@ -1,6 +1,6 @@
 <?php
 // redirect.php -- HotCRP redirection helper functions
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 function go($url = false) {
@@ -8,7 +8,6 @@ function go($url = false) {
 }
 
 function error_go($url, $message) {
-    global $Conf;
     if ($url === false)
         $url = hoturl("index");
     Conf::msg_error($message);
@@ -55,10 +54,8 @@ function ensure_session() {
     }
     session_name($sn);
     session_cache_limiter("");
-    if (isset($_COOKIE[$sn]) && !preg_match(';\A[-a-zA-Z0-9,]{1,128}\z;', $_COOKIE[$sn])) {
-        error_log("unexpected session ID <" . $_COOKIE[$sn] . ">");
+    if (isset($_COOKIE[$sn]) && !preg_match(';\A[-a-zA-Z0-9,]{1,128}\z;', $_COOKIE[$sn]))
         unset($_COOKIE[$sn]);
-    }
     session_start();
     return true;
 }

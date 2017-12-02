@@ -1,6 +1,6 @@
 <?php
 // home.php -- HotCRP home page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 require_once("src/initweb.php");
@@ -11,8 +11,8 @@ $password_class = "";
 // signin links
 // auto-signin when email & password set
 if (isset($_REQUEST["email"]) && isset($_REQUEST["password"])) {
-    $_REQUEST["action"] = defval($_REQUEST, "action", "login");
-    $_REQUEST["signin"] = defval($_REQUEST, "signin", "go");
+    $_REQUEST["action"] = get($_REQUEST, "action", "login");
+    $_REQUEST["signin"] = get($_REQUEST, "signin", "go");
 }
 // CSRF protection: ignore unvalidated signin/signout for known users
 if (!$Me->is_empty() && !check_post())
@@ -25,10 +25,10 @@ if (!isset($_REQUEST["email"]) || !isset($_REQUEST["action"]))
 // signout
 if (isset($_REQUEST["signout"]))
     LoginHelper::logout(true);
-else if (isset($_REQUEST["signin"]) && !isset($Opt["httpAuthLogin"]))
+else if (isset($_REQUEST["signin"]) && !$Conf->opt("httpAuthLogin"))
     LoginHelper::logout(false);
 // signin
-if (isset($Opt["httpAuthLogin"]))
+if ($Conf->opt("httpAuthLogin"))
     LoginHelper::check_http_auth();
 else if (isset($_REQUEST["signin"]))
     LoginHelper::check_login();
@@ -41,25 +41,27 @@ else if ((isset($_REQUEST["signin"]) || isset($_REQUEST["signout"]))
 if ($Me->is_empty() || isset($_REQUEST["signin"]))
     $_SESSION["testsession"] = true;
 
+// disabled users
+if (!$Me->is_empty() && $Me->disabled) {
+    $Conf->header("Account disabled", "home", false);
+    echo Conf::msg_info("Your account on this site has been disabled by an administrator. Please contact the site administrators with questions.");
+    echo "<hr class=\"c\" />\n";
+    $Conf->footer();
+    exit;
+}
+
 // perhaps redirect through account
 function need_profile_redirect($user) {
-    global $Conf, $Opt;
     if (!get($user, "firstName") && !get($user, "lastName"))
         return true;
-    if (get($Opt, "noProfileRedirect"))
+    if ($user->conf->opt("noProfileRedirect"))
         return false;
     if (!$user->affiliation)
         return true;
-    if ($user->is_pc_member() && !$user->has_review()) {
-        if (!$user->collaborators)
-            return true;
-        $tmap = $Conf->topic_map();
-        if (count($tmap)
-            && ($result = Dbl::qe("select count(topicId) from TopicInterest where contactId=$user->contactId"))
-            && ($row = edb_row($result))
-            && !$row[0])
-            return true;
-    }
+    if ($user->is_pc_member() && !$user->has_review()
+        && (!$user->collaborators
+            || ($user->conf->topic_map() && !$user->topic_interest_map())))
+        return true;
     return false;
 }
 
@@ -121,15 +123,14 @@ if ($Me->privChair)
 
 
 // Sidebar
-echo "<div class='homeside'>";
+echo '<div class="homeside">';
 
-echo "<noscript><div class='homeinside'>",
-    "<strong>HotCRP requires Javascript.</strong> ",
-    "Many features will work without Javascript, but not all.<br />",
-    "<a style='font-size:smaller' href='http://read.seas.harvard.edu/~kohler/hotcrp/'>Report bad compatibility problems</a></div></noscript>";
+echo '<noscript><div class="homeinside"><strong>This site requires JavaScript.</strong> ',
+    "Many features will work without JavaScript, but not all.<br />",
+    '<a style="font-size:smaller" href="https://github.com/kohler/hotcrp/">Report bad compatibility problems</a></div></noscript>';
 
 // Conference management and information sidebar
-echo '<div class="homeinside">';
+$inside_links = [];
 if ($Me->is_manager()) {
     $links = array();
     if ($Me->privChair) {
@@ -138,27 +139,30 @@ if ($Me->is_manager()) {
     }
     $links[] = '<a href="' . hoturl("autoassign") . '">Assignments</a>';
     $links[] = '<a href="' . hoturl("mail") . '">Mail</a>';
-    if ($Me->privChair)
-        $links[] = '<a href="' . hoturl("log") . '">Action log</a>';
-    echo "<h4>Administration</h4>\n  <ul style=\"margin-bottom:0.75em\">\n    <li>",
-        join("</li>\n    <li>", $links), "</li>\n  </ul>\n";
+    $links[] = '<a href="' . hoturl("log") . '">Action log</a>';
+    $inside_links[] = '<h4>Administration</h4><ul style="margin-bottom:0.75em">'
+        . '<li>' . join('</li><li>', $links) . '</li></ul>';
 }
 
 // Conference info sidebar
-echo "<h4>Conference information</h4>
-  <ul>\n";
-// Any deadlines set?
+$links = [];
 $sep = "";
 if ($Me->has_reportable_deadline())
-    echo '    <li><a href="', hoturl("deadlines"), '">Deadlines</a></li>', "\n";
-echo "    <li><a href='", hoturl("users", "t=pc"), "'>Program committee</a></li>\n";
-if (isset($Opt['conferenceSite']) && $Opt['conferenceSite'] != $Opt['paperSite'])
-    echo "    <li><a href='", $Opt['conferenceSite'], "'>Conference site</a></li>\n";
-if ($Conf->timeAuthorViewDecision()) {
+    $links[] = '<li><a href="' . hoturl("deadlines") . '">Deadlines</a></li>';
+if ($Me->can_view_pc())
+    $links[] = '<li><a href="' . hoturl("users", "t=pc") . '">Program committee</a></li>';
+if ($Conf->opt("conferenceSite")
+    && $Conf->opt("conferenceSite") != $Conf->opt("paperSite"))
+    $links[] = '<li><a href="' . $Conf->opt("conferenceSite") . '">Conference site</a></li>';
+if ($Conf->can_all_author_view_decision()) {
     list($n, $nyes) = $Conf->count_submitted_accepted();
-    echo "    <li>", plural($nyes, "paper"), " were accepted out of ", $n, " submitted.</li>\n";
+    $links[] = '<li>' . $Conf->_("%d papers accepted out of %d submitted.", $nyes, $n) . '</li>';
 }
-echo "  </ul>\n</div>\n";
+if (!empty($links))
+    $inside_links[] = '<h4>' . $Conf->_("Conference information") . '</h4><ul>' . join('', $links) . '</ul>';
+
+if (!empty($inside_links))
+    echo '<div class="homeinside">', join('', $inside_links), '</div>';
 
 echo "</div>\n\n";
 // End sidebar
@@ -171,17 +175,14 @@ if (($v = $Conf->message_html("home")))
 
 // Sign in
 if (!$Me->isPC) {
-    $confname = Conf::$gLongName;
-    if (Conf::$gShortName && Conf::$gShortName != Conf::$gLongName)
-        $confname .= " (" . Conf::$gShortName . ")";
     echo '<div class="homegrp">
-Welcome to the ', htmlspecialchars($confname), " submissions site.";
-    if (isset($Opt["conferenceSite"]))
-        echo " For general conference information, see <a href=\"", htmlspecialchars($Opt["conferenceSite"]), "\">", htmlspecialchars($Opt["conferenceSite"]), "</a>.";
+Welcome to the ', htmlspecialchars($Conf->full_name()), " submissions site.";
+    if ($Conf->opt("conferenceSite"))
+        echo " For general conference information, see <a href=\"", htmlspecialchars($Conf->opt("conferenceSite")), "\">", htmlspecialchars($Conf->opt("conferenceSite")), "</a>.";
     echo '</div>';
 }
 if (!$Me->has_email() || isset($_REQUEST["signin"])) {
-    echo "<div class=\"homegrp\">Sign in to submit or review papers.</div>";
+    echo '<div class="homegrp">', $Conf->_("Sign in to submit or review papers."), '</div>';
     $passwordFocus = ($email_class == "" && $password_class != "");
     echo '<hr class="home" />
 <div class="homegrp foldo" id="homeacct">',
@@ -189,16 +190,16 @@ if (!$Me->has_email() || isset($_REQUEST["signin"])) {
         '<div class="f-contain">';
     if ($Me->is_empty() || isset($_REQUEST["signin"]))
         echo Ht::hidden("testsession", 1);
-    if (get($Opt, "contactdb_dsn") && get($Opt, "contactdb_loginFormHeading"))
-        echo $Opt["contactdb_loginFormHeading"];
+    if ($Conf->opt("contactdb_dsn") && $Conf->opt("contactdb_loginFormHeading"))
+        echo $Conf->opt("contactdb_loginFormHeading");
     $password_reset = $Conf->session("password_reset");
     if ($password_reset && $password_reset->time < $Now - 900) {
         $password_reset = null;
         $Conf->save_session("password_reset", null);
     }
-    echo '<div class="f-ii">
+    echo '<div class="f-i">
   <div class="f-c', $email_class, '">',
-        (isset($Opt["ldapLogin"]) ? "Username" : "Email"),
+        ($Conf->opt("ldapLogin") ? "Username" : "Email"),
         '</div>
   <div class="f-e', $email_class, '">',
         Ht::entry("email", (isset($_REQUEST["email"]) ? $_REQUEST["email"] : ($password_reset ? $password_reset->email : "")),
@@ -212,8 +213,8 @@ if (!$Me->has_email() || isset($_REQUEST["signin"])) {
                      array("size" => 36, "tabindex" => 1, "id" => "signin_password")),
         "</div>\n</div>\n";
     if ($password_reset)
-        $Conf->echoScript("jQuery(function(){jQuery(\"#signin_password\").val(" . json_encode($password_reset->password) . ")})");
-    if (isset($Opt["ldapLogin"]))
+        echo Ht::unstash_script("jQuery(function(){jQuery(\"#signin_password\").val(" . json_encode_browser($password_reset->password) . ")})");
+    if ($Conf->opt("ldapLogin"))
         echo Ht::hidden("action", "login");
     else {
         echo "<div class='f-i'>\n  ",
@@ -224,7 +225,7 @@ if (!$Me->has_email() || isset($_REQUEST["signin"])) {
         echo Ht::radio("action", "new", false, array("tabindex" => 2)),
             "&nbsp;", Ht::label("I’m a new user and want to create an account");
         echo "\n</div>\n";
-        $Conf->footerScript("function login_type() {
+        Ht::stash_script("function login_type() {
     var act = jQuery(\"#homeacct input[name=action]:checked\")[0] || jQuery(\"#signin_action_login\")[0];
     fold(\"homeacct\", act.value != \"login\");
     var felt = act.value != \"login\" || !jQuery(\"#signin_email\").val().length;
@@ -237,12 +238,12 @@ jQuery(\"#homeacct input[name='action']\").on('click',login_type);jQuery(login_t
         Ht::submit("signin", "Sign in", array("tabindex" => 1, "id" => "signin_signin")),
         "</div></div></form>
 <hr class='home' /></div>\n";
-    $Conf->footerScript("crpfocus(\"login\", null, 2)");
+    Ht::stash_script("focus_within(\$(\"#login\"));window.scroll(0,0)");
 }
 
 
 // Submissions
-$papersub = $Conf->setting("papersub");
+$papersub = $Conf->has_any_submitted();
 $homelist = ($Me->privChair || ($Me->isPC && $papersub) || ($Me->is_reviewer() && $papersub));
 $home_hr = "<hr class=\"home\" />\n";
 $nhome_hr = 0;
@@ -281,7 +282,7 @@ function reviewTokenGroup($non_reviews) {
             "<h4>Review tokens: &nbsp;</h4>";
     else
         echo '<table id="foldrevtokens" class="', count($tokens) ? "fold2o" : "fold2c", '" style="display:inline-table">',
-            '<tr><td class="fn2"><a class="fn2" href="#" onclick="return foldup(this,event)">Add review tokens</a></td>',
+            '<tr><td class="fn2"><a class="ui fn2 js-foldup" href="#">Add review tokens</a></td>',
             '<td class="fx2">Review tokens: &nbsp;';
 
     echo Ht::form_div(hoturl_post("index")),
@@ -302,7 +303,7 @@ function reviewTokenGroup($non_reviews) {
 // Review assignment
 if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     echo ($nhome_hr ? $home_hr : ""), "<div class='homegrp' id='homerev'>\n";
-    $all_review_fields = ReviewForm::all_fields();
+    $all_review_fields = $Conf->all_review_fields();
     $merit_field = get($all_review_fields, "overAllMerit");
     $merit_noptions = $merit_field ? count($merit_field->options) : 0;
 
@@ -322,7 +323,8 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     and (reviewSubmitted is not null or timeSubmitted>0)
     group by PaperReview.reviewId>0");
     if (($myrow = edb_orow($result)))
-        $myrow->scores = scoreCounts($myrow->scores, $merit_noptions);
+        $myrow->mean_score = ScoreInfo::mean_of($myrow->scores, true);
+    Dbl::free($result);
 
     // Information about PC reviews
     $npc = $sumpcSubmit = $npcScore = $sumpcScore = 0;
@@ -331,17 +333,17 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
 	group_concat(overAllMerit) scores
 	from ContactInfo
 	left join PaperReview on (PaperReview.contactId=ContactInfo.contactId and PaperReview.reviewSubmitted is not null)
-        where (roles&" . Contact::ROLE_PC . ")!=0
+        where roles!=0 and (roles&" . Contact::ROLE_PC . ")!=0
 	group by ContactInfo.contactId");
         while (($row = edb_row($result))) {
             ++$npc;
             if ($row[0]) {
                 $sumpcSubmit += $row[0];
-                $scores = scoreCounts($row[1], $merit_noptions);
                 ++$npcScore;
-                $sumpcScore += $scores->avg;
+                $sumpcScore += ScoreInfo::mean_of($row[1], true);
             }
         }
+        Dbl::free($result);
     }
 
     // Overview
@@ -352,7 +354,7 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
         else
             echo "You have submitted ", $myrow->num_submitted, " of <a href=\"", hoturl("search", "q=&amp;t=r"), "\">", plural($myrow->num_needs_submit, "review"), "</a>";
         if ($merit_field && $merit_field->displayed && $myrow->num_submitted)
-            echo " with an average $merit_field->name_html score of ", $merit_field->unparse_average($myrow->scores->avg);
+            echo " with an average $merit_field->name_html score of ", $merit_field->unparse_average($myrow->mean_score);
         echo ".<br />\n";
     }
     if (($Me->isPC || $Me->privChair) && $npc) {
@@ -371,8 +373,11 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
         $missing_rounds = explode(",", $myrow->unsubmitted_rounds);
         sort($missing_rounds, SORT_NUMERIC);
         foreach ($missing_rounds as $round) {
-            if (($rname = $Conf->round_name($round, false)))
+            if (($rname = $Conf->round_name($round))) {
+                if (strlen($rname) == 1)
+                    $rname = "“{$rname}”";
                 $rname .= " ";
+            }
             if ($Conf->time_review($round, $Me->isPC, false)) {
                 $dn = $Conf->review_deadline($round, $Me->isPC, false);
                 $d = $Conf->printableTimeSetting($dn, "span");
@@ -401,8 +406,15 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     // Actions
     $sep = "";
     if ($myrow) {
-        echo $sep, foldbutton("re"), "<a href=\"", hoturl("search", "q=re%3Ame"), "\" title='Search in your reviews (more display and download options)'><strong>Your Reviews</strong></a>";
+        echo $sep, foldupbutton(), "<a href=\"", hoturl("search", "q=re%3Ame"), "\" title='Search in your reviews (more display and download options)'><strong>Your Reviews</strong></a>";
         $sep = $xsep;
+    }
+    if ($Me->is_requester() && $Conf->setting("extrev_approve") && $Conf->setting("pcrev_editdelegate")) {
+        $search = new PaperSearch($Me, "ext:approvable");
+        if ($search->paper_ids()) {
+            echo $sep, '<a href="', hoturl("paper", ["m" => "rea", "p" => "ext:approvable"]), '"><strong>Approve external reviews</strong></a>';
+            $sep = $xsep;
+        }
     }
     if ($Me->isPC && $Conf->has_any_lead_or_shepherd()
         && $Me->is_discussion_lead()) {
@@ -418,7 +430,7 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
         $sep = $xsep;
     }
     if ($Me->is_requester()) {
-        echo $sep, '<a href="', hoturl("mail", "monreq=1"), '">Monitor external reviews</a>';
+        echo $sep, '<a href="', hoturl("mail", "monreq=1"), '">Monitor requested reviews</a>';
         $sep = $xsep;
     }
     if ($Conf->setting("rev_tokens")) {
@@ -428,7 +440,7 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     }
 
     if ($myrow && $Conf->setting("rev_ratings") != REV_RATINGS_NONE) {
-        $badratings = PaperSearch::unusableRatings($Me->privChair, $Me->contactId);
+        $badratings = PaperSearch::unusableRatings($Me);
         $qx = (count($badratings) ? " and not (PaperReview.reviewId in (" . join(",", $badratings) . "))" : "");
         $result = Dbl::qe_raw("select rating, count(PaperReview.reviewId) from PaperReview join ReviewRating on (PaperReview.contactId=$Me->contactId and PaperReview.reviewId=ReviewRating.reviewId$qx) group by rating order by rating desc");
         if (edb_nrows($result)) {
@@ -447,19 +459,21 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     }
 
     if ($Me->has_review()) {
-        $plist = new PaperList(new PaperSearch($Me, ["q" => "re:me"]), ["list" => true]);
-        $ptext = $plist->table_html("reviewerHome");
+        $plist = new PaperList(new PaperSearch($Me, ["q" => "re:me"]));
+        $plist->set_table_id_class(null, "pltable_reviewerhome");
+        $ptext = $plist->table_html("reviewerHome", ["list" => true]);
         if ($plist->count > 0)
             echo "<div class='fx'><div class='g'></div>", $ptext, "</div>";
     }
 
     if ($Me->is_reviewer()) {
-        echo "<div class=\"homegrp fold20c\" id=\"homeactivity\" data-fold=\"true\" data-fold-session=\"foldhomeactivity\" data-onunfold=\"unfold_events(this)\">",
-            foldbutton("homeactivity", 20),
-            "<h4><a href=\"#\" onclick=\"return foldup(this,event,{n:20})\" class=\"x homeactivity\">Recent activity<span class='fx20'>:</span></a></h4>",
+        echo "<div class=\"homegrp fold20c\" id=\"homeactivity\" data-fold=\"true\" data-fold-session=\"foldhomeactivity\">",
+            foldupbutton(20),
+            "<h4><a class=\"x ui homeactivity js-foldup\" href=\"#\" data-fold-target=\"20\">Recent activity<span class='fx20'>:</span></a></h4>",
             "</div>";
+        Ht::stash_script('$("#homeactivity").on("fold", function(e,opts) { opts.f || unfold_events(this); })');
         if (!$Conf->session("foldhomeactivity", 1))
-            $Conf->footerScript("foldup(jQuery(\"#homeactivity\")[0],null,{n:20})");
+            Ht::stash_script("foldup.call(\$(\"#homeactivity\")[0],null,20)");
     }
 
     echo "</div>\n";
@@ -479,32 +493,32 @@ if ($Me->is_author() || $Conf->timeStartPaper() > 0 || $Me->privChair
 
     $startable = $Conf->timeStartPaper();
     if ($startable && !$Me->has_email())
-        echo "<span class='deadline'>", $Conf->printableDeadlineSetting("sub_reg", "span"), "</span><br />\n<small>You must sign in to register papers.</small>";
+        echo "<span class='deadline'>", $Conf->printableDeadlineSetting("sub_reg", "span"), "</span><br />\n<small>You must sign in to start a submission.</small>";
     else if ($startable || $Me->privChair) {
-        echo "<strong><a href='", hoturl("paper", "p=new"), "'>Start new paper</a></strong> <span class='deadline'>(", $Conf->printableDeadlineSetting("sub_reg", "span"), ")</span>";
+        echo "<strong><a href='", hoturl("paper", "p=new"), "'>New submission</a></strong> <span class='deadline'>(", $Conf->printableDeadlineSetting("sub_reg", "span"), ")</span>";
         if ($Me->privChair)
-            echo "<br />\n<span class='hint'>As an administrator, you can start a paper regardless of deadlines and on behalf of others.</span>";
+            echo "<br />\n<span class='hint'>As an administrator, you can start a submission regardless of deadlines and on behalf of others.</span>";
     }
 
     $plist = null;
     if ($Me->is_author()) {
-        $plist = new PaperList(new PaperSearch($Me, ["t" => "a"]), ["list" => true]);
-        $ptext = $plist->table_html("authorHome", array("noheader" => true));
+        $plist = new PaperList(new PaperSearch($Me, ["t" => "a"]));
+        $ptext = $plist->table_html("authorHome", ["noheader" => true, "list" => true]);
         if ($plist->count > 0)
             echo "<div class='g'></div>\n", $ptext;
     }
 
     $deadlines = array();
-    if ($plist && $plist->any->need_submit) {
+    if ($plist && $plist->has("need_submit")) {
         if (!$Conf->timeFinalizePaper()) {
             // Be careful not to refer to a future deadline; perhaps an admin
             // just turned off submissions.
             if ($Conf->deadlinesBetween("", "sub_sub", "sub_grace"))
                 $deadlines[] = "The site is not open for submissions at the moment.";
             else
-                $deadlines[] = "The <a href='" . hoturl("deadlines") . "'>deadline</a> for submitting papers has passed.";
+                $deadlines[] = "The <a href='" . hoturl("deadlines") . "'>submission deadline</a> has passed.";
         } else if (!$Conf->timeUpdatePaper()) {
-            $deadlines[] = "The <a href='" . hoturl("deadlines") . "'>deadline</a> for updating papers has passed, but you can still submit.";
+            $deadlines[] = "The <a href='" . hoturl("deadlines") . "'>update deadline</a> has passed, but you can still submit.";
             $time = $Conf->printableTimeSetting("sub_sub", "span", " to submit papers");
             if ($time != "N/A")
                 $deadlines[] = "You have until $time.";
@@ -516,14 +530,15 @@ if ($Me->is_author() || $Conf->timeStartPaper() > 0 || $Me->privChair
     }
     if (!$startable && !count($deadlines)) {
         if ($Conf->deadlinesAfter("sub_open"))
-            $deadlines[] = "The <a href='" . hoturl("deadlines") . "'>deadline</a> for registering new papers has passed.";
+            $deadlines[] = "The <a href='" . hoturl("deadlines") . "'>deadline</a> for registering submissions has passed.";
         else
             $deadlines[] = "The site is not open for submissions at the moment.";
     }
-    if ($plist && $Conf->timeSubmitFinalPaper() && $plist->any->accepted) {
+    // NB only has("accepted") if author can see an accepted paper
+    if ($plist && $plist->has("accepted")) {
         $time = $Conf->printableTimeSetting("final_soft");
-        if ($Conf->deadlinesAfter("final_soft") && $plist->any->need_final)
-            $deadlines[] = "<strong class='overdue'>Final versions are overdue.</strong>  They were requested by $time.";
+        if ($Conf->deadlinesAfter("final_soft") && $plist->has("need_final"))
+            $deadlines[] = "<strong class='overdue'>Final versions are overdue.</strong> They were requested by $time.";
         else if ($time != "N/A")
             $deadlines[] = "Submit final versions of your accepted papers by $time.";
     }

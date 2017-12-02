@@ -1,6 +1,6 @@
 <?php
 // test02.php -- HotCRP S3 and database unit tests
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 global $ConfSitePATH;
@@ -46,6 +46,48 @@ xassert_eqq(Dbl::format_query_apply("select ?{2}, ?{1}, ?, ?s, ?s, ?s, ?",
 xassert_eqq(Dbl::format_query_apply("select ?{2}, ?{1}, ?{ab}, ?{2}s, ?{1}s, ?{ab}s, ?",
                                     array(1, "a", "ab" => "Woah", "Leftover")),
             "select 'a', 1, 'Woah', a, 1, Woah, 'Leftover'");
+xassert_eqq(Dbl::format_query("select a?e, b?e, c?e, d?e", null, 1, 2.1, "e"),
+            "select a IS NULL, b=1, c=2.1, d='e'");
+xassert_eqq(Dbl::format_query("select a?E, b?E, c?E, d?E", null, 1, 2.1, "e"),
+            "select a IS NOT NULL, b!=1, c!=2.1, d!='e'");
+xassert_eqq(Dbl::format_query("insert ?v", [1, 2, 3]),
+            "insert (1), (2), (3)");
+xassert_eqq(Dbl::format_query("insert ?v", [[1, null], [2, "A"], ["b", 0.1]]),
+            "insert (1,NULL), (2,'A'), ('b',0.1)");
+
+// Dbl::compare_and_swap test
+Dbl::qe("insert into Settings set name='cmpxchg', value=1");
+xassert_eqq(Dbl::fetch_ivalue("select value from Settings where name='cmpxchg'"), 1);
+xassert_eqq(Dbl::compare_and_swap(Dbl::$default_dblink,
+                                  "select value from Settings where name=?", ["cmpxchg"],
+                                  function ($x) { return $x + 1; },
+                                  "update Settings set value=?{desired} where name=? and value=?{expected}", ["cmpxchg"]),
+            2);
+xassert_eqq(Dbl::fetch_ivalue("select value from Settings where name='cmpxchg'"), 2);
+xassert_eqq(Dbl::compare_and_swap(Dbl::$default_dblink,
+                                  "select value from Settings where name=?", ["cmpxchg"],
+                                  function ($x) { return $x + 1; },
+                                  "update Settings set value?{desired}e where name=? and value?{expected}e", ["cmpxchg"]),
+            3);
+xassert_eqq(Dbl::fetch_ivalue("select value from Settings where name='cmpxchg'"), 3);
+
+// DocumentInfo::update_metadata test
+$paper1 = $Conf->paperRow(1, $Conf->user_by_email("chair@_.com"));
+$doc = $paper1->document(DTYPE_SUBMISSION);
+xassert(!!$doc);
+xassert_eqq($doc->metadata(), null);
+xassert($doc->update_metadata(["hello" => 1]));
+xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
+            '{"hello":1}');
+xassert($doc->update_metadata(["hello" => 2, "foo" => "bar"]));
+xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
+            '{"hello":2,"foo":"bar"}');
+xassert($doc->update_metadata(["hello" => null]));
+xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
+            '{"foo":"bar"}');
+xassert(!$doc->update_metadata(["too_long" => str_repeat("!", 32768)], true));
+xassert_eqq(Dbl::fetch_value("select infoJson from PaperStorage where paperStorageId=?", $doc->paperStorageId),
+            '{"foo":"bar"}');
 
 // Csv::split_lines tests
 xassert_array_eqq(CsvParser::split_lines(""),
@@ -63,6 +105,10 @@ xassert_array_eqq(CsvParser::split_lines("\r\naaa"),
 xassert_array_eqq(CsvParser::split_lines("\na\r\nb\rc\n"),
                   array("\n", "a\r\n", "b\r", "c\n"));
 
+// numrangejoin tests
+xassert_eqq(numrangejoin([1, 2, 3, 4, 6, 8]), "1–4, 6, and 8");
+xassert_eqq(numrangejoin(["#1", "#2", "#3", 4, "xx6", "xx7", 8]), "#1–3, 4, xx6–7, and 8");
+
 // random PHP behavior tests
 if (PHP_MAJOR_VERSION >= 7)
     xassert_eqq(substr("", 0, 1), ""); // UGH
@@ -76,6 +122,9 @@ xassert_eqq(json_encode(Json::decode("{}")), "{}");
 xassert_eqq(json_encode(Json::decode('"\\u0030"')), '"0"');
 xassert_eqq(Json::encode("\n"), '"\\n"');
 xassert_eqq(Json::encode("\007"), '"\\u0007"');
+xassert_eqq(Json::encode("–"), '"–"');
+xassert_eqq(Json::decode(Json::encode("–")), "–");
+xassert_eqq(Json::decode(Json::encode("\xE2\x80\xA8\xE2\x80\xA9")), "\xE2\x80\xA8\xE2\x80\xA9");
 xassert_eqq(json_encode(Json::decode('{"1":"1"}')), '{"1":"1"}');
 $x = Json::decode_landmarks('{
     "a": ["b", "c"],
@@ -87,6 +136,34 @@ xassert_match($x->a[0], ",^x.txt:2(?::|\$),");
 xassert_match($x->a[1], ",^x.txt:2(?::|\$),");
 xassert_match($x->b->c, ",^x.txt:4(?::|\$),");
 xassert_match($x->b->__LANDMARK__, ",^x.txt:3(?::|\$),");
+xassert_eqq(Json::decode("[1-2]"), null);
+xassert_eqq(json_decode("[1-2]"), null);
+xassert_eqq(Json::decode("[1,2,3-4,5,6-10,11]"), null);
+xassert_eqq(json_decode("[1,2,3-4,5,6-10,11]"), null);
+
+xassert_eqq(json_encode(json_object_replace(null, ["a" => 1])), '{"a":1}');
+xassert_eqq(json_encode(json_object_replace(["a" => 1], ["a" => 2])), '{"a":2}');
+xassert_eqq(json_encode(json_object_replace((object) ["a" => 1], ["a" => 2])), '{"a":2}');
+xassert_eqq(json_encode(json_object_replace((object) ["a" => 1], ["a" => null])), '{}');
+xassert_eqq(json_encode(json_object_replace((object) ["a" => 1], ["a" => null], true)), 'null');
+
+$j = json_encode_db("\xE2\x80\xA8");
+xassert($j === "\"\xE2\x80\xA8\"" || $j === "\"\\u2028\"");;
+xassert_eqq(json_encode_browser("\xE2\x80\xA8"), "\"\\u2028\"");
+xassert_eqq(json_encode_db("å"), "\"å\"");
+$j = json_encode_browser("å");
+xassert($j === "\"\\u00e5\"" || $j === "\"å\"");;
+$j = json_encode_db("å\xE2\x80\xA8");
+xassert($j === "\"å\xE2\x80\xA8\"" || $j === "\"å\\u2028\"");
+$j = json_encode_browser("å\xE2\x80\xA8");
+xassert($j === "\"\\u00e5\\u2028\"" || $j === "\"å\\u2028\"");;
+
+// SessionList tests
+xassert_eqq(json_encode(SessionList::decode_ids("[1-2]")), "[1,2]");
+xassert_eqq(json_encode(SessionList::decode_ids("[1,2,3-4,5,6-10,11]")), "[1,2,3,4,5,6,7,8,9,10,11]");
+xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([1,2]))), "[1,2]");
+xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([1,2,3,4,5,6,7,8,9,10,11]))), "[1,2,3,4,5,6,7,8,9,10,11]");
+xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([1,3,5,7,9,10,11]))), "[1,3,5,7,9,10,11]");
 
 // obscure_time tests
 $t = $Conf->parse_time("1 Sep 2010 00:00:01");
@@ -106,13 +183,41 @@ foreach ([1 => "A", 26 => "Z", 27 => "AA", 28 => "AB", 51 => "AY", 52 => "AZ",
     xassert_eqq(parseReviewOrdinal($t), $n);
 }
 
-// ReviewField::make_abbreviation tests
-xassert_eqq(ReviewField::make_abbreviation("novelty", 0, 0), "Nov");
-xassert_eqq(ReviewField::make_abbreviation("novelty is an amazing", 0, 0), "NovIsAma");
-xassert_eqq(ReviewField::make_abbreviation("novelty is an AWESOME", 0, 0), "NovIsAWESOME");
-xassert_eqq(ReviewField::make_abbreviation("novelty isn't an AWESOME", 0, 0), "NovIsnAWESOME");
-xassert_eqq(ReviewField::make_abbreviation("novelty isn't an AWESOME", 0, 1), "novelty-isnt-awesome");
-xassert_eqq(ReviewField::make_abbreviation("_format", 0, 1), "format");
+// preference tests
+xassert_eqq(Preference_AssignmentParser::parse("--2"), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse("--3 "), [-3, null]);
+xassert_eqq(Preference_AssignmentParser::parse("\"--2\""), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse("\"-2-\""), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse("`-2-`"), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse(" - 2"), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse(" – 2"), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse(" — 2"), [-2, null]);
+xassert_eqq(Preference_AssignmentParser::parse(" — 2--"), null);
+xassert_eqq(Preference_AssignmentParser::parse("+0.2"), [0, null]);
+xassert_eqq(Preference_AssignmentParser::parse("-2x"), [-2, 1]);
+xassert_eqq(Preference_AssignmentParser::parse("-2     Y"), [-2, 0]);
+xassert_eqq(Preference_AssignmentParser::parse("- - - -Y"), null);
+xassert_eqq(Preference_AssignmentParser::parse("- - - -"), [-4, null]);
+xassert_eqq(Preference_AssignmentParser::parse("++"), [2, null]);
+xassert_eqq(Preference_AssignmentParser::parse("+ 2+"), [2, null]);
+xassert_eqq(Preference_AssignmentParser::parse("xsaonaif"), null);
+xassert_eqq(Preference_AssignmentParser::parse("NONE"), [0, null]);
+xassert_eqq(Preference_AssignmentParser::parse("CONFLICT"), [-100, null]);
+
+// AbbreviationMatcher::make_abbreviation tests
+xassert_eqq(AbbreviationMatcher::make_abbreviation("novelty", new AbbreviationClass), "Nov");
+xassert_eqq(AbbreviationMatcher::make_abbreviation("novelty is an amazing", new AbbreviationClass), "NovIsAma");
+xassert_eqq(AbbreviationMatcher::make_abbreviation("novelty is an AWESOME", new AbbreviationClass), "NovIsAWESOME");
+xassert_eqq(AbbreviationMatcher::make_abbreviation("novelty isn't an AWESOME", new AbbreviationClass), "NovIsnAWESOME");
+$aclass = new AbbreviationClass;
+$aclass->type = AbbreviationClass::TYPE_LOWERDASH;
+xassert_eqq(AbbreviationMatcher::make_abbreviation("novelty isn't an AWESOME", $aclass), "novelty-isnt-awesome");
+xassert_eqq(AbbreviationMatcher::make_abbreviation("_format", $aclass), "format");
+
+// simplify_whitespace
+xassert_eqq(simplify_whitespace("abc def GEH îjk"), "abc def GEH îjk");
+xassert_eqq(simplify_whitespace("\x7Fabc\x7Fdef       GEH îjk"), "abc def GEH îjk");
+xassert_eqq(simplify_whitespace("A.\n\n\x1DEEE MM\n\n\n\n"), "A. EEE MM");
 
 // utf8_word_prefix, etc. tests
 xassert_eqq(UnicodeHelper::utf8_prefix("aaaaaaaa", 7), "aaaaaaa");
@@ -132,6 +237,45 @@ xassert_eqq(UnicodeHelper::utf8_glyphlen("aaaaaaaa"), 8);
 xassert_eqq(UnicodeHelper::utf8_glyphlen("áááááááá"), 8);
 xassert_eqq(UnicodeHelper::utf8_glyphlen("a̓a̓a̓a̓a̓a̓a̓a̓"), 8);
 
+// mojibake
+xassert_eqq(UnicodeHelper::demojibake("å"), "å");
+xassert_eqq(UnicodeHelper::demojibake("Â£"), "£");
+xassert_eqq(UnicodeHelper::demojibake("Â£"), "£");
+xassert_eqq(UnicodeHelper::demojibake("LÃ¡szlÃ³ MolnÃ¡r"), "László Molnár");
+xassert_eqq(UnicodeHelper::demojibake("László Molnár"), "László Molnár");
+
+// utf8 cleanup
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid(""), "");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("abc"), "abc");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("\x80bc"), "\x80bc");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xc3\xa5"), "abå");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xc3"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xa5"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xe4\xba\x9c"), "ab亜");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xe4\xba"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xe4"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xf0\x9d\x84\x9e"), "ab𝄞");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xf0\x9d\x84"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xf0\x9d"), "ab");
+xassert_eqq(UnicodeHelper::utf8_truncate_invalid("ab\xf0"), "ab");
+
+xassert_eqq(UnicodeHelper::utf8_replace_invalid(""), "");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("abc"), "abc");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("\x80bc"), "\x7fbc");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xc3\xa5"), "abå");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xc3"), "ab\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xa5"), "ab\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab"), "ab");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xe4\xba\x9c"), "ab亜");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xe4\xba"), "ab\x7f\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xe4"), "ab\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xf0\x9d\x84\x9e"), "ab𝄞");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xf0\x9d\x84"), "ab\x7f\x7f\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xf0\x9d"), "ab\x7f\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xf0"), "ab\x7f");
+xassert_eqq(UnicodeHelper::utf8_replace_invalid("ab\xf0å"), "ab\x7få");
+
 xassert_eqq(prefix_word_wrap("+ ", "This is a thing to be wrapped.", "- ", 10),
             "+ This is\n- a thing\n- to be\n- wrapped.\n");
 xassert_eqq(prefix_word_wrap("+ ", "This is a thing to be wrapped.", "- ", 9),
@@ -149,10 +293,54 @@ xassert_eqq(json_encode($do[1]), "[[0,0],[1,2],[3,5],[5,8],[7,11],[9,14],[14,21]
 $regex = (object) ["preg_raw" => Text::word_regex("foo"), "preg_utf8" => Text::utf8_word_regex("foo")];
 xassert_eqq(Text::highlight("Is foo bar føo bar fóó bar highlit right? foö", $regex),
             "Is <span class=\"match\">foo</span> bar <span class=\"match\">føo</span> bar <span class=\"match\">fóó</span> bar highlit right? <span class=\"match\">foö</span>");
+xassert_eqq(UnicodeHelper::remove_f_ligatures("Héllo ﬀ,ﬁ:fi;ﬂ,ﬃ:ﬄ-ﬅ"), "Héllo ff,fi:fi;fl,ffi:ffl-ﬅ");
 
+// match_pregexes tests
+$pregex = Text::star_text_pregexes("foo");
+xassert(Text::match_pregexes($pregex, "foo", false));
+xassert(Text::match_pregexes($pregex, "foo", "foo"));
+xassert(Text::match_pregexes($pregex, "fóo", "foo"));
+xassert(!Text::match_pregexes($pregex, "foobar", false));
+xassert(!Text::match_pregexes($pregex, "foobar", "foobar"));
+xassert(!Text::match_pregexes($pregex, "fóobar", "foobar"));
 
-// Qobject tests
-$q = new Qobject(["a" => 1, "b" => 2]);
+$pregex = Text::star_text_pregexes("foo*");
+xassert(Text::match_pregexes($pregex, "foo", false));
+xassert(Text::match_pregexes($pregex, "foo", "foo"));
+xassert(Text::match_pregexes($pregex, "fóo", "foo"));
+xassert(Text::match_pregexes($pregex, "foobar", false));
+xassert(Text::match_pregexes($pregex, "foobar", "foobar"));
+xassert(Text::match_pregexes($pregex, "fóobar", "foobar"));
+xassert(!Text::match_pregexes($pregex, "ffoobar", false));
+xassert(!Text::match_pregexes($pregex, "ffoobar", "ffoobar"));
+xassert(!Text::match_pregexes($pregex, "ffóobar", "ffoobar"));
+
+$pregex = Text::star_text_pregexes("foo@butt.com");
+xassert(Text::match_pregexes($pregex, "it's foo@butt.com and friends", false));
+xassert(Text::match_pregexes($pregex, "it's foo@butt.com and friends", "it's foo@butt.com and friends"));
+xassert(Text::match_pregexes($pregex, "it's fóo@butt.com and friends", "it's foo@butt.com and friends"));
+
+// CountMatcher tests
+xassert_eqq(CountMatcher::filter_using([0, 1, 2, 3], ">0"), [1 => 1, 2 => 2, 3 => 3]);
+xassert_eqq(CountMatcher::filter_using([3, 2, 1, 0], [1]), [2 => 1]);
+xassert_eqq(CountMatcher::filter_using([10, 11, -10], "≤10"), [0 => 10, 2 => -10]);
+
+// simple_search tests
+xassert_eqq(Text::simple_search("yes", ["yes", "no", "yes-really"]), ["yes"]);
+xassert_eqq(Text::simple_search("yes", ["yes", "no", "yes-really"], Text::SEARCH_UNPRIVILEGE_EXACT), ["yes", 2 => "yes-really"]);
+xassert_eqq(Text::simple_search("yes", ["yes", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), ["yes"]);
+xassert_eqq(Text::simple_search("yes", ["yes-maybe", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), []);
+xassert_eqq(Text::simple_search("yes", ["yes-maybe", "no", "yes-really"], 0), ["yes-maybe", 2 => "yes-really"]);
+xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"]), ["yes"]);
+xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"], Text::SEARCH_UNPRIVILEGE_EXACT), ["yes", 2 => "yes-really"]);
+xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), ["yes"]);
+xassert_eqq(Text::simple_search("Yes", ["yes-maybe", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), []);
+xassert_eqq(Text::simple_search("Yes", ["yes-maybe", "no", "yes-really"], 0), ["yes-maybe", 2 => "yes-really"]);
+xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"], Text::SEARCH_CASE_SENSITIVE), []);
+xassert_eqq(Text::simple_search("Yes", ["yes", "no", "Yes-really"], Text::SEARCH_CASE_SENSITIVE), [2 => "Yes-really"]);
+
+// Qrequest tests
+$q = new Qrequest("GET", ["a" => 1, "b" => 2]);
 xassert_eqq($q->a, 1);
 xassert_eqq($q->b, 2);
 xassert_eqq(count($q), 2);
@@ -175,7 +363,7 @@ xassert(!Contact::is_anonymous_email("anonymous@example.com"));
 xassert(!Contact::is_anonymous_email("example@anonymous"));
 
 // Mailer::allow_send tests
-$Opt["sendEmail"] = true;
+$Conf->set_opt("sendEmail", true);
 xassert(Mailer::allow_send("ass@butt.com"));
 xassert(Mailer::allow_send("ass@example.edu"));
 xassert(!Mailer::allow_send("ass"));
@@ -187,7 +375,7 @@ xassert(!Mailer::allow_send("ass@example.net"));
 xassert(!Mailer::allow_send("ass@Example.com"));
 xassert(!Mailer::allow_send("ass@Example.ORG"));
 xassert(!Mailer::allow_send("ass@Example.net"));
-$Opt["sendEmail"] = false;
+$Conf->set_opt("sendEmail", false);
 xassert(!Mailer::allow_send("ass@butt.com"));
 xassert(!Mailer::allow_send("ass@example.edu"));
 
@@ -203,5 +391,317 @@ xassert_eqq($ns->make_absolute("/foo/bar/baz"), "http://butt.com/foo/bar/baz");
 xassert_eqq($ns->make_absolute("after/path"), "http://butt.com/fart/barf/after/path");
 xassert_eqq($ns->make_absolute("../after/path"), "http://butt.com/fart/after/path");
 xassert_eqq($ns->make_absolute("?confusion=20"), "http://butt.com/fart/barf/?confusion=20");
+
+// other helpers
+xassert_eqq(ini_get_bytes(null, "1"), 1);
+xassert_eqq(ini_get_bytes(null, "1 M"), 1 * (1 << 20));
+xassert_eqq(ini_get_bytes(null, "1.2k"), 1229);
+xassert_eqq(ini_get_bytes(null, "20G"), 20 * (1 << 30));
+
+// name splitting
+xassert_eqq(get(Text::split_name("Bob Kennedy"), 0), "Bob");
+xassert_eqq(get(Text::split_name("Bob Kennedy"), 1), "Kennedy");
+xassert_eqq(get(Text::split_name("Bob Kennedy (Butt Pants)"), 0), "Bob");
+xassert_eqq(get(Text::split_name("Bob Kennedy (Butt Pants)"), 1), "Kennedy (Butt Pants)");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Esq."), 0), "Bob");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Esq."), 1), "Kennedy, Esq.");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Esq. (Butt Pants)"), 0), "Bob");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Esq. (Butt Pants)"), 1), "Kennedy, Esq. (Butt Pants)");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Jr., Esq."), 0), "Bob");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Jr., Esq."), 1), "Kennedy, Jr., Esq.");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Jr., Esq. (Butt Pants)"), 0), "Bob");
+xassert_eqq(get(Text::split_name("Bob Kennedy, Jr., Esq. (Butt Pants)"), 1), "Kennedy, Jr., Esq. (Butt Pants)");
+xassert_eqq(get(Text::split_name("Kennedy, Bob, Jr., Esq."), 0), "Bob");
+xassert_eqq(get(Text::split_name("Kennedy, Bob, Jr., Esq."), 1), "Kennedy, Jr., Esq.");
+xassert_eqq(get(Text::split_name("Kennedy, Bob, Jr., Esq. (Butt Pants)"), 0), "Bob");
+xassert_eqq(get(Text::split_name("Kennedy, Bob, Jr., Esq. (Butt Pants)"), 1), "Kennedy, Jr., Esq. (Butt Pants)");
+xassert_eqq(get(Text::split_name("Kennedy, Bob"), 0), "Bob");
+xassert_eqq(get(Text::split_name("Kennedy, Bob"), 1), "Kennedy");
+xassert_eqq(get(Text::split_name("Kennedy, Bob (Butt Pants)"), 0), "Bob (Butt Pants)");
+xassert_eqq(get(Text::split_name("Kennedy, Bob (Butt Pants)"), 1), "Kennedy");
+
+// author matching
+$aum = new PaperInfo_AuthorMatcher("ETH Zürich");
+xassert_eqq($aum->test("Butt (ETH Zürich)"), true);
+xassert_eqq($aum->test("Butt (University of Zürich)"), false);
+xassert_eqq($aum->test("Butt (ETHZ)"), true);
+$aum = new PaperInfo_AuthorMatcher("Massachusetts Institute of Technology");
+xassert_eqq($aum->test("Butt (Massachusetts Institute of Technology)"), true);
+xassert_eqq($aum->test("Butt (MIT)"), true);
+xassert_eqq($aum->test("Butt (M.I.T.)"), true);
+xassert_eqq($aum->test("Butt (Indian Institute of Technology)"), false);
+xassert_eqq($aum->test("Butt (Institute of Technology)"), false);
+$aum = new PaperInfo_AuthorMatcher("M.I.T.");
+xassert_eqq($aum->test("Butt (Massachusetts Institute of Technology)"), true);
+xassert_eqq($aum->test("Butt (MIT)"), true);
+xassert_eqq($aum->test("Butt (M.I.T.)"), true);
+xassert_eqq($aum->test("Butt (Indian Institute of Technology)"), false);
+xassert_eqq($aum->test("Butt (Institute of Technology)"), false);
+$aum = new PaperInfo_AuthorMatcher("Indian Institute of Science");
+xassert_eqq($aum->test("Butt (Institute of Technology)"), false);
+xassert_eqq($aum->test("Butt (Indian Institute of Technology)"), false);
+xassert_eqq($aum->test("Butt (Indian Institute of Science)"), true);
+$aum = new PaperInfo_AuthorMatcher("D. Thin (Captain Poop)");
+xassert_eqq($aum->test("D. Thin"), true);
+xassert_eqq($aum->test("D.X. Thin"), true);
+xassert_eqq($aum->test("D. X. Thin"), true);
+xassert_eqq($aum->test("X.D. Thin"), true);
+xassert_eqq($aum->test("X. D. Thin"), true);
+xassert_eqq($aum->test("Xavier Thin"), false);
+xassert_eqq($aum->test("Daniel Thin"), true);
+xassert_eqq($aum->test("Daniel X. Thin"), true);
+xassert_eqq($aum->test("Daniel X. Thin (Lieutenant)"), true);
+xassert_eqq($aum->test("Daniel X. Think (Lieutenant)"), false);
+xassert_eqq($aum->test("D. X. Think (Lieutenant)"), false);
+xassert_eqq($aum->test("D. X. Think (Lieutenant)"), false);
+xassert_eqq($aum->test("Someone Else (Captain Poop)"), false);
+$aum = new PaperInfo_AuthorMatcher("Daniel Thin (Captain Poop)");
+xassert_eqq($aum->test("D. Thin"), true);
+xassert_eqq($aum->test("D.X. Thin"), true);
+xassert_eqq($aum->test("D. X. Thin"), true);
+xassert_eqq($aum->test("X.D. Thin"), true);
+xassert_eqq($aum->test("X. D. Thin"), true);
+xassert_eqq($aum->test("Xavier Thin"), false);
+xassert_eqq($aum->test("Daniel Thin"), true);
+xassert_eqq($aum->test("Daniel X. Thin"), true);
+xassert_eqq($aum->test("Daniel X. Thin (Lieutenant)"), true);
+xassert_eqq($aum->test("Daniel X. Think (Lieutenant)"), false);
+xassert_eqq($aum->test("D. X. Think (Lieutenant)"), false);
+xassert_eqq($aum->test("D. X. Think (Lieutenant)"), false);
+xassert_eqq($aum->test("Someone Else (Captain Poop)"), false);
+$aum = new PaperInfo_AuthorMatcher("Stephen J. Pink");
+xassert_eqq($aum->test("IBM T. J. Watson Research Center"), false);
+$aum = new PaperInfo_AuthorMatcher("IBM Watson");
+xassert_eqq($aum->test("Fart (IBM Watson)"), true);
+xassert_eqq($aum->test("Fart (IBM T. J. Watson Research Center)"), true);
+$aum = new PaperInfo_AuthorMatcher("IBM T. J. Watson Research Center");
+xassert_eqq($aum->test("Fart (IBM Watson)"), true);
+xassert_eqq($aum->test("Fart (IBM T. J. Watson Research Center)"), true);
+$aum = new PaperInfo_AuthorMatcher("UCSD");
+xassert_eqq($aum->test("Butt (UCSD)"), true);
+xassert_eqq($aum->test("Butt (UCSB)"), false);
+xassert_eqq($aum->test("Butt (University of California San Diego)"), true);
+xassert_eqq($aum->test("Butt (University of California, San Diego)"), true);
+xassert_eqq($aum->test("Butt (University of California Santa Barbara)"), false);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+xassert_eqq($aum->test("Butt (UC Santa Barbara)"), false);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+$aum = new PaperInfo_AuthorMatcher("UC San Diego");
+xassert_eqq($aum->test("Butt (UCSD)"), true);
+xassert_eqq($aum->test("Butt (UCSB)"), false);
+xassert_eqq($aum->test("Butt (University of California San Diego)"), true);
+xassert_eqq($aum->test("Butt (University of California, San Diego)"), true);
+xassert_eqq($aum->test("Butt (University of California Santa Barbara)"), false);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+xassert_eqq($aum->test("Butt (UC Santa Barbara)"), false);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+$aum = new PaperInfo_AuthorMatcher("University of California San Diego");
+xassert_eqq($aum->test("Butt (UCSD)"), true);
+xassert_eqq($aum->test("Butt (UCSB)"), false);
+xassert_eqq($aum->test("Butt (University of California San Diego)"), true);
+xassert_eqq($aum->test("Butt (University of California, San Diego)"), true);
+xassert_eqq($aum->test("Butt (University of California Santa Barbara)"), false);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+xassert_eqq($aum->test("Butt (UC Santa Barbara)"), false);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+xassert_eqq($aum->test("Butt (UC San Diego)"), true);
+$aum = new PaperInfo_AuthorMatcher("UT Austin");
+xassert_eqq($aum->test("Sepideh Maleki (Texas State University)"), false);
+xassert_eqq($aum->test("Sepideh Maleki (University of Texas at Austin)"), true);
+$aum = new PaperInfo_AuthorMatcher("University of Pennsylvania");
+xassert_eqq($aum->test("Sepideh Maleki (Penn State)"), false);
+xassert_eqq($aum->test("Sepideh Maleki (Pennsylvania State University)"), false);
+xassert_eqq($aum->test("Sepideh Maleki (UPenn)"), true);
+xassert_eqq($aum->test("Sepideh Maleki (University of Pennsylvania)"), true);
+$aum = new PaperInfo_AuthorMatcher("UW");
+xassert_eqq($aum->test("Ana Stackelberg (University of Wisconsin—Madison)"), false);
+xassert_eqq($aum->test("Ana Stackelberg (University of Washington)"), true);
+$aum = new PaperInfo_AuthorMatcher("UW Madison");
+xassert_eqq($aum->test("Ana Stackelberg (University of Wisconsin—Madison)"), true);
+xassert_eqq($aum->test("Ana Stackelberg (University of Washington)"), false);
+
+
+// i18n messages
+$ms = new IntlMsgSet;
+$ms->add("Hello", "Bonjour");
+$ms->add(["%d friend", "%d amis", ["$1 ≠ 1"]]);
+$ms->add("%d friend", "%d ami");
+$ms->add("ax", "a");
+$ms->add("ax", "b");
+$ms->add("bx", "a", 2);
+$ms->add("bx", "b");
+$ms->set("FOO", 100);
+xassert_eqq($ms->x("Hello"), "Bonjour");
+xassert_eqq($ms->x("%d friend", 1), "1 ami");
+xassert_eqq($ms->x("%d friend", 0), "0 amis");
+xassert_eqq($ms->x("%d friend", 2), "2 amis");
+xassert_eqq($ms->x("%FOO\$s friend"), "100 friend");
+xassert_eqq($ms->x("ax"), "b");
+xassert_eqq($ms->x("bx"), "a");
+xassert_eqq($ms->x("%FOO% friend"), "100 friend");
+xassert_eqq($ms->x("%xOOB%x friend", 10, 11), "aOOBb friend");
+
+// MIME types
+xassert_eqq(Mimetype::content_type("%PDF-3.0\nwhatever\n"), Mimetype::PDF_TYPE);
+// test that we can parse lib/mime.types for file extensions
+xassert_eqq(Mimetype::extension("application/pdf"), ".pdf");
+xassert_eqq(Mimetype::extension("image/gif"), ".gif");
+xassert_eqq(Mimetype::content_type(null, "application/force"), "application/octet-stream");
+xassert_eqq(Mimetype::content_type(null, "application/x-zip-compressed"), "application/zip");
+xassert_eqq(Mimetype::content_type(null, "application/gz"), "application/gzip");
+xassert_eqq(Mimetype::extension("application/g-zip"), ".gz");
+xassert_eqq(Mimetype::type("application/download"), "application/octet-stream");
+xassert_eqq(Mimetype::extension("application/smil"), ".smil");
+xassert_eqq(Mimetype::type(".smil"), "application/smil");
+xassert_eqq(Mimetype::type(".sml"), "application/smil");
+// `fileinfo` test
+xassert_eqq(Mimetype::content_type("<html><head></head><body></body></html>"), "text/html");
+
+// score sorting
+$s = [];
+foreach (["1,2,3,4,5", "1,2,3,5,5", "3,5,5", "3,3,5,5", "2,3,3,5,5"] as $st)
+    $s[] = new ScoreInfo($st);
+xassert($s[0]->compare_by($s[0], "C") == 0);
+xassert($s[0]->compare_by($s[1], "C") < 0);
+xassert($s[0]->compare_by($s[2], "C") < 0);
+xassert($s[0]->compare_by($s[3], "C") < 0);
+xassert($s[1]->compare_by($s[1], "C") == 0);
+xassert($s[1]->compare_by($s[2], "C") < 0);
+xassert($s[1]->compare_by($s[3], "C") < 0);
+xassert($s[2]->compare_by($s[2], "C") == 0);
+xassert($s[2]->compare_by($s[3], "C") < 0);
+xassert($s[3]->compare_by($s[0], "C") > 0);
+xassert($s[3]->compare_by($s[1], "C") > 0);
+xassert($s[3]->compare_by($s[2], "C") > 0);
+xassert($s[3]->compare_by($s[3], "C") == 0);
+xassert($s[3]->compare_by($s[4], "C") > 0);
+
+// AbbreviationMatcher
+$am = new AbbreviationMatcher;
+$am->add("élan", 1, 1);
+$am->add("eclat", 2);
+$am->add("Should the PC Suck?", 3);
+$am->add("Should P. C. Rock?", 4);
+xassert_eqq($am->find_all("elan"), [1]);
+xassert_eqq($am->find_all("el"), [1]);
+xassert_eqq($am->find_all("él"), [1]);
+xassert_eqq($am->find_all("ÉL"), [1]);
+xassert_eqq($am->find_all("e"), [1, 2]);
+xassert_eqq($am->find_all("ecla"), [2]);
+xassert_eqq($am->find_all("should-the-pc-suck"), [3]);
+xassert_eqq($am->find_all("should-the pc-suck"), [3]);
+xassert_eqq($am->find_all("ShoPCSuc"), [3]);
+xassert_eqq($am->find_all("ShoPCRoc"), [4]);
+$am->add("élan", 5, 2);
+xassert_eqq($am->find_all("elan"), [1, 5]);
+xassert_eqq($am->find_all("elan", 1), [1]);
+xassert_eqq($am->find_all("elan", 2), [5]);
+xassert_eqq($am->find_all("elan", 3), [1, 5]);
+xassert_eqq($am->find_all("é"), [1, 5]);
+$am->add("élange", 6, 2);
+xassert_eqq($am->find_all("ela"), [1, 5, 6]);
+xassert_eqq($am->find_all("elan"), [1, 5]);
+xassert_eqq($am->find_all("elange"), [6]);
+xassert_eqq($am->find_all("elan*"), [1, 5, 6]);
+xassert_eqq($am->find_all("e*e"), [6]);
+
+xassert(AbbreviationMatcher::is_camel_word("9b"));
+xassert(!AbbreviationMatcher::is_camel_word("99"));
+xassert(AbbreviationMatcher::is_camel_word("OveMer"));
+xassert(!AbbreviationMatcher::is_camel_word("Ovemer"));
+xassert(!AbbreviationMatcher::is_camel_word("ovemer"));
+xassert(!AbbreviationMatcher::is_camel_word("ove mer"));
+xassert(AbbreviationMatcher::is_camel_word("ove-mer"));
+
+$am->add("99 Problems", 7);
+xassert_eqq($am->find_all("99p"), [7]);
+
+$am = new AbbreviationMatcher;
+$am->add("Overall merit", 1);
+$am->add("Overall merit 2", 2);
+$am->add("Overall merit 3", 3);
+$am->add("Overall merit 4", 4);
+xassert_eqq($am->find_all("OveMer"), [1]);
+xassert_eqq($am->find_all("merit overall"), []);
+xassert_eqq($am->find_all("OveMer2"), [2]);
+xassert_eqq($am->find_all("overall merit*"), [1, 2, 3, 4]);
+xassert_eqq($am->find_all("OveMer*"), [1, 2, 3, 4]);
+
+$am->add("PC Person", 5);
+$am->add("PC Person 2", 6);
+$am->add("P. C. Person 3", 7);
+$am->add("P. C. Person 20", 8);
+xassert_eqq($am->find_all("PCPer"), [5]);
+xassert_eqq($am->find_all("PCPer2"), [6]);
+xassert_eqq($am->find_all("PCPer3"), [7]);
+xassert_eqq($am->find_all("PCPer20"), [8]);
+
+// AbbreviationMatcher tests taken from old abbreviation styles
+$am = new AbbreviationMatcher;
+$am->add("Cover Letter", 1);
+$am->add("Other Artifact", 2);
+xassert_eqq($am->find_all("other-artifact"), [2]);
+xassert_eqq($am->find_all("cover-letter"), [1]);
+
+$am = new AbbreviationMatcher;
+$am->add("Second Round Paper", 1);
+$am->add("Second Round Response (PDF)", 2);
+xassert_eqq($am->find_all("second-round-paper"), [1]);
+xassert_eqq($am->find_all("second-round-response--pdf"), [2]);
+
+$am = new AbbreviationMatcher;
+$am->add("Paper is co-authored with at least one PC member", 1);
+xassert_eqq($am->find_all("paper-is-co-authored-with-at-least-one-pc-member"), [1]);
+
+// Filer::docstore_fixed_prefix
+xassert_eqq(Filer::docstore_fixed_prefix(null), null);
+xassert_eqq(Filer::docstore_fixed_prefix(false), false);
+xassert_eqq(Filer::docstore_fixed_prefix(""), "");
+xassert_eqq(Filer::docstore_fixed_prefix("/"), "/");
+xassert_eqq(Filer::docstore_fixed_prefix("/a/b/c/d/e"), "/a/b/c/d/e/");
+xassert_eqq(Filer::docstore_fixed_prefix("/a/b/c/d/e///"), "/a/b/c/d/e///");
+xassert_eqq(Filer::docstore_fixed_prefix("/a/b/c/d/e/%%/a/b"), "/a/b/c/d/e/%/a/b/");
+xassert_eqq(Filer::docstore_fixed_prefix("/a/b/c/d/e/%%/a/b%"), "/a/b/c/d/e/%/a/b%/");
+xassert_eqq(Filer::docstore_fixed_prefix("/a/b/c/d/e/%%/a/b%h%x"), "/a/b/c/d/e/%/a/");
+xassert_eqq(Filer::docstore_fixed_prefix("/%02h%x"), "/");
+xassert_eqq(Filer::docstore_fixed_prefix("%02h%x"), "");
+
+// Document::content_binary_hash
+$Conf->save_setting("opt.contentHashMethod", 1, "sha1");
+$doc = new DocumentInfo(["content" => ""]);
+xassert_eqq($doc->text_hash(), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+xassert_eqq($doc->content_binary_hash(), hex2bin("da39a3ee5e6b4b0d3255bfef95601890afd80709"));
+$doc->set_content("Hello\n");
+xassert_eqq($doc->text_hash(), "1d229271928d3f9e2bb0375bd6ce5db6c6d348d9");
+xassert_eqq($doc->content_binary_hash(), hex2bin("1d229271928d3f9e2bb0375bd6ce5db6c6d348d9"));
+$Conf->save_setting("opt.contentHashMethod", 1, "sha256");
+xassert_eqq($doc->text_hash(), "1d229271928d3f9e2bb0375bd6ce5db6c6d348d9");
+xassert_eqq($doc->content_binary_hash(), "sha2-" . hex2bin("66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18"));
+$doc->set_content("");
+xassert_eqq($doc->text_hash(), "sha2-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+xassert_eqq($doc->content_binary_hash(), "sha2-" . hex2bin("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+$doc->set_content("Hello\n");
+xassert_eqq($doc->text_hash(), "sha2-66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18");
+xassert_eqq($doc->content_binary_hash(), "sha2-" . hex2bin("66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18"));
+
+// filestore_path expansion and s3_document
+$Conf->save_setting("opt.docstore", 1, "/foo/bar/%3h/%5h/%h");
+$Conf->save_setting("opt.contentHashMethod", 1, "sha1");
+$doc->set_content("Hello\n", "text/plain");
+$doc->docclass = $Conf->docclass(DTYPE_SUBMISSION);
+xassert_eqq($doc->docclass->filestore_path($doc), "/foo/bar/1d2/1d229/1d229271928d3f9e2bb0375bd6ce5db6c6d348d9");
+$Conf->save_setting("opt.docstore", 1, "/foo/bar");
+$Conf->save_setting("opt.docstoreSubdir", 1, true);
+xassert_eqq($doc->docclass->filestore_path($doc), "/foo/bar/1d/1d229271928d3f9e2bb0375bd6ce5db6c6d348d9.txt");
+xassert_eqq(HotCRPDocument::s3_filename($doc), "doc/1d/1d229271928d3f9e2bb0375bd6ce5db6c6d348d9.txt");
+
+$Conf->save_setting("opt.contentHashMethod", 1, "sha256");
+$doc->set_content("Hello\n", "text/plain");
+xassert_eqq($doc->docclass->filestore_path($doc), "/foo/bar/sha2-66/sha2-66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18.txt");
+$Conf->save_setting("opt.docstore", 1, "/foo/bar/%3h/%5h/%h");
+xassert_eqq($doc->docclass->filestore_path($doc), "/foo/bar/sha2-66a/sha2-66a04/sha2-66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18");
+xassert_eqq(HotCRPDocument::s3_filename($doc), "doc/66a/sha2-66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18.txt");
 
 xassert_exit();

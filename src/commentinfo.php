@@ -1,11 +1,14 @@
 <?php
 // commentinfo.php -- HotCRP helper class for comments
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class CommentInfo {
+    public $conf;
+    public $prow;
     public $commentId = 0;
     public $paperId;
+    public $contactId;
     public $timeModified;
     public $timeNotified;
     public $timeDisplayed;
@@ -24,12 +27,14 @@ class CommentInfo {
     static private $visibility_map = array(COMMENTTYPE_ADMINONLY => "admin", COMMENTTYPE_PCONLY => "pc", COMMENTTYPE_REVIEWER => "rev", COMMENTTYPE_AUTHOR => "au");
 
 
-    function __construct($x = null, $prow = null) {
-        $this->merge(is_object($x) ? $x : null, $prow);
+    function __construct($x, PaperInfo $prow = null, Conf $conf = null) {
+        $this->merge(is_object($x) ? $x : null, $prow, $conf);
     }
 
-    private function merge($x, $prow) {
-        global $Conf;
+    private function merge($x, PaperInfo $prow = null, Conf $conf = null) {
+        assert(($prow || $conf) && (!$prow || !$conf || $prow->conf === $conf));
+        $this->conf = $prow ? $prow->conf : $conf;
+        $this->prow = $prow;
         if ($x)
             foreach ($x as $k => $v)
                 $this->$k = $v;
@@ -37,31 +42,40 @@ class CommentInfo {
         $this->paperId = (int) $this->paperId;
         $this->commentType = (int) $this->commentType;
         $this->commentRound = (int) $this->commentRound;
-        if ($Conf->sversion < 107 && $this->commentType >= COMMENTTYPE_AUTHOR)
+        if ($this->conf->sversion < 107 && $this->commentType >= COMMENTTYPE_AUTHOR)
             $this->authorOrdinal = $this->ordinal;
-        $this->prow = $prow;
     }
 
-    static public function fetch($result, $prow) {
-        $cinfo = $result ? $result->fetch_object("CommentInfo", [null, $prow]) : null;
+    static function fetch($result, PaperInfo $prow = null, Conf $conf = null) {
+        $cinfo = null;
+        if ($result)
+            $cinfo = $result->fetch_object("CommentInfo", [null, $prow, $conf]);
         if ($cinfo && !is_int($cinfo->commentId))
-            $cinfo->merge(null, $prow);
+            $cinfo->merge(null, $prow, $conf);
         return $cinfo;
     }
 
+    function set_prow(PaperInfo $prow) {
+        assert(!$this->prow && $this->paperId === $prow->paperId && $this->conf === $prow->conf);
+        $this->prow = $prow;
+    }
 
-    public static function echo_script($prow) {
+
+    static function echo_script($prow) {
         global $Conf, $Me;
         if (Ht::mark_stash("papercomment")) {
             $t = array("papercomment.commenttag_search_url=\"" . hoturl_raw("search", "q=cmt%3A%23\$") . "\"");
             if (!$prow->has_author($Me))
                 $t[] = "papercomment.nonauthor=true";
+            $crow = new CommentInfo(null, $prow, $Conf);
+            $crow->commentType = COMMENTTYPE_RESPONSE;
             foreach ($Conf->resp_round_list() as $i => $rname) {
                 $isuf = $i ? "_$i" : "";
                 $wl = $Conf->setting("resp_words$isuf", 500);
                 $j = array("words" => $wl);
                 $ix = false;
-                if ($Me->can_respond($prow, (object) array("commentType" => COMMENTTYPE_RESPONSE, "commentRound" => $i))) {
+                $crow->commentRound = $i;
+                if ($Me->can_respond($prow, $crow)) {
                     if ($i)
                         $ix = $Conf->message_html("resp_instrux_$i", array("wordlimit" => $wl));
                     if ($ix === false)
@@ -71,7 +85,7 @@ class CommentInfo {
                 }
                 $t[] = "papercomment.set_resp_round(" . json_encode($rname) . "," . json_encode($j) . ")";
             }
-            $Conf->echoScript(join($t, ";"));
+            echo Ht::unstash_script(join($t, ";"));
         }
     }
 
@@ -85,7 +99,7 @@ class CommentInfo {
             && !($ctype >= COMMENTTYPE_AUTHOR ? $this->authorOrdinal : $this->ordinal);
     }
 
-    public function unparse_ordinal() {
+    function unparse_ordinal() {
         $is_author = $this->commentType >= COMMENTTYPE_AUTHOR;
         $o = $is_author ? $this->authorOrdinal : $this->ordinal;
         if (self::commenttype_needs_ordinal($this->commentType) && $o)
@@ -94,7 +108,7 @@ class CommentInfo {
             return null;
     }
 
-    static public function unparse_html_id($cr) {
+    static function unparse_html_id($cr) {
         global $Conf;
         $is_author = $cr->commentType >= COMMENTTYPE_AUTHOR;
         $o = $is_author ? $cr->authorOrdinal : $cr->ordinal;
@@ -113,17 +127,99 @@ class CommentInfo {
             return $x;
     }
 
-    public function user() {
+    function user() {
         return self::_user($this);
     }
 
-    public function viewable_tags(Contact $user) {
-        // NB caller must check can_view_comment_tags
-        return Tagger::strip_nonviewable($this->commentTags, $user);
+    function unparse_response_text() {
+        if ($this->commentType & COMMENTTYPE_RESPONSE) {
+            $rname = $this->conf->resp_round_name($this->commentRound);
+            $t = $rname == "1" ? "Response" : "$rname Response";
+            if ($this->commentType & COMMENTTYPE_DRAFT)
+                $t = "Draft $t";
+            return $t;
+        } else
+            return null;
     }
 
-    public function unparse_json($contact, $include_displayed_at = false) {
-        global $Conf;
+    static function group_by_identity($crows, Contact $user, $separateColors,
+                                      $forceShow = null) {
+        $known_cids = $result = [];
+        foreach ($crows as $cr) {
+            $open = $user->can_view_comment_identity($cr->prow, $cr, $forceShow);
+            $cid = $open ? $cr->contactId : 0;
+            if ($cr->commentType & COMMENTTYPE_RESPONSE) {
+                if (!empty($result))
+                    $result[count($result) - 1][2] = ";";
+                $connector = ";";
+                $known_cids = [];
+                $include = true;
+                $record = false;
+            } else {
+                $connector = ",";
+                $include = !isset($known_cids[$cid]);
+                $record = true;
+            }
+            if ($separateColors
+                && ($tags = $cr->viewable_tags($user, $forceShow))
+                && ($color = $cr->conf->tags()->color_classes($tags))) {
+                $include = true;
+                $record = false;
+            }
+            if ($include) {
+                $result[] = [$cr, 1, $connector];
+                if ($record)
+                    $known_cids[$cid] = count($result) - 1;
+            } else
+                ++$result[$known_cids[$cid]][1];
+        }
+        if (!empty($result))
+            $result[count($result) - 1][2] = "";
+        return $result;
+    }
+
+    function unparse_user_html(Contact $user, $forceShow = null) {
+        if ($user->can_view_comment_identity($this->prow, $this, $forceShow))
+            $n = Text::abbrevname_html($this->user());
+        else
+            $n = "anonymous";
+        if ($this->commentType & COMMENTTYPE_RESPONSE)
+            $n = "<i>" . $this->unparse_response_text() . "</i>"
+                . ($n === "anonymous" ? "" : " ($n)");
+        return $n;
+    }
+
+    function unparse_user_text(Contact $user, $forceShow = null) {
+        if ($user->can_view_comment_identity($this->prow, $this, $forceShow))
+            $n = Text::abbrevname_text($this->user());
+        else
+            $n = "anonymous";
+        if ($this->commentType & COMMENTTYPE_RESPONSE)
+            $n = $this->unparse_response_text()
+                . ($n === "anonymous" ? "" : " ($n)");
+        return $n;
+    }
+
+    function viewable_tags(Contact $user, $forceShow = null) {
+        if ($this->commentTags
+            && $user->can_view_comment_tags($this->prow, $this, null))
+            return Tagger::strip_nonviewable($this->commentTags, $user);
+        else
+            return null;
+    }
+
+    function viewable_nonresponse_tags(Contact $user, $forceShow = null) {
+        if ($this->commentTags
+            && $user->can_view_comment_tags($this->prow, $this, null)) {
+            $tags = Tagger::strip_nonviewable($this->commentTags, $user);
+            if ($this->commentType & COMMENTTYPE_RESPONSE)
+                $tags = trim(preg_replace('{ \S*response(?:|#\S+)(?= |\z)}i', "", " $tags "));
+            return $tags;
+        } else
+            return null;
+    }
+
+    function unparse_json(Contact $contact) {
         if ($this->commentId && !$contact->can_view_comment($this->prow, $this, null))
             return false;
 
@@ -133,7 +229,12 @@ class CommentInfo {
                 return false;
             $cj = (object) array("pid" => $this->prow->paperId, "is_new" => true, "editable" => true);
             if ($this->commentType & COMMENTTYPE_RESPONSE)
-                $cj->response = $Conf->resp_round_name($this->commentRound);
+                $cj->response = $this->conf->resp_round_name($this->commentRound);
+            else if ($this->commentType & COMMENTTYPE_BYAUTHOR)
+                $cj->by_author = true;
+            else if (($token_cid = $contact->review_token_cid($this->prow))
+                     && ($rrow = $this->prow->review_of_user($token_cid)))
+                $cj->review_token = encode_token((int) $rrow->reviewToken);
             return $cj;
         }
 
@@ -146,21 +247,21 @@ class CommentInfo {
         if ($this->commentType & COMMENTTYPE_DRAFT)
             $cj->draft = true;
         if ($this->commentType & COMMENTTYPE_RESPONSE)
-            $cj->response = $Conf->resp_round_name($this->commentRound);
+            $cj->response = $this->conf->resp_round_name($this->commentRound);
+        else if ($this->commentType & COMMENTTYPE_BYAUTHOR)
+            $cj->by_author = true;
         if ($contact->can_comment($this->prow, $this))
             $cj->editable = true;
 
         // tags
-        if ($this->commentTags
-            && $contact->can_view_comment_tags($this->prow, $this, null)) {
-            if (($tags = $this->viewable_tags($contact)))
-                $cj->tags = TagInfo::split($tags);
-            if ($tags && ($cc = TagInfo::color_classes($tags)))
+        if (($tags = $this->viewable_tags($contact))) {
+            $cj->tags = TagInfo::split($tags);
+            if ($tags && ($cc = $this->conf->tags()->color_classes($tags)))
                 $cj->color_classes = $cc;
         }
 
         // identity and time
-        $idable = $contact->can_view_comment_identity($this->prow, $this, null);
+        $idable = $contact->can_view_comment_identity($this->prow, $this);
         $idable_override = $idable || $contact->can_view_comment_identity($this->prow, $this, true);
         if ($idable || $idable_override) {
             $user = $this->user();
@@ -168,93 +269,90 @@ class CommentInfo {
             $cj->author_email = $user->email;
             if (!$idable)
                 $cj->author_hidden = true;
+            if (Contact::is_anonymous_email($cj->author_email) && $contact->review_tokens()) {
+                foreach ($this->prow->reviews_by_id() as $rrow)
+                    if ($rrow->reviewToken && in_array($rrow->reviewToken, $contact->review_tokens())) {
+                        $cj->review_token = encode_token((int) $rrow->reviewToken);
+                        break;
+                    }
+            }
         }
         if ($this->timeModified > 0 && $idable_override) {
             $cj->modified_at = (int) $this->timeModified;
-            $cj->modified_at_text = $Conf->printableTime($cj->modified_at);
+            $cj->modified_at_text = $this->conf->printableTime($cj->modified_at);
         } else if ($this->timeModified > 0) {
-            $cj->modified_at = $Conf->obscure_time($this->timeModified);
-            $cj->modified_at_text = $Conf->unparse_time_obscure($cj->modified_at);
+            $cj->modified_at = $this->conf->obscure_time($this->timeModified);
+            $cj->modified_at_text = $this->conf->unparse_time_obscure($cj->modified_at);
             $cj->modified_at_obscured = true;
         }
-        if ($include_displayed_at)
-            // XXX exposes information, should hide before export
-            $cj->displayed_at = (int) $this->timeDisplayed;
 
         // text
-        if ($this->commentOverflow)
-            $cj->text = $this->commentOverflow;
-        else
-            $cj->text = $this->comment;
+        $cj->text = $this->commentOverflow ? : $this->comment;
 
         // format
         if (($fmt = $this->commentFormat) === null)
-            $fmt = Conf::$gDefaultFormat;
+            $fmt = $this->conf->default_format;
         if ($fmt)
             $cj->format = (int) $fmt;
         return $cj;
     }
 
-    public function unparse_text($contact, $no_title = false) {
-        global $Conf;
-        $x = "===========================================================================\n";
-        if (!($this->commentType & COMMENTTYPE_RESPONSE))
-            $n = "Comment";
-        else if (($rname = $Conf->resp_round_text($this->commentRound)))
-            $n = "$rname Response";
+    function unparse_text(Contact $contact, $no_title = false) {
+        if (!($this->commentType & COMMENTTYPE_RESPONSE)) {
+            $ordinal = $this->unparse_ordinal();
+            $x = "Comment" . ($ordinal ? " @$ordinal" : "");
+        } else if (($rname = $this->conf->resp_round_text($this->commentRound)))
+            $x = "$rname Response";
         else
-            $n = "Response";
+            $x = "Response";
         if ($contact->can_view_comment_identity($this->prow, $this, false))
-            $n .= " by " . Text::user_text($this->user());
-        $x .= center_word_wrap($n);
-        if (!$no_title)
-            $x .= $this->prow->pretty_text_title();
-        if ($this->commentTags
-            && $contact->can_view_comment_tags($this->prow, $this, null)
-            && ($tags = $this->viewable_tags($contact))) {
-            $tagger = new Tagger($contact);
-            $x .= center_word_wrap($tagger->unparse_hashed($tags));
+            $x .= " by " . Text::user_text($this->user());
+        $x .= "\n" . str_repeat("=", 75) . "\n";
+        if (!$no_title) {
+            $prow = $this->prow;
+            $x .= prefix_word_wrap("* ", "Paper: #{$prow->paperId} {$prow->title}", 2);
         }
-        $x .= "---------------------------------------------------------------------------\n";
+        if (($tags = $this->viewable_nonresponse_tags($contact))) {
+            $tagger = new Tagger($contact);
+            $x .= prefix_word_wrap("* ", $tagger->unparse_hashed($tags), 2);
+        }
+        if (!$no_title || $tags)
+            $x .= "\n";
         if ($this->commentOverflow)
             $x .= $this->commentOverflow;
         else
             $x .= $this->comment;
-        return $x . "\n";
+        return rtrim($x) . "\n";
     }
 
-    static public function unparse_flow_entry($crow, $contact, $trclass) {
+    function unparse_flow_entry(Contact $contact) {
         // See also ReviewForm::reviewFlowEntry
-        global $Conf;
-        $a = "<a href=\"" . hoturl("paper", "p=$crow->paperId#" . self::unparse_html_id($crow)) . "\"";
-        $t = "<tr class='$trclass'><td class='pl_activityicon'>" . $a . ">"
-            . Ht::img("comment24.png", "[Comment]", "dlimg")
-            . '</a></td><td class="pl_activityid pnum">'
-            . $a . ">#$crow->paperId</a></td><td class='pl_activitymain'><small>"
-            . $a . " class=\"ptitle\">" . htmlspecialchars($crow->shortTitle);
-        if (strlen($crow->shortTitle) != strlen($crow->title))
-            $t .= "...";
-        $t .= "</a>";
-        $idable = $contact->can_view_comment_identity($crow, $crow, false);
-        if ($idable || $contact->can_view_comment_time($crow, $crow))
-            $time = $Conf->parseableTime($crow->timeModified, false);
+        $a = "<a href=\"" . hoturl("paper", "p=$this->paperId#" . self::unparse_html_id($this)) . "\"";
+        $t = '<tr class="pl"><td class="pl_activityicon">' . $a . ">"
+            . Ht::img("comment48.png", "[Comment]", ["class" => "dlimg", "width" => 24, "height" => 24])
+            . '</a></td><td class="pl_activityid pl_rowclick">'
+            . $a . ' class="pnum">#' . $this->paperId . '</a></td>'
+            . '<td class="pl_activitymain pl_rowclick"><small>'
+            . $a . ' class="ptitle">'
+            . htmlspecialchars(UnicodeHelper::utf8_abbreviate($this->prow->title, 80))
+            . "</a>";
+        $idable = $contact->can_view_comment_identity($this->prow, $this, false);
+        if ($idable || $contact->can_view_comment_time($this->prow, $this))
+            $time = $this->conf->parseableTime($this->timeModified, false);
         else
-            $time = $Conf->unparse_time_obscure($Conf->obscure_time($crow->timeModified));
+            $time = $this->conf->unparse_time_obscure($this->conf->obscure_time($this->timeModified));
         $t .= ' <span class="barsep">·</span> ' . $time;
         if ($idable)
-            $t .= ' <span class="barsep">·</span> <span class="hint">comment by</span> ' . Text::user_html(self::_user($crow));
-        $t .= '</small><br /><a class="q" ' . substr($a, 3)
-            . ">" . htmlspecialchars($crow->shortComment);
-        if (strlen($crow->shortComment) < strlen($crow->comment))
-            $t .= "...";
-        return $t . "</a></td></tr>";
+            $t .= ' <span class="barsep">·</span> <span class="hint">comment by</span> ' . $contact->reviewer_html_for($this->contactId);
+        return $t . "</small><br />"
+            . htmlspecialchars(UnicodeHelper::utf8_abbreviate($this->commentOverflow ? : $this->comment, 300))
+            . "</td></tr>";
     }
 
 
     private function save_ordinal($cmtid, $ctype, $Table, $LinkTable, $LinkColumn) {
-        global $Conf;
         $okey = "ordinal";
-        if ($ctype >= COMMENTTYPE_AUTHOR && $Conf->sversion >= 107)
+        if ($ctype >= COMMENTTYPE_AUTHOR && $this->conf->sversion >= 107)
             $okey = "authorOrdinal";
         $q = "update $Table, (select coalesce(max($Table.$okey),0) maxOrdinal
     from $LinkTable
@@ -265,8 +363,8 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
         Dbl::qe($q);
     }
 
-    public function save($req, $contact) {
-        global $Conf, $Now;
+    function save($req, Contact $contact) {
+        global $Now;
         if (is_array($req))
             $req = (object) $req;
         $Table = $this->prow->comment_table_name();
@@ -279,6 +377,8 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
             $ctype = COMMENTTYPE_RESPONSE | COMMENTTYPE_AUTHOR;
         else if ($is_response)
             $ctype = COMMENTTYPE_RESPONSE | COMMENTTYPE_AUTHOR | COMMENTTYPE_DRAFT;
+        else if ($contact->act_author_view($this->prow))
+            $ctype = COMMENTTYPE_AUTHOR | COMMENTTYPE_BYAUTHOR;
         else if ($req_visibility == "a" || $req_visibility == "au")
             $ctype = COMMENTTYPE_AUTHOR;
         else if ($req_visibility == "p" || $req_visibility == "pc")
@@ -289,16 +389,17 @@ set $okey=(t.maxOrdinal+1) where commentId=$cmtid";
             $ctype = $this->commentType;
         else // $req->visibility == "r" || $req->visibility == "rev"
             $ctype = COMMENTTYPE_REVIEWER;
-        if ($is_response ? $this->prow->blind : $Conf->is_review_blind(!!get($req, "blind")))
+        if ($is_response ? $this->prow->blind : $this->conf->is_review_blind(!!get($req, "blind")))
             $ctype |= COMMENTTYPE_BLIND;
 
         // tags
         if ($is_response) {
             $ctags = " response ";
-            if (($rname = $Conf->resp_round_name($this->commentRound)) != "1")
+            if (($rname = $this->conf->resp_round_name($this->commentRound)) != "1")
                 $ctags .= "{$rname}response ";
         } else if (get($req, "tags")
-                   && preg_match_all(',\S+,', $req->tags, $m)) {
+                   && preg_match_all(',\S+,', $req->tags, $m)
+                   && !$contact->act_author_view($this->prow)) {
             $tagger = new Tagger($contact);
             $ctags = array();
             foreach ($m[0] as $text)

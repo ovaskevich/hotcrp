@@ -1,34 +1,35 @@
 <?php
 // src/settings/s_decisions.php -- HotCRP settings > decisions page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
-class SettingRenderer_Decisions extends SettingRenderer {
-function render($sv) {
-    global $Conf, $Opt;
-
+class Decisions_SettingRenderer {
+static function render(SettingValues $sv) {
+    echo "<h3 class=\"settings\">Review sharing and responses</h3>\n";
     echo "Can <b>authors see reviews and author-visible comments</b> for their papers?<br />";
-    if ($Conf->setting("resp_active"))
-        $no_text = "No, unless responses are open";
-    else
-        $no_text = "No";
-    if (!$Conf->setting("au_seerev", 0)
-        && $Conf->timeAuthorViewReviews())
-        $no_text .= '<div class="hint">Authors are currently able to see reviews since responses are open.</div>';
+    $no_text = "No, unless responses are active";
+    if (!$sv->conf->setting("au_seerev", 0)) {
+        if ($sv->conf->timeAuthorViewReviews())
+            $no_text .= '<div class="hint">Responses are active, so authors can see reviews.</div>';
+        else if ($sv->conf->setting("resp_active"))
+            $no_text .= '<div class="hint">Responses are not active now.</div>';
+    }
     $opts = array(Conf::AUSEEREV_NO => $no_text,
                   Conf::AUSEEREV_YES => "Yes");
     if ($sv->newv("au_seerev") == Conf::AUSEEREV_UNLESSINCOMPLETE
-        && !get($Opt, "allow_auseerev_unlessincomplete"))
-        $Conf->save_setting("opt.allow_auseerev_unlessincomplete", 1);
-    if (get($Opt, "allow_auseerev_unlessincomplete"))
+        && !$sv->conf->opt("allow_auseerev_unlessincomplete"))
+        $sv->conf->save_setting("opt.allow_auseerev_unlessincomplete", 1);
+    if ($sv->conf->opt("allow_auseerev_unlessincomplete"))
         $opts[Conf::AUSEEREV_UNLESSINCOMPLETE] = "Yes, after completing any assigned reviews for other papers";
-    $opts[Conf::AUSEEREV_TAGS] = "Yes, for papers with any of these tags:&nbsp; " . $sv->render_entry("tag_au_seerev", ["onfocus" => "$('#au_seerev_" . Conf::AUSEEREV_TAGS . "').click()"]);
+    $opts[Conf::AUSEEREV_TAGS] = "Yes, for papers with any of these tags:&nbsp; " . $sv->render_entry("tag_au_seerev");
     $sv->echo_radio_table("au_seerev", $opts);
     echo Ht::hidden("has_tag_au_seerev", 1);
+    Ht::stash_script('$("#tag_au_seerev").on("input", function () { $("#au_seerev_' . Conf::AUSEEREV_TAGS . '").click(); })');
 
     // Authors' response
-    echo '<div class="g"></div><table id="foldauresp" class="fold2o">';
-    $sv->echo_checkbox_row('resp_active', "<b>Collect authors’ responses to the reviews<span class='fx2'>:</span></b>", "void fold('auresp',!this.checked,2)");
+    echo '<div class="mg"><table id="foldauresp" class="fold2o">';
+    $sv->echo_checkbox_row('resp_active', "<b>Collect authors’ responses to the reviews<span class='fx2'>:</span></b>");
+    Ht::stash_script('$(function () { $("#cbresp_active").on("change", function () { fold("auresp",!$$("cbresp_active").checked,2); }).trigger("change"); })');
     echo '<tr class="fx2"><td></td><td><div id="auresparea">',
         Ht::hidden("has_resp_rounds", 1);
 
@@ -38,7 +39,7 @@ function render($sv) {
         for ($i = 1; isset($sv->req["resp_roundname_$i"]); ++$i)
             $rrounds[$i] = $sv->req["resp_roundname_$i"];
     } else
-        $rrounds = $Conf->resp_round_list();
+        $rrounds = $sv->conf->resp_round_list();
     $rrounds["n"] = "";
     foreach ($rrounds as $i => $rname) {
         $isuf = $i ? "_$i" : "";
@@ -54,10 +55,10 @@ function render($sv) {
             echo '" style="padding-top:1em';
         if ($i === "n")
             echo ';display:none';
-        echo '"><table class="secondary-settings"><tbody>';
+        echo '"><table><tbody class="secondary-settings">';
         $sv->echo_entry_row("resp_roundname$isuf", "Response name");
         if ($sv->curv("resp_open$isuf") === 1 && ($x = $sv->curv("resp_done$isuf")))
-            $Conf->settings["resp_open$isuf"] = $x - 7 * 86400;
+            $sv->conf->settings["resp_open$isuf"] = $x - 7 * 86400;
         $sv->echo_entry_row("resp_open$isuf", "Start time");
         $sv->echo_entry_row("resp_done$isuf", "Hard deadline");
         $sv->echo_entry_row("resp_grace$isuf", "Grace period");
@@ -67,13 +68,19 @@ function render($sv) {
         echo '</div></div>', "\n";
     }
 
-    echo '</div><div style="padding-top:1em">',
-        '<button type="button" onclick="settings_add_resp_round()">Add response round</button>',
-        '</div></td></tr></table>';
-    $Conf->footerScript("fold('auresp',!\$\$('cbresp_active').checked,2)");
+    echo '</div><div class="mg">',
+        Ht::button("Add response round", ["class" => "btn", "id" => "resp_round_add"]),
+        '</div></td></tr></table></div>';
+    Ht::stash_script('$("#resp_round_add").on("click", settings_add_resp_round)');
 
-    echo "<div class='g'></div>\n<hr class='hr' />\n",
-        "Who can see paper <b>decisions</b> (accept/reject)?<br />\n";
+    echo '<table class="mg">';
+    $sv->echo_checkbox_row("cmt_author", "Authors can <strong>exchange comments</strong> with reviewers when reviews are visible");
+    echo "</table>\n";
+
+
+    echo "<h3 class=\"settings g\">Decisions</h3>\n";
+
+    echo "Who can see paper <b>decisions</b> (accept/reject)?<br />\n";
     $sv->echo_radio_table("seedec", array(Conf::SEEDEC_ADMIN => "Only administrators",
                             Conf::SEEDEC_NCREV => "Reviewers and non-conflicted PC members",
                             Conf::SEEDEC_REV => "Reviewers and <em>all</em> PC members",
@@ -81,12 +88,11 @@ function render($sv) {
 
     echo "<div class='g'></div>\n";
     echo "<table>\n";
-    $decs = $Conf->decision_map();
-    krsort($decs);
+    $decs = $sv->conf->decision_map();
 
     // count papers per decision
     $decs_pcount = array();
-    $result = $Conf->qe("select outcome, count(*) from Paper where timeSubmitted>0 group by outcome");
+    $result = $sv->conf->qe_raw("select outcome, count(*) from Paper where timeSubmitted>0 group by outcome");
     while (($row = edb_row($result)))
         $decs_pcount[$row[0]] = $row[1];
 
@@ -124,57 +130,75 @@ function render($sv) {
         Ht::select("dtypn", array(1 => "Accept class", -1 => "Reject class"), $vclass),
         "<br /><small>Examples: “Accepted as short paper”, “Early reject”</small>",
         "</td></tr>";
-    if ($sv->has_error("decn"))
+    if ($sv->has_error_at("decn"))
         echo '<tr><td></td><td class="lentry nw">',
             Ht::checkbox("decn_confirm", 1, false),
             '&nbsp;<span class="error">', Ht::label("Confirm"), "</span></td></tr>";
     echo "</table>\n";
 
+    echo "<table class=\"mg\">";
+    $sv->echo_checkbox_row("shepherd_hide", "Hide shepherd names from authors");
+    echo "</table>\n";
+
     // Final versions
-    echo "<h3 class=\"settings g\">Final versions</h3>\n";
-    echo '<table id="foldfinal" class="fold2o">';
-    $sv->echo_checkbox_row('final_open', '<b>Collect final versions of accepted papers<span class="fx">:</span></b>', "void fold('final',!this.checked,2)");
-    echo '<tr class="fx2"><td></td><td><table class="secondary-settings"><tbody>';
+    echo "<h3 id=\"finalversions\" class=\"settings g\">Final versions</h3>\n";
+    $sv->echo_messages_near("final_open");
+    echo '<div class="fold2o" data-fold="true">';
+    echo '<table>';
+    $sv->echo_checkbox_row('final_open', '<b>Collect final versions of accepted papers<span class="fx2">:</span></b>', ["class" => "js-foldup"]);
+    echo '<tr class="fx2"><td></td><td><table><tbody class="secondary-settings">';
     $sv->echo_entry_row("final_soft", "Deadline");
     $sv->echo_entry_row("final_done", "Hard deadline");
     $sv->echo_entry_row("final_grace", "Grace period");
     echo "</tbody></table><div class='g'></div>";
     $sv->echo_message_minor("msg.finalsubmit", "Instructions");
-    echo "<div class='g'></div>",
-        "<small>To collect <em>multiple</em> final versions, such as one in 9pt and one in 11pt, add “Alternate final version” options via <a href='", hoturl("settings", "group=opt"), "'>Settings &gt; Submission options</a>.</small>",
-        "</td></tr></table>\n\n";
-    $Conf->footerScript("fold('final',!\$\$('cbfinal_open').checked)");
+    echo '<div class="g"></div>';
+    BanalSettings::render("_m1", $sv);
+    echo "</td></tr></table>",
+        "<p class=\"settingtext\">To collect <em>multiple</em> final versions, such as one in 9pt and one in 11pt, add “Alternate final version” options via <a href='", hoturl("settings", "group=opt"), "'>Settings &gt; Submission options</a>.</p>",
+        "</div>\n\n";
+    Ht::stash_script("foldup.call(\$\$('cbfinal_open'), null)");
 }
 
-    function crosscheck($sv) {
-        global $Conf, $Now;
+    static function crosscheck(SettingValues $sv) {
+        global $Now;
 
         if ($sv->has_interest("final_open")
             && $sv->newv("final_open")
             && ($sv->newv("final_soft") || $sv->newv("final_done"))
             && (!$sv->newv("final_done") || $sv->newv("final_done") > $Now)
             && $sv->newv("seedec") != Conf::SEEDEC_ALL)
-            $sv->set_warning(null, "The system is set to collect final versions, but authors cannot submit final versions until they know their papers have been accepted. You may want to update the the “Who can see paper decisions” setting.");
+            $sv->warning_at(null, "The system is set to collect final versions, but authors cannot submit final versions until they know their papers have been accepted. You may want to update the the “Who can see paper decisions” setting.");
 
         if ($sv->has_interest("seedec")
             && $sv->newv("seedec") == Conf::SEEDEC_ALL
             && $sv->newv("au_seerev") == Conf::AUSEEREV_NO)
-            $sv->set_warning(null, "Authors can see decisions, but not reviews. This is sometimes unintentional.");
+            $sv->warning_at(null, "Authors can see decisions, but not reviews. This is sometimes unintentional.");
+
+        if (($sv->has_interest("seedec") || $sv->has_interest("sub_sub"))
+            && $sv->newv("sub_open")
+            && $sv->newv("sub_sub") > $Now
+            && $sv->newv("seedec") != Conf::SEEDEC_ALL
+            && $sv->conf->fetch_value("select paperId from Paper where outcome<0 limit 1") > 0)
+            $sv->warning_at(null, "Updates will not be allowed for rejected submissions. This exposes decision information that would otherwise be hidden from authors.");
 
         if ($sv->has_interest("au_seerev")
             && $sv->newv("au_seerev") == Conf::AUSEEREV_TAGS
             && !$sv->newv("tag_au_seerev")
-            && !$sv->has_error("tag_au_seerev"))
-            $sv->set_warning("tag_au_seerev", "You haven’t set any review visibility tags.");
+            && !$sv->has_error_at("tag_au_seerev"))
+            $sv->warning_at("tag_au_seerev", "You haven’t set any review visibility tags.");
 
         if (($sv->has_interest("au_seerev") || $sv->has_interest("tag_chair"))
             && $sv->newv("au_seerev") == Conf::AUSEEREV_TAGS
             && $sv->newv("tag_au_seerev")
-            && !$sv->has_error("tag_au_seerev")) {
+            && !$sv->has_error_at("tag_au_seerev")) {
+            $ct = [];
+            foreach (TagInfo::split_unpack($sv->newv("tag_chair")) as $ti)
+                $ct[$ti[0]] = true;
             foreach (explode(" ", $sv->newv("tag_au_seerev")) as $t)
-                if ($t !== "" && !TagInfo::in_list($t, $sv->newv("tag_chair"))) {
-                    $sv->set_warning("tag_au_seerev", "PC members can change the tag “" . htmlspecialchars($t) . "”, which affects whether authors can see reviews. Such tags should usually be <a href=\"" . hoturl("settings", "group=tags") . "\">chair-only</a>.");
-                    $sv->set_warning("tag_chair");
+                if ($t !== "" && !isset($ct[$t])) {
+                    $sv->warning_at("tag_au_seerev", "PC members can change the tag “" . htmlspecialchars($t) . "”, which affects whether authors can see reviews. Such tags should usually be <a href=\"" . hoturl("settings", "group=tags") . "\">chair-only</a>.");
+                    $sv->warning_at("tag_chair");
                 }
         }
     }
@@ -182,7 +206,7 @@ function render($sv) {
 
 
 class Decision_SettingParser extends SettingParser {
-    public function parse($sv, $si) {
+    function parse(SettingValues $sv, Si $si) {
         $dec_revmap = array();
         foreach ($sv->req as $k => &$dname)
             if (str_starts_with($k, "dec")
@@ -192,9 +216,9 @@ class Decision_SettingParser extends SettingParser {
                 if ($dname === "")
                     /* remove decision */;
                 else if (($derror = Conf::decision_name_error($dname)))
-                    $sv->set_error($k, htmlspecialchars($derror));
+                    $sv->error_at($k, htmlspecialchars($derror));
                 else if (isset($dec_revmap[strtolower($dname)]))
-                    $sv->set_error($k, "Decision name “{$dname}” was already used.");
+                    $sv->error_at($k, "Decision name “{$dname}” was already used.");
                 else
                     $dec_revmap[strtolower($dname)] = true;
             }
@@ -205,24 +229,23 @@ class Decision_SettingParser extends SettingParser {
             $match_accept = (stripos($sv->req["decn"], "accept") !== false);
             $match_reject = (stripos($sv->req["decn"], "reject") !== false);
             if ($delta > 0 && $match_reject)
-                $sv->set_error("decn", "You are trying to add an Accept-class decision that has “reject” in its name, which is usually a mistake.  To add the decision anyway, check the “Confirm” box and try again.");
+                $sv->error_at("decn", "You are trying to add an Accept-class decision that has “reject” in its name, which is usually a mistake.  To add the decision anyway, check the “Confirm” box and try again.");
             else if ($delta < 0 && $match_accept)
-                $sv->set_error("decn", "You are trying to add a Reject-class decision that has “accept” in its name, which is usually a mistake.  To add the decision anyway, check the “Confirm” box and try again.");
+                $sv->error_at("decn", "You are trying to add a Reject-class decision that has “accept” in its name, which is usually a mistake.  To add the decision anyway, check the “Confirm” box and try again.");
         }
 
         $sv->need_lock["Paper"] = true;
         return true;
     }
 
-    public function save($sv, $si) {
-        global $Conf;
+    function save(SettingValues $sv, Si $si) {
         // mark all used decisions
-        $decs = $Conf->decision_map();
+        $decs = $sv->conf->decision_map();
         $update = false;
         foreach ($sv->req as $k => $v)
             if (str_starts_with($k, "dec") && ($k = cvtint(substr($k, 3), 0))) {
                 if ($v == "") {
-                    $Conf->qe("update Paper set outcome=0 where outcome=$k");
+                    $sv->conf->qe_raw("update Paper set outcome=0 where outcome=$k");
                     unset($decs[$k]);
                     $update = true;
                 } else if ($v != $decs[$k]) {
@@ -240,16 +263,15 @@ class Decision_SettingParser extends SettingParser {
         }
 
         if ($update)
-            $sv->save("outcome_map", json_encode($decs));
+            $sv->save("outcome_map", json_encode_db($decs));
     }
 }
 
 class RespRound_SettingParser extends SettingParser {
-    function parse($sv, $si) {
-        global $Conf;
+    function parse(SettingValues $sv, Si $si) {
         if (!$sv->newv("resp_active"))
             return false;
-        $old_roundnames = $Conf->resp_round_list();
+        $old_roundnames = $sv->conf->resp_round_list();
         $roundnames = array(1);
         $roundnames_set = array();
 
@@ -258,7 +280,7 @@ class RespRound_SettingParser extends SettingParser {
             if ($rname === "" || $rname === "none" || $rname === "1")
                 /* do nothing */;
             else if (($rerror = Conf::resp_round_name_error($rname)))
-                $sv->set_error("resp_roundname", $rerror);
+                $sv->error_at("resp_roundname", $rerror);
             else {
                 $roundnames[0] = $rname;
                 $roundnames_set[strtolower($rname)] = 0;
@@ -272,9 +294,9 @@ class RespRound_SettingParser extends SettingParser {
             if ($rname === "")
                 continue;
             else if (($rerror = Conf::resp_round_name_error($rname)))
-                $sv->set_error("resp_roundname_$i", $rerror);
+                $sv->error_at("resp_roundname_$i", $rerror);
             else if (get($roundnames_set, strtolower($rname)) !== null)
-                $sv->set_error("resp_roundname_$i", "Response round name “" . htmlspecialchars($rname) . "” has already been used.");
+                $sv->error_at("resp_roundname_$i", "Response round name “" . htmlspecialchars($rname) . "” has already been used.");
             else {
                 $roundnames[] = $rname;
                 $roundnames_set[strtolower($rname)] = $i;
@@ -283,15 +305,15 @@ class RespRound_SettingParser extends SettingParser {
 
         foreach ($roundnames_set as $i) {
             $isuf = $i ? "_$i" : "";
-            if (($v = parse_value($sv, "resp_open$isuf", Si::get("resp_open"))) !== null)
+            if (($v = $sv->parse_value(Si::get("resp_open$isuf"))) !== null)
                 $sv->save("resp_open$isuf", $v <= 0 ? null : $v);
-            if (($v = parse_value($sv, "resp_done$isuf", Si::get("resp_done"))) !== null)
+            if (($v = $sv->parse_value(Si::get("resp_done$isuf"))) !== null)
                 $sv->save("resp_done$isuf", $v <= 0 ? null : $v);
-            if (($v = parse_value($sv, "resp_grace$isuf", Si::get("resp_grace"))) !== null)
+            if (($v = $sv->parse_value(Si::get("resp_grace$isuf"))) !== null)
                 $sv->save("resp_grace$isuf", $v <= 0 ? null : $v);
-            if (($v = parse_value($sv, "resp_words$isuf", Si::get("resp_words"))) !== null)
+            if (($v = $sv->parse_value(Si::get("resp_words$isuf"))) !== null)
                 $sv->save("resp_words$isuf", $v < 0 ? null : $v);
-            if (($v = parse_value($sv, "msg.resp_instrux$isuf", Si::get("msg.resp_instrux"))) !== null)
+            if (($v = $sv->parse_value(Si::get("msg.resp_instrux$isuf"))) !== null)
                 $sv->save("msg.resp_instrux$isuf", $v);
         }
 
@@ -302,7 +324,3 @@ class RespRound_SettingParser extends SettingParser {
         return false;
     }
 }
-
-
-SettingGroup::register("decisions", "Decisions", 800, new SettingRenderer_Decisions);
-SettingGroup::register_synonym("dec", "decisions");

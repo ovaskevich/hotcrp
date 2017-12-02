@@ -1,6 +1,6 @@
 <?php
 // hotcrpmailer.php -- HotCRP mail template manager
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class HotCRPMailPreparation extends MailPreparation {
@@ -17,6 +17,7 @@ class HotCRPMailer extends Mailer {
 
     protected $row = null;
     protected $rrow = null;
+    protected $rrow_unsubmitted = false;
     protected $reviewNumber = "";
     protected $comment_row = null;
     protected $newrev_since = false;
@@ -40,7 +41,7 @@ class HotCRPMailer extends Mailer {
     }
 
     function reset($recipient = null, $row = null, $rest = array()) {
-        global $Me, $Opt;
+        global $Me;
         parent::reset($recipient, $rest);
         $this->permissionContact = get($rest, "permissionContact", $recipient);
         foreach (array("requester", "reviewer", "other") as $k)
@@ -48,6 +49,8 @@ class HotCRPMailer extends Mailer {
         $this->row = $row;
         foreach (array("rrow", "reviewNumber", "comment_row", "newrev_since") as $k)
             $this->$k = get($rest, $k);
+        if (get($rest, "rrow_unsubmitted"))
+            $this->rrow_unsubmitted = true;
         if ($this->reviewNumber === null)
             $this->reviewNumber = "";
         if (get($rest, "no_send"))
@@ -58,7 +61,7 @@ class HotCRPMailer extends Mailer {
         else if (!$this->contacts["reviewer"] && $this->comment_row && get($this->comment_row, "reviewEmail"))
             $this->contacts["reviewer"] = self::make_reviewer_contact($this->comment_row);
         // Do not put passwords in email that is cc'd elsewhere
-        if ((!$Me || !$Me->privChair || get($Opt, "chairHidePasswords"))
+        if ((!$Me || !$Me->privChair || opt("chairHidePasswords"))
             && (get($rest, "cc") || get($rest, "bcc"))
             && (get($rest, "sensitivity") === null || get($rest, "sensitivity") === "display"))
             $this->sensitivity = "high";
@@ -74,7 +77,7 @@ class HotCRPMailer extends Mailer {
             && $this->rrow
             && $Conf->is_review_blind($this->rrow)
             && !get($this->permissionContact, "privChair")
-            && (!isset($this->permissionContact->can_view_review_identity)
+            && (!($this->permissionContact instanceof Contact)
                 || !$this->permissionContact->can_view_review_identity($this->row, $this->rrow, false))) {
             if ($isbool)
                 return false;
@@ -97,12 +100,8 @@ class HotCRPMailer extends Mailer {
         if ($this->rrow)
             $rrows = array($this->rrow);
         else {
-            $result = Dbl::qe("select PaperReview.*,
-                ContactInfo.firstName, ContactInfo.lastName, ContactInfo.email
-                from PaperReview
-                join ContactInfo on (ContactInfo.contactId=PaperReview.contactId)
-                where PaperReview.paperId=" . $this->row->paperId . " order by reviewOrdinal");
-            $rrows = edb_orows($result);
+            $this->row->ensure_full_reviews();
+            $rrows = $this->row->reviews_by_display();
         }
 
         // save old au_seerev setting, and reset it so authors can see them.
@@ -110,15 +109,17 @@ class HotCRPMailer extends Mailer {
             $Conf->au_seerev = Conf::AUSEEREV_YES;
 
         $text = "";
-        $rf = ReviewForm::get();
-        foreach ($rrows as $row)
-            if ($row->reviewSubmitted
-                && $this->permissionContact->can_view_review($this->row, $row, false))
-                $text .= $rf->pretty_text($this->row, $row, $this->permissionContact, $this->no_send) . "\n";
+        $rf = $Conf->review_form();
+        foreach ($rrows as $rrow)
+            if (($rrow->reviewSubmitted || ($rrow == $this->rrow && $this->rrow_unsubmitted))
+                && $this->permissionContact->can_view_review($this->row, $rrow, false)) {
+                if ($text !== "")
+                    $text .= "\n*" . str_repeat(" *", 37) . "\n\n\n";
+                $text .= $rf->pretty_text($this->row, $rrow, $this->permissionContact, $this->no_send, true) . "\n";
+            }
 
         $Conf->au_seerev = $au_seerev;
-        if ($text === "" && $au_seerev == Conf::AUSEEREV_UNLESSINCOMPLETE
-            && count($rrows))
+        if ($text === "" && $au_seerev == Conf::AUSEEREV_UNLESSINCOMPLETE && !empty($rrows))
             $text = "[Reviews are hidden since you have incomplete reviews of your own.]\n";
         return $text;
     }
@@ -134,8 +135,11 @@ class HotCRPMailer extends Mailer {
         $text = "";
         foreach ($crows as $crow)
             if ((!$tag || ($crow->commentTags && stripos($crow->commentTags, " $tag ") !== false))
-                && $this->permissionContact->can_view_comment($this->row, $crow, false))
-                $text .= $crow->unparse_text($this->permissionContact) . "\n";
+                && $this->permissionContact->can_view_comment($this->row, $crow, false)) {
+                if ($text === "")
+                    $text .= "Comments\n" . str_repeat("=", 75) . "\n\n";
+                $text .= $crow->unparse_text($this->permissionContact, true) . "\n";
+            }
 
         $Conf->au_seerev = $au_seerev;
         return $text;
@@ -179,7 +183,7 @@ class HotCRPMailer extends Mailer {
     }
 
     function expandvar_generic($what, $isbool) {
-        global $Conf, $Opt;
+        global $Conf;
         if ($what == "%REVIEWDEADLINE%") {
             if ($this->row && @$this->row->reviewType > 0)
                 $rev = ($this->row->reviewType >= REVIEW_PC ? "pc" : "ext");
@@ -219,7 +223,7 @@ class HotCRPMailer extends Mailer {
             return $this->_statistics[1];
 
         if ($what == "%CONTACTDBDESCRIPTION%")
-            return get($Opt, "contactdb_description") ? : "HotCRP";
+            return opt("contactdb_description") ? : "HotCRP";
 
         if (preg_match('/\A%(OTHER|REQUESTER|REVIEWER)(CONTACT|NAME|EMAIL|FIRST|LAST)%\z/', $what, $m)) {
             if ($m[1] === "REVIEWER") {
@@ -232,7 +236,7 @@ class HotCRPMailer extends Mailer {
                 return false;
         }
 
-        if ($what == "%AUTHORVIEWCAPABILITY%" && @$Opt["disableCapabilities"])
+        if ($what == "%AUTHORVIEWCAPABILITY%" && opt("disableCapabilities"))
             return "";
 
         return self::EXPANDVAR_CONTINUE;
@@ -259,8 +263,26 @@ class HotCRPMailer extends Mailer {
         }
         if ($what == "%NUMBER%" || $what == "%PAPER%")
             return $this->row->paperId;
+        if ($what == "%REVIEWNAME(SUBJECT)%") {
+            if ($this->reviewNumber !== "")
+                return "review #" . $this->reviewNumber;
+            else
+                return "review";
+        }
+        if ($what == "%REVIEWNAME%" || str_starts_with($what, "%REVIEWNAME(")) {
+            if ($this->reviewNumber !== "")
+                return "Review #" . $this->reviewNumber;
+            else
+                return "A review";
+        }
         if ($what == "%REVIEWNUMBER%")
             return $this->reviewNumber;
+        if ($what == "%REVIEWID%") {
+            if ($isbool && !$this->rrow)
+                return false;
+            else
+                return $this->rrow ? $this->rrow->reviewId : "";
+        }
         if ($what == "%AUTHOR%" || $what == "%AUTHORS%") {
             if (!$this->permissionContact->is_site_contact
                 && !$this->row->has_author($this->permissionContact)
@@ -273,7 +295,7 @@ class HotCRPMailer extends Mailer {
             return "cap=" . $Conf->capability_text($this->row, "a");
         if ($what == "%SHEPHERD%" || $what == "%SHEPHERDNAME%"
             || $what == "%SHEPHERDEMAIL%") {
-            $pc = pcMembers();
+            $pc = $Conf->pc_members();
             if (defval($this->row, "shepherdContactId") <= 0
                 || !defval($pc, $this->row->shepherdContactId, null)) {
                 if ($isbool)
@@ -305,6 +327,10 @@ class HotCRPMailer extends Mailer {
                 return $this->get_comments($t);
         }
 
+        if (substr($what, 0, 2) == "%#" && substr($what, $len - 1) == "%") {
+            $what = "%TAGVALUE(" . substr($what, 2, $len - 3) . ")%";
+            $len = strlen($what);
+        }
         if ($len > 12 && substr($what, 0, 10) == "%TAGVALUE("
             && substr($what, $len - 2) == ")%") {
             if (($t = $this->tagger()->check(substr($what, 10, $len - 12), Tagger::NOVALUE | Tagger::NOPRIVATE))) {
@@ -313,6 +339,7 @@ class HotCRPMailer extends Mailer {
                     $result = Dbl::qe("select paperId, tagIndex from PaperTag where tag=?", $t);
                     while (($row = edb_row($result)))
                         $this->_tags[$t][$row[0]] = $row[1];
+                    Dbl::free($result);
                 }
                 $tv = defval($this->_tags[$t], $this->row->paperId);
                 if ($isbool)
@@ -433,7 +460,7 @@ class HotCRPMailer extends Mailer {
         $preps = $contacts = array();
         $rest["combination_type"] = 1;
         while ($result && ($contact = Contact::fetch($result))) {
-            $row->assign_contact_info($contact, $contact->contactId);
+            $row->load_my_contact_info($contact->contactId, $contact);
             if (($p = self::prepare_to($contact, $template, $row, $rest))) {
                 $preps[] = $p;
                 $contacts[] = Text::user_html($contact);
@@ -455,7 +482,7 @@ class HotCRPMailer extends Mailer {
     }
 
     static function send_reviewers($template, $row, $rest = array()) {
-        global $Conf, $Me, $Opt;
+        global $Conf, $Me;
 
         $result = Dbl::qe("select ContactInfo.contactId,
                 firstName, lastName, email, preferredEmail, password,
@@ -466,17 +493,17 @@ class HotCRPMailer extends Mailer {
                 left join PaperConflict on (PaperConflict.contactId=ContactInfo.contactId and PaperConflict.paperId=$row->paperId)
                 group by ContactInfo.contactId");
 
-        if (!isset($rest["cc"]) && isset($Opt["emailCc"]))
-            $rest["cc"] = $Opt["emailCc"];
+        if (!isset($rest["cc"]) && opt("emailCc"))
+            $rest["cc"] = opt("emailCc");
         else if (!isset($rest["cc"]))
-            $rest["cc"] = Text::user_email_to(Contact::site_contact());
+            $rest["cc"] = Text::user_email_to($Conf->site_contact());
 
         // must set the current conflict type in $row for each contact
         $contact_info_map = $row->replace_contact_info_map(null);
 
         $preps = $contacts = array();
         while ($result && ($contact = Contact::fetch($result))) {
-            $row->assign_contact_info($contact, $contact->contactId);
+            $row->load_my_contact_info($contact->contactId, $contact);
             $rest["combination_type"] = $contact->can_view_review_identity($row, null, true) ? 1 : 0;
             if (($p = self::prepare_to($contact, $template, $row, $rest))) {
                 $preps[] = $p;
@@ -494,12 +521,13 @@ class HotCRPMailer extends Mailer {
     }
 
     static function send_manager($template, $row, $rest = array()) {
+        global $Conf;
         $rest["combination_type"] = 2;
         if ($row && $row->managerContactId
-            && ($c = Contact::find_by_id($row->managerContactId)))
+            && ($c = $Conf->user_by_id($row->managerContactId)))
             self::send_to($c, $template, $row, $rest);
         else
-            self::send_to(Contact::site_contact(), $template, $row, $rest);
+            self::send_to($Conf->site_contact(), $template, $row, $rest);
     }
 
 }

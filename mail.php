@@ -1,6 +1,6 @@
 <?php
 // mail.php -- HotCRP mail tool
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 require_once("src/initweb.php");
@@ -13,7 +13,7 @@ $Error = array();
 // load mail from log
 if (isset($_REQUEST["fromlog"]) && ctype_digit($_REQUEST["fromlog"])
     && $Me->privChair) {
-    $result = $Conf->qe("select * from MailLog where mailId=" . $_REQUEST["fromlog"]);
+    $result = $Conf->qe_raw("select * from MailLog where mailId=" . $_REQUEST["fromlog"]);
     if (($row = edb_orow($result))) {
         foreach (array("recipients", "q", "t", "cc", "replyto", "subject", "emailBody") as $field)
             if (isset($row->$field) && !isset($_REQUEST[$field]))
@@ -46,7 +46,7 @@ $null_mailer = new HotCRPMailer(null, null, array_merge(array("width" => false),
 if (isset($_REQUEST["monreq"]))
     $_REQUEST["template"] = "myreviewremind";
 if (isset($_REQUEST["template"]) && !isset($_REQUEST["check"]))
-    $_REQUEST["loadtmpl"] = 1;
+    $_REQUEST["loadtmpl"] = -1;
 
 // paper selection
 if (!isset($_REQUEST["q"]) || trim($_REQUEST["q"]) == "(All)")
@@ -78,7 +78,7 @@ if (isset($_REQUEST["p"]) && is_array($_REQUEST["p"])
     $_REQUEST["plimit"] = 1;
 } else if (isset($_REQUEST["plimit"])) {
     $search = new PaperSearch($Me, array("t" => $_REQUEST["t"], "q" => $_REQUEST["q"]));
-    $papersel = $search->paperList();
+    $papersel = $search->paper_ids();
     sort($papersel);
 } else
     $_REQUEST["q"] = "";
@@ -87,10 +87,11 @@ if (isset($_REQUEST["p"]) && is_array($_REQUEST["p"])
 if (isset($_REQUEST["loadtmpl"])) {
     $t = defval($_REQUEST, "template", "genericmailtool");
     if (!isset($mailTemplates[$t])
-        || !isset($mailTemplates[$t]["mailtool_name"]))
+        || (!isset($mailTemplates[$t]["mailtool_name"]) && !isset($mailTemplates[$t]["mailtool_priority"])))
         $t = "genericmailtool";
     $template = $mailTemplates[$t];
-    $_REQUEST["recipients"] = defval($template, "mailtool_recipients", "s");
+    if (!isset($_REQUEST["recipients"]) || $_REQUEST["loadtmpl"] != -1)
+        $_REQUEST["recipients"] = defval($template, "mailtool_recipients", "s");
     if (isset($template["mailtool_search_type"]))
         $_REQUEST["t"] = $template["mailtool_search_type"];
     $_REQUEST["subject"] = $null_mailer->expand($template["subject"]);
@@ -116,7 +117,7 @@ if (isset($_REQUEST["monreq"]))
 else
     $Conf->header("Mail", "mail", actionBar());
 
-$subjectPrefix = "[" . Conf::$gShortName . "] ";
+$subjectPrefix = "[" . $Conf->short_name . "] ";
 
 
 class MailSender {
@@ -155,9 +156,9 @@ class MailSender {
             ' &nbsp; ';
         $style = $this->groupable ? "" : "display:none";
         if (!@$_REQUEST["group"] && @$_REQUEST["ungroup"])
-            echo Ht::submit("group", "Gather recipients", array("style" => $style, "class" => "mail_groupable"));
+            echo Ht::submit("group", "Gather recipients", array("style" => $style, "class" => "btn mail_groupable"));
         else
-            echo Ht::submit("ungroup", "Separate recipients", array("style" => $style, "class" => "mail_groupable"));
+            echo Ht::submit("ungroup", "Separate recipients", array("style" => $style, "class" => "btn mail_groupable"));
         echo ' &nbsp; ', Ht::submit("cancel", "Cancel"), '</div>';
     }
 
@@ -195,7 +196,7 @@ class MailSender {
             }
             if (isset($_REQUEST["emailBody"]) && $Me->privChair
                 && substr($recipients, 0, 4) == "dec:") {
-                if (!$Conf->timeAuthorViewDecision())
+                if (!$Conf->can_some_author_view_decision())
                     echo "<div class='warning'>You appear to be sending an acceptance or rejection notification, but authors can’t see paper decisions on the site. (<a href='", hoturl("settings", "group=dec"), "' class='nw'>Change this setting</a>)</div>\n";
             }
             echo "<div id='foldmail' class='foldc fold2c'>",
@@ -213,7 +214,7 @@ class MailSender {
             echo '<div class="fn2 warning">Scroll down to send the prepared mail once the page finishes loading.</div>',
                 "</div>\n";
         }
-        $Conf->echoScript("fold('mail',0,2)");
+        echo Ht::unstash_script("fold('mail',0,2)");
         $this->started = true;
     }
 
@@ -231,7 +232,7 @@ class MailSender {
         }
         if (!$this->sending && $this->groupable)
             $s .= "\$('.mail_groupable').show();";
-        $Conf->echoScript($s);
+        echo Ht::unstash_script($s);
     }
 
     private static function fix_body($prep) {
@@ -240,7 +241,7 @@ class MailSender {
     }
 
     private function send_prep($prep) {
-        global $Conf;
+        global $Conf, $Me;
 
         $cbkey = "c" . join("_", $prep->contacts) . "p" . $prep->paperId;
         if ($this->sending && !defval($_REQUEST, $cbkey))
@@ -253,7 +254,7 @@ class MailSender {
         if ($this->sending) {
             Mailer::send_preparation($prep);
             foreach ($prep->contacts as $cid)
-                $Conf->log("Account was sent mail" . $this->mailid_text, $cid, $prep->paperId);
+                $Conf->log_for($Me, $cid, "Sent mail" . $this->mailid_text, $prep->paperId);
         }
 
         // hide passwords from non-chair users
@@ -286,9 +287,9 @@ class MailSender {
                 echo "<td class='mhx'></td>";
             else {
                 ++$this->cbcount;
-                echo '<td class="mhcb"><input type="checkbox" class="cb" name="', $cbkey,
+                echo '<td class="mhcb"><input type="checkbox" class="js-range-click" name="', $cbkey,
                     '" value="1" checked="checked" data-range-type="mhcb" id="psel', $this->cbcount,
-                    '" onclick="rangeclick(event,this)" /></td>';
+                    '" /></td>';
             }
             echo '<td class="mhnp nw">', $k, ":</td>",
                 '<td class="mhdp">', $vh, "</td></tr>\n";
@@ -329,7 +330,7 @@ class MailSender {
     }
 
     private function run() {
-        global $Conf, $Opt, $Me, $Error, $subjectPrefix, $mailer_options;
+        global $Conf, $Me, $Error, $subjectPrefix, $mailer_options;
 
         $subject = trim(defval($_REQUEST, "subject", ""));
         if (substr($subject, 0, strlen($subjectPrefix)) != $subjectPrefix)
@@ -347,20 +348,17 @@ class MailSender {
         $q = $this->recip->query($paper_sensitive);
         if (!$q)
             return Conf::msg_error("Bad recipients value");
-        $result = $Conf->qe($q);
+        $result = $Conf->qe_raw($q);
         if (!$result)
             return;
         $recipients = defval($_REQUEST, "recipients", "");
 
         if ($this->sending) {
-            $q = "recipients='" . sqlq($recipients)
-                . "', cc='" . sqlq($_REQUEST["cc"])
-                . "', replyto='" . sqlq($_REQUEST["replyto"])
-                . "', subject='" . sqlq($_REQUEST["subject"])
-                . "', emailBody='" . sqlq($_REQUEST["emailBody"]) . "'";
-            if ($Conf->sversion >= 79)
-                $q .= ", q='" . sqlq($_REQUEST["q"]) . "', t='" . sqlq($_REQUEST["t"]) . "'";
-            if (($log_result = Dbl::query_raw("insert into MailLog set $q")))
+            $q = "recipients=?, cc=?, replyto=?, subject=?, emailBody=?, q=?, t=?";
+            $qv = [$recipients, $_REQUEST["cc"], $_REQUEST["replyto"], $_REQUEST["subject"], $_REQUEST["emailBody"], $_REQUEST["q"], $_REQUEST["t"]];
+            if ($Conf->sversion >= 146 && !$Me->privChair)
+                $q .= ", fromNonChair=1";
+            if (($log_result = $Conf->qe_apply("insert into MailLog set $q", $qv)))
                 $this->mailid_text = " #" . $log_result->insert_id;
             $Me->log_activity("Sending mail$this->mailid_text \"$subject\"");
         } else
@@ -394,7 +392,7 @@ class MailSender {
                     $preperrors[$emsg] = true;
                 }
             } else if ($this->process_prep($prep, $last_prep, $row)) {
-                if ((!$Me->privChair || @$Opt["chairHidePasswords"])
+                if ((!$Me->privChair || opt("chairHidePasswords"))
                     && !@$last_prep->sensitive) {
                     $srest = array_merge($rest, array("sensitivity" => "display"));
                     $mailer->reset($contact, $row, $srest);
@@ -408,7 +406,7 @@ class MailSender {
                 $this->echo_prologue();
                 $nwarnings = $mailer->nwarnings();
                 echo "<div id='foldmailwarn$nwarnings' class='hidden'><div class='warning'>", join("<br />", $mailer->warnings()), "</div></div>";
-                $Conf->echoScript("\$\$('mailwarnings').innerHTML = \$\$('foldmailwarn$nwarnings').innerHTML;");
+                echo Ht::unstash_script("\$\$('mailwarnings').innerHTML = \$\$('foldmailwarn$nwarnings').innerHTML;");
             }
 
             if ($this->sending && $revinform !== null)
@@ -425,9 +423,9 @@ class MailSender {
         else if (!$this->sending)
             $this->echo_actions();
         if ($revinform)
-            $Conf->qe("update PaperReview set timeRequestNotified=" . time() . " where " . join(" or ", $revinform));
+            $Conf->qe_raw("update PaperReview set timeRequestNotified=" . time() . " where " . join(" or ", $revinform));
         echo "</div></form>";
-        $Conf->echoScript("fold('mail', null);");
+        echo Ht::unstash_script("fold('mail', null);");
         $Conf->footer();
         exit;
     }
@@ -442,16 +440,16 @@ if (!isset($_REQUEST["emailBody"]))
     $_REQUEST["emailBody"] = $null_mailer->expand($mailTemplates["genericmailtool"]["body"]);
 if (substr($_REQUEST["subject"], 0, strlen($subjectPrefix)) == $subjectPrefix)
     $_REQUEST["subject"] = substr($_REQUEST["subject"], strlen($subjectPrefix));
-if (isset($_REQUEST["cc"]) && $Me->privChair)
+if (isset($_REQUEST["cc"]) && $Me->is_manager()) // XXX should only apply to papers you administer
     $_REQUEST["cc"] = simplify_whitespace($_REQUEST["cc"]);
-else if (isset($Opt["emailCc"]))
-    $_REQUEST["cc"] = $Opt["emailCc"] ? $Opt["emailCc"] : "";
+else if (opt("emailCc"))
+    $_REQUEST["cc"] = opt("emailCc");
 else
-    $_REQUEST["cc"] = Text::user_email_to(Contact::site_contact());
-if (isset($_REQUEST["replyto"]) && $Me->privChair)
+    $_REQUEST["cc"] = Text::user_email_to($Conf->site_contact());
+if (isset($_REQUEST["replyto"]) && $Me->is_manager()) // XXX should only apply to papers you administer
     $_REQUEST["replyto"] = simplify_whitespace($_REQUEST["replyto"]);
 else
-    $_REQUEST["replyto"] = defval($Opt, "emailReplyTo", "");
+    $_REQUEST["replyto"] = opt("emailReplyTo", "");
 
 
 // Check or send
@@ -466,19 +464,20 @@ else if ((@$_REQUEST["check"] || @$_REQUEST["group"] || @$_REQUEST["ungroup"])
 
 
 if (isset($_REQUEST["monreq"])) {
-    $plist = new PaperList(new PaperSearch($Me, ["t" => "req", "q" => ""]), ["list" => true, "foldable" => true]);
-    $ptext = $plist->table_html("reqrevs", ["header_links" => true, "table_id" => "foldpl"]);
+    $plist = new PaperList(new PaperSearch($Me, ["t" => "req", "q" => ""]), ["foldable" => true]);
+    $plist->set_table_id_class("foldpl", "pltable_full");
+    $ptext = $plist->table_html("reqrevs", ["header_links" => true, "list" => true]);
     if ($plist->count == 0)
-        $Conf->infoMsg("You have not requested any external reviews.  <a href='", hoturl("index"), "'>Return home</a>");
+        $Conf->infoMsg("You have not requested any external reviews.  <a href='" . hoturl("index") . "'>Return home</a>");
     else {
         echo "<h2>Requested reviews</h2>\n\n", $ptext, "<div class='info'>";
-        if ($plist->any->need_review)
+        if ($plist->has("need_review"))
             echo "Some of your requested external reviewers have not completed their reviews.  To send them an email reminder, check the text below and then select &ldquo;Prepare mail.&rdquo;  You’ll get a chance to review the emails and select specific reviewers to remind.";
         else
             echo "All of your requested external reviewers have completed their reviews.  <a href='", hoturl("index"), "'>Return home</a>";
         echo "</div>\n";
     }
-    if (!$plist->any->need_review) {
+    if (!$plist->has("need_review")) {
         $Conf->footer();
         exit;
     }
@@ -487,7 +486,7 @@ if (isset($_REQUEST["monreq"])) {
 echo Ht::form_div(hoturl_post("mail", "check=1")),
     Ht::hidden_default_submit("default", 1), "
 
-<div class='aa' style='padding-left:8px'>
+<div class='aa aahc' style='padding-left:8px'>
   <strong>Template:</strong> &nbsp;";
 $tmpl = array();
 foreach ($mailTemplates as $k => $v) {
@@ -501,14 +500,14 @@ foreach ($tmpl as $k => &$v) {
 }
 if (!isset($_REQUEST["template"]) || !isset($tmpl[$_REQUEST["template"]]))
     $_REQUEST["template"] = "genericmailtool";
-echo Ht::select("template", $tmpl, $_REQUEST["template"], array("onchange" => "highlightUpdate(\"loadtmpl\")")),
+echo Ht::select("template", $tmpl, $_REQUEST["template"]),
     " &nbsp;",
-    Ht::submit("loadtmpl", "Load", array("id" => "loadtmpl")),
+    Ht::submit("loadtmpl", "Load", ["id" => "loadtmpl"]),
     " &nbsp;
  <span class='hint'>Templates are mail texts tailored for common conference tasks.</span>
 </div>
 
-<div class='mail' style='float:left;margin:4px 1em 12px 0'><table>\n";
+<div class='mail' style='float:left;margin:4px 1em 12px 0'><table id=\"foldpsel\" class=\"fold8c fold9o fold10c\">\n";
 
 // ** TO
 echo '<tr><td class="mhnp nw">To:</td><td class="mhdd">',
@@ -516,13 +515,10 @@ echo '<tr><td class="mhnp nw">To:</td><td class="mhdd">',
     "<div class='g'></div>\n";
 
 // paper selection
-echo '<div id="foldpsel" class="fold8c fold9o fold10c">';
 echo '<table class="fx9"><tr>';
 if ($Me->privChair)
     echo '<td class="nw">',
-        Ht::checkbox("plimit", 1, isset($_REQUEST["plimit"]),
-                     ["id" => "plimit",
-                      "onchange" => "fold('psel', !this.checked, 8)"]),
+        Ht::checkbox("plimit", 1, isset($_REQUEST["plimit"]), ["id" => "plimit"]),
         "&nbsp;</td><td>", Ht::label("Choose papers", "plimit"),
         "<span class='fx8'>:&nbsp; ";
 else
@@ -560,9 +556,17 @@ echo 'Assignments since:&nbsp; ',
               array("placeholder" => "(all)", "size" => 30)),
     '</div>';
 
-echo '<div class="fx9 g"></div></div>';
+echo '<div class="fx9 g"></div>';
 
-$Conf->footerScript("setmailpsel(\$\$(\"recipients\"))");
+Ht::stash_script('function mail_recipients_fold(event) {
+    var plimit = $$("plimit");
+    foldup.call(this, null, {f: !!plimit && !plimit.checked, n: 8});
+    var sopt = $(this).find("option[value=\'" + this.value + "\']");
+    foldup.call(this, null, {f: sopt.hasClass("mail-want-no-papers"), n: 9});
+    foldup.call(this, null, {f: !sopt.hasClass("mail-want-since"), n: 10});
+}
+$("#recipients, #plimit").on("change", mail_recipients_fold);
+$(function () { $("#recipients").trigger("change"); })');
 
 echo "</td></tr>\n";
 
@@ -582,7 +586,7 @@ if ($Me->is_manager()) {
 
 // ** SUBJECT
 echo "  <tr><td class='mhnp nw'>Subject:</td><td class='mhdp'>",
-    "<tt>[", htmlspecialchars(Conf::$gShortName), "]&nbsp;</tt><input type='text' class='textlite-tt' name='subject' value=\"", htmlspecialchars($_REQUEST["subject"]), "\" size='64' /></td></tr>
+    "<tt>[", htmlspecialchars($Conf->short_name), "]&nbsp;</tt><input type='text' class='textlite-tt' name='subject' value=\"", htmlspecialchars($_REQUEST["subject"]), "\" size='64' /></td></tr>
 
  <tr><td></td><td class='mhb'>\n",
     Ht::textarea("emailBody", $_REQUEST["emailBody"],
@@ -592,14 +596,16 @@ echo "  <tr><td class='mhnp nw'>Subject:</td><td class='mhdp'>",
 
 
 if ($Me->privChair) {
-    $result = $Conf->qe("select * from MailLog order by mailId desc limit 18");
+    $result = $Conf->qe_raw("select mailId, subject, emailBody from MailLog where fromNonChair=0 order by mailId desc limit 200");
     if (edb_nrows($result)) {
-        echo "<div style='padding-top:12px'>",
+        echo "<div style='padding-top:12px;max-height:24em;overflow-y:auto'>",
             "<strong>Recent mails:</strong>\n";
+        $i = 1;
         while (($row = edb_orow($result))) {
             echo "<div class='mhdd'><div style='position:relative;overflow:hidden'>",
-                "<div style='position:absolute;white-space:nowrap'><a class='q' href=\"", hoturl("mail", "fromlog=" . $row->mailId), "\">", htmlspecialchars($row->subject), " &ndash; <span class='dim'>", htmlspecialchars($row->emailBody), "</span></a></div>",
+                "<div style='position:absolute;white-space:nowrap'><span style='min-width:2em;text-align:right;display:inline-block' class='dim'>$i.</span> <a class='q' href=\"", hoturl("mail", "fromlog=" . $row->mailId), "\">", htmlspecialchars($row->subject), " &ndash; <span class='dim'>", htmlspecialchars(UnicodeHelper::utf8_prefix($row->emailBody, 100)), "</span></a></div>",
                 "<br /></div></div>\n";
+            ++$i;
         }
         echo "</div>\n\n";
     }
@@ -613,53 +619,56 @@ echo "<div class='aa' style='clear:both'>\n",
 
 <div id='mailref'>Keywords enclosed in percent signs, such as <code>%NAME%</code> or <code>%REVIEWDEADLINE%</code>, are expanded for each mail.  Use the following syntax:
 <div class='g'></div>
-<table>
-<tr><td class='plholder'><table>
-<tr><td class='lxcaption'><code>%URL%</code></td>
-    <td class='llentry'>Site URL.</td></tr>
-<tr><td class='lxcaption'><code>%LOGINURL%</code></td>
-    <td class='llentry'>URL for recipient to log in to the site.</td></tr>
-<tr><td class='lxcaption'><code>%NUMSUBMITTED%</code></td>
-    <td class='llentry'>Number of papers submitted.</td></tr>
-<tr><td class='lxcaption'><code>%NUMACCEPTED%</code></td>
-    <td class='llentry'>Number of papers accepted.</td></tr>
-<tr><td class='lxcaption'><code>%NAME%</code></td>
-    <td class='llentry'>Full name of recipient.</td></tr>
-<tr><td class='lxcaption'><code>%FIRST%</code>, <code>%LAST%</code></td>
-    <td class='llentry'>First and last names, if any, of recipient.</td></tr>
-<tr><td class='lxcaption'><code>%EMAIL%</code></td>
-    <td class='llentry'>Email address of recipient.</td></tr>
-<tr><td class='lxcaption'><code>%REVIEWDEADLINE%</code></td>
-    <td class='llentry'>Reviewing deadline appropriate for recipient.</td></tr>
-</table></td><td class='plholder'><table>
-<tr><td class='lxcaption'><code>%NUMBER%</code></td>
-    <td class='llentry'>Paper number relevant for mail.</td></tr>
-<tr><td class='lxcaption'><code>%TITLE%</code></td>
-    <td class='llentry'>Paper title.</td></tr>
-<tr><td class='lxcaption'><code>%TITLEHINT%</code></td>
-    <td class='llentry'>First couple words of paper title (useful for mail subject).</td></tr>
-<tr><td class='lxcaption'><code>%OPT(AUTHORS)%</code></td>
-    <td class='llentry'>Paper authors (if recipient is allowed to see the authors).</td></tr>
-<tr><td><div class='g'></div></td></tr>
-<tr><td class='lxcaption'><code>%REVIEWS%</code></td>
-    <td class='llentry'>Pretty-printed paper reviews.</td></tr>
-<tr><td class='lxcaption'><code>%COMMENTS%</code></td>
-    <td class='llentry'>Pretty-printed paper comments, if any.</td></tr>
-<tr><td class='lxcaption'><code>%COMMENTS(TAG)%</code></td>
-    <td class='llentry'>Comments tagged #TAG, if any.</td></tr>
-<tr><td><div class='g'></div></td></tr>
-<tr><td class='lxcaption'><code>%IF(SHEPHERD)%...%ENDIF%</code></td>
-    <td class='llentry'>Include text only if a shepherd is assigned.</td></tr>
-<tr><td class='lxcaption'><code>%SHEPHERD%</code></td>
-    <td class='llentry'>Shepherd name and email, if any.</td></tr>
-<tr><td class='lxcaption'><code>%SHEPHERDNAME%</code></td>
-    <td class='llentry'>Shepherd name, if any.</td></tr>
-<tr><td class='lxcaption'><code>%SHEPHERDEMAIL%</code></td>
-    <td class='llentry'>Shepherd email, if any.</td></tr>
-<tr><td class='lxcaption'><code>%TAGVALUE(t)%</code></td>
-    <td class='llentry'>Value of paper’s tag <code>t</code>.</td></tr>
-</table></td></tr>
-</table></div>
+<div class=\"ctable\">
+<dl class=\"ctelt\" style=\"padding-bottom:12px\">
+<dt><code>%URL%</code></dt>
+    <dd>Site URL.</dd>
+<dt><code>%LOGINURL%</code></dt>
+    <dd>URL for recipient to log in to the site.</dd>
+<dt><code>%NUMSUBMITTED%</code></dt>
+    <dd>Number of papers submitted.</dd>
+<dt><code>%NUMACCEPTED%</code></dt>
+    <dd>Number of papers accepted.</dd>
+<dt><code>%NAME%</code></dt>
+    <dd>Full name of recipient.</dd>
+<dt><code>%FIRST%</code>, <code>%LAST%</code></dt>
+    <dd>First and last names, if any, of recipient.</dd>
+<dt><code>%EMAIL%</code></dt>
+    <dd>Email address of recipient.</dd>
+<dt><code>%REVIEWDEADLINE%</code></dt>
+    <dd>Reviewing deadline appropriate for recipient.</dd>
+</dl><dl class=\"ctelt\" style=\"padding-bottom:12px\">
+<dt><code>%NUMBER%</code></dt>
+    <dd>Paper number relevant for mail.</dd>
+<dt><code>%TITLE%</code></dt>
+    <dd>Paper title.</dd>
+<dt><code>%TITLEHINT%</code></dt>
+    <dd>First couple words of paper title (useful for mail subject).</dd>
+<dt><code>%OPT(AUTHORS)%</code></dt>
+    <dd>Paper authors (if recipient is allowed to see the authors).</dd>
+</dl><dl class=\"ctelt\" style=\"padding-bottom:12px\">
+<dt><code>%REVIEWS%</code></dt>
+    <dd>Pretty-printed paper reviews.</dd>
+<dt><code>%COMMENTS%</code></dt>
+    <dd>Pretty-printed paper comments, if any.</dd>
+<dt><code>%COMMENTS(<i>tag</i>)%</code></dt>
+    <dd>Comments tagged #<code><i>tag</i></code>, if any.</dd>
+</dl><dl class=\"ctelt\" style=\"padding-bottom:12px\">
+<dt><code>%IF(SHEPHERD)%...%ENDIF%</code></dt>
+    <dd>Include text if a shepherd is assigned.</dd>
+<dt><code>%SHEPHERD%</code></dt>
+    <dd>Shepherd name and email, if any.</dd>
+<dt><code>%SHEPHERDNAME%</code></dt>
+    <dd>Shepherd name, if any.</dd>
+<dt><code>%SHEPHERDEMAIL%</code></dt>
+    <dd>Shepherd email, if any.</dd>
+</dl><dl class=\"ctelt\" style=\"padding-bottom:12px\">
+<dt><code>%IF(#<i>tag</i>)%...%ENDIF%</code></dt>
+    <dd>Include text if paper has tag <code><i>tag</i></code>.</dd>
+<dt><code>%TAGVALUE(<i>tag</i>)%</code></dt>
+    <dd>Value of paper’s <code><i>tag</i></code>.</dd>
+</dl>
+</div></div>
 
 </div></form>\n";
 

@@ -1,6 +1,6 @@
 <?php
 // conflict.php -- HotCRP conflict type class
-// HotCRP is Copyright (c) 2008-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2008-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class Conflict {
@@ -21,27 +21,41 @@ class Conflict {
                                CONFLICT_AUTHOR => "author",
                                CONFLICT_CONTACTAUTHOR => "author");
 
-    public $value;
-
-    function __construct($value) {
-        $this->value = $value;
+    static function is_author_mark($ct) {
+        return $ct >= CONFLICT_AUTHORMARK && $ct <= CONFLICT_MAXAUTHORMARK;
     }
-
-    static function make_nonconflict() {
-        return new Conflict(0);
+    static function constrain_editable($ct, $admin) {
+        if (is_string($ct))
+            $ct = cvtint($ct, 0);
+        if ($ct > 0) {
+            $max = $admin ? CONFLICT_CHAIRMARK : CONFLICT_MAXAUTHORMARK;
+            return max(min($ct, $max), CONFLICT_AUTHORMARK);
+        } else
+            return 0;
     }
-    static function force_author_mark($value, $privChair) {
-        $max = $privChair ? CONFLICT_CHAIRMARK : CONFLICT_MAXAUTHORMARK;
-        return new Conflict(max(min($value, $max), CONFLICT_AUTHORMARK));
-    }
-
-    function is_conflict() {
-        return $this->value > 0;
-    }
-    function is_author_mark() {
-        return $this->value >= CONFLICT_AUTHORMARK && $this->value <= CONFLICT_MAXAUTHORMARK;
-    }
-    function is_author() {
-        return $this->value >= CONFLICT_AUTHOR;
+    static function parse($text, $default_yes) {
+        if (is_bool($text))
+            return $text ? $default_yes : 0;
+        $text = strtolower(trim($text));
+        if ($text === "none")
+            return 0;
+        else if (($b = friendly_boolean($text)) !== null)
+            return $b ? $default_yes : 0;
+        else if ($text === "conflict")
+            return $default_yes;
+        else if ($text === "collab" || $text === "collaborator" || $text === "recent collaborator")
+            return CONFLICT_AUTHORMARK /* 2 */;
+        else if ($text === "advisor" || $text === "student" || $text === "advisor/student")
+            return 3;
+        else if ($text === "institution" || $text === "institutional")
+            return 4;
+        else if ($text === "personal")
+            return 5;
+        else if ($text === "other")
+            return 6;
+        else if ($text === "confirmed" || $text === "chair-confirmed")
+            return CONFLICT_CHAIRMARK;
+        else
+            return false;
     }
 }

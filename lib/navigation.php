@@ -1,6 +1,6 @@
 <?php
 // navigation.php -- HotCRP navigation helper functions
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 class NavigationState {
@@ -19,7 +19,7 @@ class NavigationState {
     //   required: SERVER_PORT, SCRIPT_FILENAME, SCRIPT_NAME, REQUEST_URI
     //   optional: HTTP_HOST, SERVER_NAME, HTTPS, SERVER_SOFTWARE
 
-    public function __construct($server, $index_name = "index") {
+    function __construct($server, $index_name = "index") {
         if (!$server)
             return;
 
@@ -70,16 +70,24 @@ class NavigationState {
 
         // separate $page, $path, $query
         $uri_suffix = substr($uri, $uri_slash);
-        preg_match(',\A(/[^/\?\#]*|)([^\?\#]*)(.*)\z,',
-                   substr($uri, $uri_slash), $m);
+        // Semi-URL-decode $uri_suffix, only decoding safe characters.
+        // (This is generally already done for us but just to be safe.)
+        $uri_suffix = preg_replace_callback('/%[2-7][0-9a-f]/i', function ($m) {
+            $x = urldecode($m[0]);
+            if (ctype_alnum($x) || strpos("._,-=@~", $x) !== false)
+                return $x;
+            else
+                return $m[0];
+        }, $uri_suffix);
+        preg_match(',\A(/[^/\?\#]*|)([^\?\#]*)(.*)\z,', $uri_suffix, $m);
         if ($m[1] !== "" && $m[1] !== "/")
-            $this->page = urldecode(substr($m[1], 1));
+            $this->page = substr($m[1], 1);
         else
             $this->page = $index_name;
         if (($pagelen = strlen($this->page)) > 4
             && substr($this->page, $pagelen - 4) === ".php")
             $this->page = substr($this->page, 0, $pagelen - 4);
-        $this->path = urldecode($m[2]);
+        $this->path = $m[2];
         $this->query = $m[3];
 
         // detect $site_path_relative
@@ -99,16 +107,16 @@ class NavigationState {
             $this->php_suffix = "";
     }
 
-    public function self() {
+    function self() {
         return $this->server . $this->site_path . $this->page . $this->path . $this->query;
     }
 
-    public function site_absolute($downcase_host = false) {
+    function site_absolute($downcase_host = false) {
         $x = $downcase_host ? strtolower($this->server) : $this->server;
         return $x . $this->site_path;
     }
 
-    public function siteurl($url = null) {
+    function siteurl($url = null) {
         $x = $this->site_path_relative;
         if (!$url)
             return $x;
@@ -118,7 +126,7 @@ class NavigationState {
             return ($x ? : $this->site_path) . substr($url, 5);
     }
 
-    public function siteurl_path($url = null) {
+    function siteurl_path($url = null) {
         $x = $this->site_path;
         if (!$url)
             return $x;
@@ -128,13 +136,13 @@ class NavigationState {
             return $x . substr($url, 5);
     }
 
-    public function set_siteurl($url) {
+    function set_siteurl($url) {
         if ($url !== "" && $url[strlen($url) - 1] !== "/")
             $url .= "/";
         return ($this->site_path_relative = $url);
     }
 
-    public function path_component($n, $decoded = false) {
+    function path_component($n, $decoded = false) {
         if ($this->path !== "") {
             $p = explode("/", substr($this->path, 1));
             if ($n + 1 < count($p) || ($n + 1 == count($p) && $p[$n] !== ""))
@@ -143,7 +151,7 @@ class NavigationState {
         return null;
     }
 
-    public function path_suffix($n) {
+    function path_suffix($n) {
         if ($this->path !== "") {
             $p = 0;
             while ($n > 0 && ($p = strpos($this->path, "/", $p + 1)))
@@ -154,7 +162,7 @@ class NavigationState {
         return "";
     }
 
-    public function make_absolute($url) {
+    function make_absolute($url) {
         if ($url === false)
             return $this->server . $this->site_path;
         preg_match(',\A((?:https?://[^/]+)?)(/*)((?:[.][.]/)*)(.*)\z,i', $url, $m);
@@ -177,74 +185,78 @@ class NavigationState {
 class Navigation {
     private static $s;
 
-    public static function analyze($index_name = "index") {
+    static function analyze($index_name = "index") {
         if (PHP_SAPI != "cli")
             self::$s = new NavigationState($_SERVER, $index_name);
         else
             self::$s = new NavigationState(null);
     }
 
-    public static function self() {
+    static function get() {
+        return self::$s;
+    }
+
+    static function self() {
         return self::$s->self();
     }
 
-    public static function host() {
+    static function host() {
         return self::$s->host;
     }
 
-    public static function site_absolute($downcase_host = false) {
+    static function site_absolute($downcase_host = false) {
         return self::$s->site_absolute($downcase_host);
     }
 
-    public static function site_path() {
+    static function site_path() {
         return self::$s->site_path;
     }
 
-    public static function siteurl($url = null) {
+    static function siteurl($url = null) {
         return self::$s->siteurl($url);
     }
 
-    public static function siteurl_path($url = null) {
+    static function siteurl_path($url = null) {
         return self::$s->siteurl_path($url);
     }
 
-    public static function set_siteurl($url) {
+    static function set_siteurl($url) {
         return self::$s->set_siteurl($url);
     }
 
-    public static function page() {
+    static function page() {
         return self::$s->page;
     }
 
-    public static function path() {
+    static function path() {
         return self::$s->path;
     }
 
-    public static function path_component($n, $decoded = false) {
+    static function path_component($n, $decoded = false) {
         return self::$s->path_component($n, $decoded);
     }
 
-    public static function path_suffix($n) {
+    static function path_suffix($n) {
         return self::$s->path_suffix($n);
     }
 
-    public static function set_page($page) {
+    static function set_page($page) {
         return (self::$s->page = $page);
     }
 
-    public static function set_path($path) {
+    static function set_path($path) {
         return (self::$s->path = $path);
     }
 
-    public static function php_suffix() {
+    static function php_suffix() {
         return self::$s->php_suffix;
     }
 
-    public static function make_absolute($url) {
+    static function make_absolute($url) {
         return self::$s->make_absolute($url);
     }
 
-    public static function redirect($url) {
+    static function redirect($url) {
         $url = self::make_absolute($url);
         // Might have an HTML-encoded URL; decode at least &amp;.
         $url = str_replace("&amp;", "&", $url);
@@ -256,18 +268,17 @@ class Navigation {
 <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />
 <meta http-equiv=\"Content-Script-Type\" content=\"text/javascript\" />
 <title>Redirection</title>
-<script>location=\"$url\";</script></head>
-<body>
+<script>location=", json_encode($url), ";</script>
 <p>You should be redirected <a href=\"", htmlspecialchars($url), "\">to here</a>.</p>
 </body></html>\n";
         exit();
     }
 
-    public static function redirect_site($site_url) {
-        self::redirect(self::siteurl($site_url));
+    static function redirect_site($site_url) {
+        self::redirect(self::site_absolute() . $site_url);
     }
 
-    public static function redirect_http_to_https($allow_http_if_localhost = false) {
+    static function redirect_http_to_https($allow_http_if_localhost = false) {
         if (self::$s->protocol == "http://"
             && (!$allow_http_if_localhost
                 || ($_SERVER["REMOTE_ADDR"] !== "127.0.0.1"

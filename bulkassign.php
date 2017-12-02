@@ -1,11 +1,9 @@
 <?php
 // bulkassign.php -- HotCRP bulk paper assignment page
-// HotCRP is Copyright (c) 2006-2016 Eddie Kohler and Regents of the UC
+// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
 // Distributed under an MIT-like license; see LICENSE
 
 require_once("src/initweb.php");
-require_once("src/papersearch.php");
-require_once("src/assigners.php");
 if (!$Me->is_manager())
     $Me->escape();
 if (check_post())
@@ -16,13 +14,15 @@ $null_mailer = new HotCRPMailer(null, null, array("requester_contact" => $Me,
                                                   "width" => false));
 $Error = array();
 
-$_GET["rev_roundtag"] = $_POST["rev_roundtag"] = $_REQUEST["rev_roundtag"] =
-    (string) $Conf->sanitize_round_name(req("rev_roundtag"));
+$_GET["rev_round"] = $_POST["rev_round"] = $_REQUEST["rev_round"] =
+    (string) $Conf->sanitize_round_name(req("rev_round"));
 
 
 function assignment_defaults() {
-    $defaults = array("action" => req("default_action"),
-                      "round" => $_REQUEST["rev_roundtag"]);
+    $defaults = [];
+    if (($action = req("default_action")) && $action !== "guess")
+        $defaults["action"] = $action;
+    $defaults["round"] = req("rev_round");
     if (req("requestreview_notify") && req("requestreview_body"))
         $defaults["extrev_notify"] = ["subject" => req("requestreview_subject"),
                                       "body" => req("requestreview_body")];
@@ -54,7 +54,7 @@ function keep_browser_alive($assignset, $lineno, $line) {
             $text .= " processing";
         else
             $text .= " <code>" . htmlspecialchars(join(",", $line)) . "</code>";
-        $Conf->echoScript("\$\$('mailcount').innerHTML=" . json_encode($text) . ";");
+        echo Ht::unstash_script("\$\$('mailcount').innerHTML=" . json_encode_browser($text) . ";");
         flush();
         while (@ob_end_flush())
             /* skip */;
@@ -62,27 +62,35 @@ function keep_browser_alive($assignset, $lineno, $line) {
 }
 
 function finish_browser_alive() {
-    global $Conf, $csv_preparing;
+    global $csv_preparing;
     if ($csv_preparing)
-        $Conf->echoScript("fold('mail',null)");
+        echo Ht::unstash_script("fold('mail',null)");
 }
 
 function complete_assignment($callback) {
     global $Me;
-    $assignset = new AssignmentSet($Me, false);
+    $SSel = SearchSelection::make(make_qreq(), $Me);
+    $assignset = new AssignmentSet($Me, true);
+    $assignset->enable_papers($SSel->selection());
     $assignset->parse($_POST["file"], get($_POST, "filename"),
                       assignment_defaults(), $callback);
-    $SSel = SearchSelection::make(make_qreq(), $Me);
-    $assignset->restrict_papers($SSel->selection());
     return $assignset->execute(true);
 }
 
 
-if (isset($_REQUEST["saveassignment"]) && check_post()
-    && (isset($_REQUEST["cancel"])
-        || (isset($_POST["file"]) && get($_POST, "assignment_size_estimate") < 1000
-            && complete_assignment(null))))
-    /*redirectSelf()*/;
+// redirect if save cancelled
+if (isset($_REQUEST["saveassignment"]) && isset($_POST["cancel"])) {
+    redirectSelf(); // should not return
+    unset($_REQUEST["saveassignment"], $_GET["saveassignment"], $_POST["saveassignment"]);
+}
+
+// perform quick assignments all at once
+if (isset($_REQUEST["saveassignment"])
+    && check_post()
+    && isset($_POST["file"])
+    && get($_POST, "assignment_size_estimate") < 1000
+    && complete_assignment(null))
+    redirectSelf();
 
 
 $Conf->header("Assignments &nbsp;&#x2215;&nbsp; <strong>Bulk update</strong>", "bulkassign", actionBar());
@@ -103,9 +111,10 @@ Assignment methods:
 </ul>
 <hr class='hr' />
 Types of PC review:
-<dl><dt>" . review_type_icon(REVIEW_PRIMARY) . " Primary</dt><dd>Mandatory, may not be delegated</dd>
-  <dt>" . review_type_icon(REVIEW_SECONDARY) . " Secondary</dt><dd>Mandatory, may be delegated to external reviewers</dd>
-  <dt>" . review_type_icon(REVIEW_PC) . " Optional</dt><dd>May be declined</dd></dl>
+<dl><dt>" . review_type_icon(REVIEW_PRIMARY) . " Primary</dt><dd>Mandatory review</dd>
+  <dt>" . review_type_icon(REVIEW_SECONDARY) . " Secondary</dt><dd>May be delegated to external reviewers</dd>
+  <dt>" . review_type_icon(REVIEW_PC) . " Optional</dt><dd>May be declined</dd>
+  <dt>" . review_type_icon(REVIEW_META) . " Metareview</dt><dd>Can view all other reviews before completing their own</dd></dl>
 </div></div>";
 
 
@@ -114,11 +123,11 @@ if (isset($_POST["bulkentry"]) && trim($_POST["bulkentry"]) === "Enter assignmen
     unset($_POST["bulkentry"]);
 if (isset($_GET["upload"]) && check_post()
     && ((isset($_POST["bulkentry"]) && $_POST["bulkentry"])
-        || fileUploaded($_FILES["bulk"]))) {
+        || file_uploaded($_FILES["bulk"]))) {
     flush();
     while (@ob_end_flush())
         /* do nothing */;
-    if (fileUploaded($_FILES["bulk"])) {
+    if (file_uploaded($_FILES["bulk"])) {
         $text = file_get_contents($_FILES["bulk"]["tmp_name"]);
         $filename = $_FILES["bulk"]["name"];
     } else {
@@ -128,12 +137,12 @@ if (isset($_GET["upload"]) && check_post()
     if ($text === false)
         Conf::msg_error("Internal error: cannot read file.");
     else {
-        $assignset = new AssignmentSet($Me, false);
+        $assignset = new AssignmentSet($Me, true);
         $defaults = assignment_defaults();
         $text = convert_to_utf8($text);
         $assignset->parse($text, $filename, $defaults, "keep_browser_alive");
         finish_browser_alive();
-        if ($assignset->has_errors())
+        if ($assignset->has_error())
             $assignset->report_errors();
         else if ($assignset->is_empty())
             $Conf->warnMsg("That assignment file makes no changes.");
@@ -142,7 +151,8 @@ if (isset($_GET["upload"]) && check_post()
             echo '<h3>Proposed ', $atype ? $atype . " " : "", 'assignment</h3>';
             $Conf->infoMsg("Select “Apply changes” if this looks OK. (You can always alter the assignment afterwards.)");
 
-            list($atypes, $apids) = $assignset->types_and_papers(true);
+            $atypes = $assignset->assigned_types();
+            $apids = $assignset->assigned_pids(true);
             echo Ht::form_div(hoturl_post("bulkassign",
                                           ["saveassignment" => 1,
                                            "assigntypes" => join(" ", $atypes),
@@ -154,8 +164,8 @@ if (isset($_GET["upload"]) && check_post()
                 '<div class="aahc"><div class="aa">',
                 Ht::submit("Apply changes"),
                 ' &nbsp;', Ht::submit("cancel", "Cancel"),
-                Ht::hidden("default_action", $defaults["action"]),
-                Ht::hidden("rev_roundtag", $defaults["round"]),
+                Ht::hidden("default_action", get($defaults, "action", "guess")),
+                Ht::hidden("rev_round", $defaults["round"]),
                 Ht::hidden("file", $text),
                 Ht::hidden("assignment_size_estimate", $csv_lineno),
                 Ht::hidden("filename", $filename),
@@ -170,8 +180,10 @@ if (isset($_GET["upload"]) && check_post()
     }
 }
 
-if (isset($_REQUEST["saveassignment"]) && check_post()
-    && isset($_POST["file"]) && get($_POST, "assignment_size_estimate") >= 1000) {
+if (isset($_REQUEST["saveassignment"])
+    && check_post()
+    && isset($_POST["file"])
+    && get($_POST, "assignment_size_estimate") >= 1000) {
     complete_assignment("keep_browser_alive");
     finish_browser_alive();
 }
@@ -183,33 +195,40 @@ echo Ht::form_div(hoturl_post("bulkassign", "upload=1"),
 // Upload
 echo '<div class="f-contain"><div class="f-i"><div class="f-e">',
     Ht::textarea("bulkentry", req_s("bulkentry"),
-                 ["rows" => 1, "cols" => 80, "placeholder" => "Enter assignments"]),
+                 ["rows" => 1, "cols" => 80, "placeholder" => "Enter assignments", "class" => "need-autogrow"]),
     '</div></div></div>';
 
 echo '<div class="g"><strong>OR</strong> &nbsp;',
     '<input type="file" name="bulk" accept="text/plain,text/csv" size="30" /></div>';
 
-echo '<div id="foldoptions" class="lg foldc fold2o">',
-    'By default, assign&nbsp; ',
-    Ht::select("default_action", array("primary" => "primary reviews",
-                                       "secondary" => "secondary reviews",
-                                       "pcreview" => "optional PC reviews",
-                                       "review" => "external reviews",
-                                       "conflict" => "PC conflicts",
-                                       "lead" => "discussion leads",
-                                       "shepherd" => "shepherds",
+echo '<div id="foldoptions" class="lg foldc fold2c fold3c">',
+    'By default,&nbsp; ',
+    Ht::select("default_action", array("guess" => "guess action from input",
+                                       "primary" => "assign primary reviews",
+                                       "secondary" => "assign secondary reviews",
+                                       "pcreview" => "assign optional PC reviews",
+                                       "metareview" => "assign metareviews",
+                                       "review" => "assign external reviews",
+                                       "conflict" => "assign PC conflicts",
+                                       "lead" => "assign discussion leads",
+                                       "shepherd" => "assign shepherds",
                                        "tag" => "add tags",
                                        "settag" => "replace tags",
-                                       "preference" => "reviewer preferences"),
-               defval($_REQUEST, "default_action", "primary"),
-               array("id" => "tsel", "onchange" => "fold(\"options\",this.value!=\"review\");fold(\"options\",!/^(?:primary|secondary|(?:pc)?review)$/.test(this.value),2)"));
+                                       "preference" => "set reviewer preferences"),
+               defval($_REQUEST, "default_action", "guess"),
+               ["id" => "tsel"]);
+Ht::stash_script('$(function(){
+$("#tsel").on("change",function(){
+foldup.call(this,null,{f:this.value!=="review"});
+foldup.call(this,null,{f:!/^(?:primary|secondary|(?:pc|meta)?review)$/.test(this.value),n:2});
+}).trigger("change")})');
 $rev_rounds = $Conf->round_selector_options();
 if (count($rev_rounds) > 1)
     echo '<span class="fx2">&nbsp; in round &nbsp;',
-        Ht::select("rev_roundtag", $rev_rounds, $_REQUEST["rev_roundtag"] ? : "unnamed"),
+        Ht::select("rev_round", $rev_rounds, $_REQUEST["rev_round"] ? : "unnamed"),
         '</span>';
 else if (!get($rev_rounds, "unnamed"))
-    echo '<span class="fx2">&nbsp; in round ', $Conf->current_round_name(), '</span>';
+    echo '<span class="fx2">&nbsp; in round ', $Conf->assignment_round_name(false), '</span>';
 echo '<div class="g"></div>', "\n";
 
 $requestreview_template = $null_mailer->expand_template("requestreview");
@@ -222,19 +241,19 @@ echo "<table class='fx'><tr><td>",
     Ht::checkbox("requestreview_notify", 1, true),
     "&nbsp;</td><td>", Ht::label("Send email to external reviewers:"), "</td></tr>
 <tr><td></td><td>",
-    Ht::textarea("requestreview_body", $t, array("class" => "tt", "cols" => 80, "rows" => 20, "spellcheck" => "true")),
+    Ht::textarea("requestreview_body", $t, array("class" => "tt", "cols" => 80, "rows" => 20, "spellcheck" => "true", "class" => "need-autogrow")),
     "</td></tr></table>\n";
 
-echo '<div class="g"></div><div class="aa">', Ht::submit("Prepare assignments"),
+echo '<div class="lg"></div>', Ht::submit("Prepare assignments", ["class" => "btn btn-default"]),
     " &nbsp; <span class='hint'>You’ll be able to check the assignment before it is saved.</span></div>\n";
 
-echo '<div style="margin-top:1.5em"><a href="', hoturl_post("search", "t=manager&q=&get=pcassignments&p=all"), '">Download current PC assignments</a></div>';
+echo '<div style="margin-top:1.5em"><a href="', hoturl_post("search", "fn=get&amp;getfn=pcassignments&amp;t=manager&amp;q=&amp;p=all"), '">Download current PC assignments</a></div>';
 
 echo "</div></form>
 
 <hr style='margin-top:1em' />
 
-<div class='helppagetext'>
+<div class='settingstext'>
 <h3>Instructions</h3>
 
 <p>Upload a comma-separated value file to prepare an assignment of reviews,
@@ -336,10 +355,18 @@ use email <code>none</code> or assignment type <code>clearshepherd</code>.</dd>
 and/or <code>user</code> columns locate the PC user. To clear a conflict,
 use assignment type <code>clearconflict</code>.</dd>
 
+<dt><code>contact</code></dt>
+<dd>Mark a submission contact. The <code>email</code>, <code>name</code>,
+and/or <code>user</code> columns locate the user. To clear a contact,
+use assignment type <code>clearcontact</code>.</dd>
+
 <dt><code>tag</code></dt>
 <dd>Add a tag. The <code>tag</code> column names the tag and the optional
 <code>value</code> column sets the tag value.
 To clear a tag, use assignment type <code>cleartag</code> or value <code>none</code>.</dd>
+
+<dt><code>decision</code></dt>
+<dd>Set the decision. The <code>decision</code> column gives the decision.</dd>
 
 <dt><code>preference</code></dt>
 <dd>Set reviewer preference and expertise. The <code>preference</code> column
@@ -348,5 +375,5 @@ gives the preference value.</dd>
 
 </div>\n";
 
-$Conf->footerScript('$("#tsel").trigger("change");$("textarea").autogrow()');
+Ht::stash_script('$("#tsel").trigger("change")');
 $Conf->footer();
