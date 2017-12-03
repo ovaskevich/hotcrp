@@ -108,6 +108,17 @@ class LoginHelper {
                 return null;
         }
 
+        // if email not valid, then add default domain (needed for LDAP to get full email)
+        if (!validate_email($_REQUEST["email"])) {
+            // can we make it valid by adding the default domain?
+            if ($Conf->opt("defaultEmailDomain")!=null) {
+                $emailExt = $_REQUEST["email"] . "@" . $Conf->opt("defaultEmailDomain");
+                if (validate_email($emailExt)) {
+                   $_REQUEST["email"] = $emailExt;
+                }
+            }
+        }
+
         // look up user in our database
         if (strpos($_REQUEST["email"], "@") === false)
             self::unquote_double_quoted_request();
