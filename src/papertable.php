@@ -600,7 +600,7 @@ class PaperTable {
     private function paptabSummary() {
         global $Opt;
         $options = $this->prow->options();
-        $summaryTemplate = $Opt["summaryTemplate"];
+        $summaryTemplate = $this->conf->opt('summaryTemplate');
         if (!$summaryTemplate) {
             return false;
         }
@@ -648,6 +648,10 @@ class PaperTable {
             $var = substr($var, 2, strlen($var) - 3);
             $varOption = reset(array_filter($options, function ($o) use ($var) {return $o->option->name == $var;}));
             $value = $varOption ? ($varOption->option->type == "text" ? $varOption->data : ($varOption->data ? $varOption->data : $varOption->value)) : "[???]";
+            // special handling for non-option value for paperId
+            if ($var == 'paperId') {
+                $value = $this->prow->paperId;
+            }
 
             if ($varOption && $varOption->option->type == "checkbox") {
                 $value = $value ? 'Yes' : 'No';
@@ -656,9 +660,12 @@ class PaperTable {
         }, $summary);
         
         $options = "<b>OPTIONS HERE</b>";
-        echo "<div class='pg pgtop'>",
-            $this->papt("summary", "Summary"),
-            "<div class='pavb summary'>", $summary, "</div></div>\n\n";
+	echo '<div class="paperinfo-abstract"><div class="pg">';
+        // echo "<div class='pg pgtop'>",
+        echo    $this->papt("summary", "Summary");
+	echo $summary;
+         //   "<div class='pavb summary'>", $summary, "</div></div>\n\n";
+	echo '</div></div>';
         return true;
     }
 
@@ -669,8 +676,8 @@ class PaperTable {
         $extra = [];
         if ($this->allFolded && $this->abstract_foldable($text))
             $extra = ["fold" => "paper", "foldnum" => 6,
-                      "foldtitle" => "Toggle full abstract"];
-        echo '<div class="paperinfo-cl"><div class="paperinfo-abstract"><div class="pg">',
+                       "foldtitle" => "Toggle full abstract"];
+        echo '<div class="paperinfo-abstract"><div class="pg">',
             $this->papt("abstract", "Abstract", $extra),
             '<div class="pavb abstract">';
         if ($this->prow && !$this->entryMatches
@@ -684,7 +691,6 @@ class PaperTable {
         if ($extra)
             echo '<div class="fn6 fx7 longtext-fader"></div>',
                 '<div class="fn6 fx7 longtext-expander"><a class="ui x js-foldup" href="#" data-fold-target="6">[more]</a></div>';
-        echo "</div>\n";
         if ($extra)
             echo Ht::unstash_script("render_text.on_page()");
         return true;
@@ -2141,8 +2147,11 @@ class PaperTable {
                 htmlspecialchars($status_info[1]), "</span></p>";
             $this->paptabDownload();
             echo '<div class="paperinfo"><div class="paperinfo-row">';
+            echo '<div class="paperinfo-cl">';
+            $has_summary  = $this->paptabSummary();
             $has_abstract = $this->paptabAbstract();
-            $has_abstract = $has_abstract || $this->paptabSummary(); 
+            $has_abstract = $has_abstract || $has_summary;
+            echo '</div>';
             echo '<div class="paperinfo-c', ($has_abstract ? "r" : "b"), '">';
             $this->paptabAuthors(!$this->editable && $this->mode === "edit"
                                  && $prow->timeSubmitted > 0);
