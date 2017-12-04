@@ -660,18 +660,19 @@ class PaperTable {
         }, $summary);
         
         $options = "<b>OPTIONS HERE</b>";
-	echo '<div class="paperinfo-abstract"><div class="pg">';
+	// echo '<div class="paperinfo-abstract"><div class="pg">';
         // echo "<div class='pg pgtop'>",
-        echo    $this->papt("summary", "Summary");
-	echo $summary;
+        // echo    $this->papt("summary", "Summary");
+	// echo $summary;
          //   "<div class='pavb summary'>", $summary, "</div></div>\n\n";
-	echo '</div></div>';
-        return true;
+	//echo '</div></div>';
+        return $summary;
     }
 
     private function paptabAbstract() {
         $text = $this->entryData("abstract");
-        if (trim($text) === "" && $this->conf->opt("noAbstract"))
+	$summary = $this->paptabSummary();
+        if ($summary == null && trim($text) === "" && $this->conf->opt("noAbstract"))
             return false;
         $extra = [];
         if ($this->allFolded && $this->abstract_foldable($text))
@@ -685,8 +686,10 @@ class PaperTable {
             echo '<div class="need-format" data-format="', $format, '.abs">',
                 $text, '</div>';
             Ht::stash_script('$(render_text.on_page)', 'render_on_page');
-        } else
+        } else {
+	    echo $summary;
             echo Ht::format0($text);
+        }
         echo "</div></div></div>";
         if ($extra)
             echo '<div class="fn6 fx7 longtext-fader"></div>',
@@ -2148,9 +2151,9 @@ class PaperTable {
             $this->paptabDownload();
             echo '<div class="paperinfo"><div class="paperinfo-row">';
             echo '<div class="paperinfo-cl">';
-            $has_summary  = $this->paptabSummary();
+            //$has_summary  = $this->paptabSummary();
             $has_abstract = $this->paptabAbstract();
-            $has_abstract = $has_abstract || $has_summary;
+            //$has_abstract = $has_abstract || $has_summary;
             echo '</div>';
             echo '<div class="paperinfo-c', ($has_abstract ? "r" : "b"), '">';
             $this->paptabAuthors(!$this->editable && $this->mode === "edit"
