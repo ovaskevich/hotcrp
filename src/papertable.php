@@ -421,6 +421,7 @@ class PaperTable {
             if (($doc = $prow->document($dtype)) && $doc->paperStorageId > 1) {
                 if (($stamps = self::pdf_stamps_html($doc)))
                     $stamps = "<span class='sep'></span>" . $stamps;
+                $stamps = $stamps . self::paptabTemplateText('submissionLinkTemplate');
                 if ($dtype == DTYPE_FINAL)
                     $dname = $this->conf->_c("paper_pdf_name", "Final version");
                 else if ($prow->timeSubmitted > 0)
@@ -597,10 +598,14 @@ class PaperTable {
         return $needle === "" || strrpos($haystack, $needle, -strlen($haystack)) !== false;
     }
 
-    private function paptabSummary() {
+    // template text replacement
+    // conference option $optionName contains html template which is
+    // filled the paper data here. Used for custom summary (ahead of 
+    // abstract and for custom link
+    private function paptabTemplateText($optionName) {
         global $Opt;
         $options = $this->prow->options();
-        $summaryTemplate = $this->conf->opt('summaryTemplate');
+        $summaryTemplate = $this->conf->opt($optionName);
         if (!$summaryTemplate) {
             return false;
         }
@@ -609,12 +614,18 @@ class PaperTable {
         // First, process all the conditionals.
         $conditionalStart = 0;
         $conditionalEnd = 0;
-        define("BEGIN_IF", "%%%BEGIN_IF{");
-        define("BEGIN_IF_LEN", strlen(BEGIN_IF));
-        define("BEGIN_IF_END", "}%%%");
-        define("BEGIN_IF_END_LEN", strlen(BEGIN_IF_END));
-        define("END_IF", "%%%END_IF%%%");
-        define("END_IF_LEN", strlen(END_IF));
+
+        // define constants for template "language" but these constants
+        // only need to be defined once for each runtime (however template
+        // text can be used multiple times leading to warnings)
+	if (! defined('BEGIN_IF')) {
+          define("BEGIN_IF", "%%%BEGIN_IF{");
+          define("BEGIN_IF_LEN", strlen(BEGIN_IF));
+          define("BEGIN_IF_END", "}%%%");
+          define("BEGIN_IF_END_LEN", strlen(BEGIN_IF_END));
+          define("END_IF", "%%%END_IF%%%");
+          define("END_IF_LEN", strlen(END_IF));
+        }
         while (($conditionalStart = strpos($summaryTemplate, BEGIN_IF, $conditionalEnd)) !== false) {
             $summary .= substr($summaryTemplate, $conditionalEnd, $conditionalStart - $conditionalEnd);
 
@@ -671,7 +682,7 @@ class PaperTable {
 
     private function paptabAbstract() {
         $text = $this->entryData("abstract");
-	$summary = $this->paptabSummary();
+	$summary = $this->paptabTemplateText('summaryTemplate');
         if ($summary == null && trim($text) === "" && $this->conf->opt("noAbstract"))
             return false;
         $extra = [];
