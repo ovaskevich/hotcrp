@@ -52,9 +52,9 @@ function ldapLoginAction() {
         return ldapLoginBindFailure($ldapc);
 
     // use LDAP information to prepopulate the database with names
-    if (isset($Opt["ldap_addlFilterKey"])) {
+    if (isset($Conf->opt("ldap_addlFilterKey"))) {
         $sr = @ldap_search($ldapc, $dn, "(cn=*)",
-                   array("sn", "givenname", "cn", "mail", "telephonenumber", $Opt["ldap_addlFilterKey"]));
+                   array("sn", "givenname", "cn", "mail", "telephonenumber", $Conf->opt("ldap_addlFilterKey")));
     } else {
 	// did not indent line below to not throw off merge
     $sr = @ldap_search($ldapc, $dn, "(cn=*)",
@@ -76,28 +76,28 @@ function ldapLoginAction() {
     }
 
     // additional filter key set?
-    if (isset($Opt["ldap_addlFilterKey"])) {
+    if (isset($Conf->opt("ldap_addlFilterKey")) {
         // only pass, if key exists in LDAP query, has one value, and the value matches 
-        //if (!(isset($e[$Opt["ldap_addlFilterKey"]]))) {
-        //  return $Conf->errorMsg(" Filter key : '".$Opt["ldap_addlFilterKey"]."' not found in ldap search. " . var_dump(array_keys($e)));
+        //if (!(isset($e[$Conf->opt("ldap_addlFilterKey")))) {
+        //  return $Conf->errorMsg(" Filter key : '".$Conf->opt("ldap_addlFilterKey")."' not found in ldap search. " . var_dump(array_keys($e)));
         //}     
-        //if (!($e[$Opt["ldap_addlFilterKey"]]["count"] == 1)) {
-        //  return $Conf->errorMsg("Found wrong number of entries for key: " . $e[$Opt["ldap_addlFilterKey"]]["count"]);
+        //if (!($e[$Conf->opt("ldap_addlFilterKey")]["count"] == 1)) {
+        //  return $Conf->errorMsg("Found wrong number of entries for key: " . $e[$Conf->opt("ldap_addlFilterKey")]["count"]);
         //}     
-        if (!((isset($e[$Opt["ldap_addlFilterKey"]])) 
-                && ($e[$Opt["ldap_addlFilterKey"]]["count"] == 1) 
-                && ($e[$Opt["ldap_addlFilterKey"]][0] == $Opt["ldap_addlFilterValue"]))) {
-            return $Conf->errorMsg($Opt["ldap_addlFilterErrMsg"]);
+        if (!((isset($e[$Conf->opt("ldap_addlFilterKey")])) 
+                && ($e[$Conf->opt("ldap_addlFilterKey")]["count"] == 1) 
+                && ($e[$Conf->opt("ldap_addlFilterKey")][0] == $Conf->opt("ldap_addlFilterValue")))) {
+            return $Conf->errorMsg($Conf->opt("ldap_addlFilterErrMsg"));
         } 
     }
         
     // set default affiliation
-    if (isset($Opt["ldap_def_affiliation"])) {
-        $_REQUEST["affiliation"] = $Opt["ldap_def_affiliation"];
+    if (isset($Conf->opt("ldap_def_affiliation"))) {
+        $_REQUEST["affiliation"] = $Conf->opt("ldap_def_affiliation");
     }
     // stick in no collaborators by default (avoids setting popping up all the time)
-    if (isset($Opt["ldap_def_collab"])) {
-        $_REQUEST["collaborators"] = $Opt["ldap_def_collab"];
+    if (isset($Conf->opt("ldap_def_collab"))) {
+        $_REQUEST["collaborators"] = $Conf->opt("ldap_def_collab");
     }
     
     ldap_close($ldapc);
