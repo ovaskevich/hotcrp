@@ -101,8 +101,25 @@ $Opt["emailSender"] = null;
 //                   value is sent as a WWW-Authenticate header. The default
 //                   string is "Basic realm="HotCRP"".
 //   defaultEmailDomain Set to the default domain for account email addresses
-//                   when using httpAuthLogin.
-
+//                   when using httpAuthLogin. Using LDAP users will login with
+//                   their username only. Conversely, username in application
+//                   will be full name (usename + defaultEmailDomain)
+//   
+// LDAP ADDITONAL OPTIONS
+//
+//  ldap_addlFilterKey  
+//  ldap_addlFilterValue  Both values must be set at same time. Only allow login 
+//                        if user's LDAP entry has the ldap_addlFilterKey with 
+//                        a value of ldap_addlFilterValue
+//  ldap_addlFilterErrMsg Additional error message to show to user when 
+//                        addlFilter failed
+//
+// Successfully authenticated LDAP users are automatically added as users upon
+// first login. The following options control the defaults when adding an LDAP user.
+//
+//  ldap_AutoNewUserPc   set to 1 to add user to PC
+//  ldap_def_collab      set default collaborator (set to None to avoid conflict question)
+//  ldap_def_affiliation set value for default affiliation 
 
 // USER PASSWORDS
 //
