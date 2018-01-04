@@ -604,8 +604,11 @@ class PaperTable {
     // abstract and for custom link
     private function paptabTemplateText($optionName) {
         global $Opt;
+        // get options of this paper
         $options = $this->prow->options();
+        // load the template from conference definition
         $summaryTemplate = $this->conf->opt($optionName);
+        // if no template, return 
         if (!$summaryTemplate) {
             return false;
         }
@@ -618,7 +621,8 @@ class PaperTable {
         // define constants for template "language" but these constants
         // only need to be defined once for each runtime (however template
         // text can be used multiple times leading to warnings)
-	if (! defined('BEGIN_IF')) {
+        // hence, conditionally define if not yet defined
+        if (! defined('BEGIN_IF')) {
           define("BEGIN_IF", "%%%BEGIN_IF{");
           define("BEGIN_IF_LEN", strlen(BEGIN_IF));
           define("BEGIN_IF_END", "}%%%");
@@ -626,57 +630,65 @@ class PaperTable {
           define("END_IF", "%%%END_IF%%%");
           define("END_IF_LEN", strlen(END_IF));
         }
+        
+        // iterate through template while conditionals are found 
+        //  %%%BEGIN_IF{variable}%%%
         while (($conditionalStart = strpos($summaryTemplate, BEGIN_IF, $conditionalEnd)) !== false) {
+            // construct summary string excluding the conditional
             $summary .= substr($summaryTemplate, $conditionalEnd, $conditionalStart - $conditionalEnd);
 
             // Find the ending "}%%%".
             $varStart = $conditionalStart + BEGIN_IF_LEN;
             $varEnd = strpos($summaryTemplate, BEGIN_IF_END, $conditionalStart);
+            // cut out the option name 
             $var = substr($summaryTemplate, $varStart, $varEnd - $varStart);
             $expectedValue = true;
+            // Handle negations. Note space before ! is not allowed
             if ($var && strlen($var) > 0 && $var[0] == "!") {
-              // Handle negations.
               $expectedValue = false;
+              // variable name without the leading !
               $var = substr($var, 1);
             }
+            // get reference to the paper option based on variable name
             $varOption = reset(array_filter($options, function ($o) use ($var) {return $o->option->name == $var;}));
+            // get positions of where the conditional section ends
+            //TODO nested BEGIN_IF not yet supported
             $contentStart = $varEnd + BEGIN_IF_END_LEN;
             $contentEnd = strpos($summaryTemplate, END_IF, $varEnd);
             $conditionalEnd = $contentEnd + END_IF_LEN;
-            
+            // if paper option exists and if value is set 
             $shouldShow = $varOption
-                    && (($varOption->option->type == "text" && !empty($varOption->data))
-                            || ($varOption->option->type != "text" && ($varOption->data || $varOption->value)));
+                        && (($varOption->option->type == "text" && !empty($varOption->data()))
+                            || ($varOption->option->type != "text" && ($varOption->data() || $varOption->value)));
+            // emit body of conditional
             if ($shouldShow == $expectedValue) {
                 $summary .= substr($summaryTemplate, $contentStart, $contentEnd - $contentStart);
             }
         }
+        // emit everything after the last (if any) conditional
         $summary .= substr($summaryTemplate, $conditionalEnd);
         
         // Now, replace all the variables.
         $summary = preg_replace_callback('/\$\{.+?\}/', function($matches) use (&$options) {
             $var = $matches[0];
+            // cut out option name 
             $var = substr($var, 2, strlen($var) - 3);
+            // get reference to the paper option based on variable name
             $varOption = reset(array_filter($options, function ($o) use ($var) {return $o->option->name == $var;}));
-            $value = $varOption ? ($varOption->option->type == "text" ? $varOption->data : ($varOption->data ? $varOption->data : $varOption->value)) : "[???]";
+            // determine value, return [???] if option not defined (means user did not define conditional in template)
+            // for text options, return data(), for others return data() if defined or its numeric value otherwise
+            $value = $varOption ? ($varOption->option->type == "text" ? $varOption->data() : ($varOption->data() ? $varOption->data() : $varOption->value)) : "[???]";
             // special handling for non-option value for paperId
             if ($var == 'paperId') {
                 $value = $this->prow->paperId;
             }
-
+            // convert checkbox value 
             if ($varOption && $varOption->option->type == "checkbox") {
                 $value = $value ? 'Yes' : 'No';
             }
             return $value;
         }, $summary);
         
-        $options = "<b>OPTIONS HERE</b>";
-	// echo '<div class="paperinfo-abstract"><div class="pg">';
-        // echo "<div class='pg pgtop'>",
-        // echo    $this->papt("summary", "Summary");
-	// echo $summary;
-         //   "<div class='pavb summary'>", $summary, "</div></div>\n\n";
-	//echo '</div></div>';
         return $summary;
     }
 
