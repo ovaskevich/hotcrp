@@ -822,15 +822,17 @@ class PaperTable {
             $extra = ["fold" => "paper", "foldnum" => 6,
                       "foldtitle" => "Toggle full abstract"];
         echo '<div class="paperinfo-cl"><div class="paperinfo-abstract"><div class="pg">',
-            $this->papt("abstract", $this->conf->_c("paper_field", "Abstract"), $extra),
-            '<div class="pavb abstract';
+            $this->papt("abstract", $this->conf->_c("paper_field", "Abstract"), $extra);
+        if ($summary != null) {
+            echo '<div class="pavb abstract">',$summary,"</div>";
+        }
+        echo '<div class="pavb abstract';
         if ($this->prow
             && !$this->entryMatches
             && ($format = $this->prow->format_of($text))) {
             echo ' need-format" data-format="', $format, '.abs">', $text;
             Ht::stash_script('$(render_text.on_page)', 'render_on_page');
         } else
-            echo $summary;
             echo ' format0">', Ht::format0($text);
         echo "</div></div></div>";
         if ($extra)
