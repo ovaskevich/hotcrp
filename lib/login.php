@@ -96,12 +96,12 @@ class LoginHelper {
         }
 
         // if email not valid, then add default domain (needed for LDAP to get full email)
-        if (!validate_email($_REQUEST["email"])) {
+        if (!validate_email($qreq->email)) {
             // can we make it valid by adding the default domain?
             if ($Conf->opt("defaultEmailDomain")!=null) {
-                $emailExt = $_REQUEST["email"] . "@" . $Conf->opt("defaultEmailDomain");
+                $emailExt = $qreq->email . "@" . $Conf->opt("defaultEmailDomain");
                 if (validate_email($emailExt)) {
-                   $_REQUEST["email"] = $emailExt;
+                    $qreq->email = $emailExt;
                 }
             }
         }
