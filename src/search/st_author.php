@@ -1,7 +1,6 @@
 <?php
 // search/st_author.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Author_SearchTerm extends SearchTerm {
     private $csm;
@@ -32,25 +31,18 @@ class Author_SearchTerm extends SearchTerm {
         return new Author_SearchTerm($count, $cids, $word, $sword->quoted);
     }
     function trivial_rights(Contact $user, PaperSearch $srch) {
-        return $this->csm->has_sole_contact($user->contactId);
+        return $this->csm->has_sole_contact($user->contactId)
+            && !$this->csm->test(0);
     }
     function sqlexpr(SearchQueryInfo $sqi) {
-        if ($this->csm->has_contacts() && $this->csm->countexpr() === ">0") {
-            $thistab = "AuthorConflict_" . count($sqi->tables);
-            $sqi->add_table($thistab, ["left join", "(select paperId, 1 present from PaperConflict where " . $this->csm->contact_match_sql("contactId") . " and conflictType>=" . CONFLICT_AUTHOR . " group by paperId)"]);
-            return "$thistab.present is not null";
+        if ($this->csm->has_contacts() && !$this->csm->test(0)) {
+            return "exists (select * from PaperConflict where PaperConflict.paperId=Paper.paperId and " . $this->csm->contact_match_sql("contactId") . " and conflictType>=" . CONFLICT_AUTHOR . ")";
         } else if ($this->csm->has_contacts()) {
             $sqi->add_allConflictType_column();
-            if ($this->csm->test(0))
-                return "true";
-            else
-                return "AllConflict.allConflictType is not null";
+            return "true";
         } else {
             $sqi->add_column("authorInformation", "Paper.authorInformation");
-            if ($this->csm->test(0))
-                return "true";
-            else
-                return "Paper.authorInformation!=''";
+            return $this->csm->test(0) ? "true" : "Paper.authorInformation!=''";
         }
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
@@ -95,8 +87,7 @@ class AuthorMatch_SearchTerm extends SearchTerm {
         $type = $sword->kwdef->name;
         if ($word === "any" && $sword->kwexplicit && !$sword->quoted)
             return new TextMatch_SearchTerm(substr($type, 0, 2), true, false);
-        $matcher = new PaperInfo_AuthorMatcher($word);
-        if ($matcher->general_pregexes)
+        if (($matcher = AuthorMatcher::make_string_guess($word)))
             return new AuthorMatch_SearchTerm($type, $matcher);
         else
             return new False_SearchTerm;
@@ -111,16 +102,16 @@ class AuthorMatch_SearchTerm extends SearchTerm {
         if ($row->$field === ""
             || !$srch->user->allow_view_authors($row))
             return false;
-        if (!$row->field_match_pregexes($this->matcher->general_pregexes, $field))
+        if (!$row->field_match_pregexes($this->matcher->general_pregexes(), $field))
             return false;
         $l = $this->type === "aumatch" ? $row->author_list() : $row->collaborator_list();
         foreach ($l as $au)
-            if ($this->matcher->test($au))
+            if ($this->matcher->test($au, true))
                 return true;
         return false;
     }
     function extract_metadata($top, PaperSearch $srch) {
         parent::extract_metadata($top, $srch);
-        $srch->regex[substr($this->type, 0, 2)][] = $this->matcher->general_pregexes;
+        $srch->regex[substr($this->type, 0, 2)][] = $this->matcher->general_pregexes();
     }
 }

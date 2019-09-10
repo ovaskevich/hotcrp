@@ -1,21 +1,57 @@
 <?php
 // paperlist.php -- HotCRP helper class for producing paper lists
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
-class PaperListRenderState {
-    public $row_folded = null;
+class PaperListTableRender {
+    public $table_start;
+    public $thead;
+    public $tbody_class;
+    public $body_rows;
+    public $tfoot;
+    public $table_end;
+    public $error;
+
+    public $ncol;
+    public $titlecol;
+
     public $colorindex = 0;
     public $hascolors = false;
     public $skipcallout;
-    public $ncol;
-    public $titlecol;
     public $last_trclass = "";
-    public $groupstart = array(0);
+    public $groupstart = [0];
+
     function __construct($ncol, $titlecol, $skipcallout) {
         $this->ncol = $ncol;
         $this->titlecol = $titlecol;
         $this->skipcallout = $skipcallout;
+    }
+    static function make_error($error) {
+        $tr = new PaperListTableRender(0, 0, 0);
+        $tr->error = $error;
+        return $tr;
+    }
+    function tbody_start() {
+        return "  <tbody class=\"{$this->tbody_class}\">\n";
+    }
+    function heading_row($heading, $attr = []) {
+        if (!$heading) {
+            return "  <tr class=\"plheading\"><td class=\"plheading-blank\" colspan=\"{$this->ncol}\"></td></tr>\n";
+        } else {
+            $x = "  <tr class=\"plheading\"";
+            foreach ($attr as $k => $v)
+                if ($k !== "no_titlecol" && $k !== "tdclass")
+                    $x .= " $k=\"" . str_replace("\"", "&quot;", $v) . "\"";
+            $x .= ">";
+            $titlecol = get($attr, "no_titlecol") ? 0 : $this->titlecol;
+            if ($titlecol)
+                $x .= "<td class=\"plheading-spacer\" colspan=\"{$titlecol}\"></td>";
+            $tdclass = get($attr, "tdclass");
+            $x .= "<td class=\"plheading" . ($tdclass ? " $tdclass" : "") . "\" colspan=\"" . ($this->ncol - $titlecol) . "\">";
+            return $x . $heading . "</td></tr>\n";
+        }
+    }
+    function heading_separator_row() {
+        return "  <tr class=\"plheading\"><td class=\"plheading-separator\" colspan=\"{$this->ncol}\"></td></tr>\n";
     }
 }
 
@@ -64,13 +100,13 @@ class PaperListReviewAnalysis {
             return "delegated";
         else if ($this->rrow->reviewType == REVIEW_EXTERNAL
                  && $this->rrow->timeApprovalRequested)
-            return "awaiting approval";
+            return "awaiting approval";
         else if ($this->rrow->reviewModified > 1)
-            return "in progress";
+            return "in progress";
         else if ($this->rrow->reviewModified > 0)
             return "accepted";
         else
-            return "not started";
+            return "not started";
     }
     function wrap_link($html, $klass = null) {
         if (!$this->rrow)
@@ -85,26 +121,11 @@ class PaperListReviewAnalysis {
 }
 
 class PaperList {
-    // creator can set to change behavior
-    public $papersel = null;
-
-    // columns access
     public $conf;
     public $user;
     public $qreq;
-    private $contact;
-    public $sorters = [];
-    private $_columns_by_name;
-    private $_column_errors_by_name = [];
-    public $scoresOk = false;
     public $search;
-    public $tagger;
-    public $check_format;
-    public $tbody_attr;
-    public $row_attr;
-    public $row_overridable;
-    public $need_render;
-    public $has_editable_tags = false;
+    private $_reviewer_user;
 
     private $sortable;
     private $foldable;
@@ -124,11 +145,28 @@ class PaperList {
     private $report_id;
     private $_row_id_pattern;
     private $_selection;
-    private $_only_selected;
 
-    public $qopts; // set by PaperColumn::prepare
+    private $_rowset;
+    private $_row_filter;
+    private $_columns_by_name;
+    private $_column_errors_by_name = [];
+
     private $_header_script = "";
     private $_header_script_map = [];
+
+    // columns access
+    public $qopts; // set by PaperColumn::prepare
+    public $sorters = [];
+    public $tagger;
+    public $need_tag_attr;
+    public $table_attr;
+    public $row_attr;
+    public $row_overridable;
+    public $row_tags;
+    public $row_tags_overridable;
+    public $need_render;
+    public $has_editable_tags = false;
+    public $check_format;
 
     // collected during render and exported to caller
     public $count; // also exported to columns access: 1 more than row index
@@ -136,12 +174,10 @@ class PaperList {
     public $groups;
     public $any;
     private $_has;
-    private $_any_option_checks;
     public $error_html = array();
 
     static public $include_stash = true;
 
-    static public $magic_sort_info; // accessed by sort function during _sort
     static private $stats = [ScoreInfo::SUM, ScoreInfo::MEAN, ScoreInfo::MEDIAN, ScoreInfo::STDDEV_P];
 
     function __construct(PaperSearch $search, $args = array(), $qreq = null) {
@@ -151,6 +187,7 @@ class PaperList {
         if (!$qreq || !($qreq instanceof Qrequest))
             $qreq = new Qrequest("GET", $qreq);
         $this->qreq = $qreq;
+        $this->_reviewer_user = $search->reviewer_user();
 
         $this->sortable = isset($args["sort"]) && $args["sort"];
         $this->foldable = $this->sortable || !!get($args, "foldable")
@@ -166,15 +203,11 @@ class PaperList {
         $this->atab = $qreq->atab;
 
         $this->tagger = new Tagger($this->user);
-        $this->scoresOk = $this->user->is_manager()
-            || $this->user->is_reviewer()
-            || $this->conf->timeAuthorViewReviews();
 
         $this->qopts = $this->search->simple_search_options();
         if ($this->qopts === false)
             $this->qopts = ["paperId" => $this->search->paper_ids()];
         $this->qopts["scores"] = [];
-        $this->qopts["options"] = true;
         // NB that actually processed the search, setting PaperSearch::viewmap
 
         foreach ($this->search->sorters ? : [] as $sorter)
@@ -204,9 +237,10 @@ class PaperList {
             $this->_view_fields["anonau"] = true;
 
         $this->_columns_by_name = ["anonau" => [], "aufull" => [], "rownum" => [], "statistics" => []];
+
+        $this->_rowset = get($args, "rowset");
     }
 
-    // begin changing contactId to cid
     function __get($name) {
         error_log("PaperList::$name " . json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)));
         return $name === "contact" ? $this->user : null;
@@ -226,6 +260,10 @@ class PaperList {
     }
     function set_report($report) {
         $this->report_id = $report;
+    }
+
+    function set_row_filter($filter) {
+        $this->_row_filter = $filter;
     }
 
     function add_column($name, PaperColumn $col) {
@@ -257,7 +295,8 @@ class PaperList {
         $has_sorters = !!array_filter($this->sorters, function ($s) {
             return $s->thenmap === null;
         });
-        while (($w = PaperSearch::shift_word($str, $this->conf))) {
+        $splitter = new SearchSplitter($str);
+        while (($w = $splitter->shift()) !== "") {
             if (($colon = strpos($w, ":")) !== false) {
                 $action = substr($w, 0, $colon);
                 $w = substr($w, $colon + 1);
@@ -273,9 +312,8 @@ class PaperList {
         }
     }
 
-    function set_selection(SearchSelection $ssel, $only_selected = false) {
+    function set_selection(SearchSelection $ssel) {
         $this->_selection = $ssel;
-        $this->_only_selected = $only_selected;
     }
     function is_selected($paperId, $default = false) {
         return $this->_selection ? $this->_selection->is_selected($paperId) : $default;
@@ -285,11 +323,72 @@ class PaperList {
         $this->_unfold_all = true;
     }
 
-    function has($key) {
-        return isset($this->_has[$key]);
+    function mark_has($key, $value = true) {
+        if ($value)
+            $this->_has[$key] = true;
+        else if (!isset($this->_has[$key]))
+            $this->_has[$key] = false;
     }
-    function mark_has($key) {
-        $this->_has[$key] = true;
+    function has($key) {
+        if (!isset($this->_has[$key]))
+            $this->_has[$key] = $this->_compute_has($key);
+        return $this->_has[$key];
+    }
+    private function _compute_has($key) {
+        // paper options
+        if ($key === "paper" || $key === "final") {
+            $opt = $this->conf->paper_opts->find($key);
+            return $this->user->can_view_some_paper_option($opt)
+                && $this->_rowset->any(function ($row) use ($opt) {
+                    return ($opt->id == DTYPE_SUBMISSION ? $row->paperStorageId : $row->finalPaperStorageId) > 1
+                        && $this->user->can_view_paper_option($row, $opt);
+                });
+        }
+        if (str_starts_with($key, "opt")
+            && ($opt = $this->conf->paper_opts->find($key))) {
+            return $this->user->can_view_some_paper_option($opt)
+                && $this->_rowset->any(function ($row) use ($opt) {
+                    return ($ov = $row->option($opt->id))
+                        && (!$opt->has_document() || $ov->value > 1)
+                        && $this->user->can_view_paper_option($row, $opt);
+                });
+        }
+        // other features
+        if ($key === "abstract")
+            return $this->_rowset->any(function ($row) {
+                return (string) $row->abstract !== "";
+            });
+        if ($key === "openau")
+            return $this->has("authors")
+                && (!$this->user->is_manager()
+                    || $this->_rowset->any(function ($row) {
+                           return $this->user->can_view_authors($row);
+                       }));
+        if ($key === "anonau")
+            return $this->has("authors")
+                && $this->user->is_manager()
+                && $this->_rowset->any(function ($row) {
+                       return $this->user->allow_view_authors($row)
+                           && !$this->user->can_view_authors($row);
+                   });
+        if ($key === "need_submit")
+            return $this->_rowset->any(function ($row) {
+                return $row->timeSubmitted <= 0 && $row->timeWithdrawn <= 0;
+            });
+        if ($key === "accepted")
+            return $this->_rowset->any(function ($row) {
+                return $row->outcome > 0 && $this->user->can_view_decision($row);
+            });
+        if ($key === "need_final")
+            return $this->has("accepted")
+                && $this->_rowset->any(function ($row) {
+                       return $row->outcome > 0
+                           && $this->user->can_view_decision($row)
+                           && $row->timeFinalSubmitted <= 0;
+                   });
+        if (!in_array($key, ["collab", "lead", "shepherd", "topics", "sel", "need_review", "authors", "tags"]))
+            error_log("unexpected PaperList::_compute_has({$key})");
+        return false;
     }
 
 
@@ -309,10 +408,10 @@ class PaperList {
             $nfs = [];
             foreach ($fs as $fdef) {
                 if ($fdef->name === $name)
-                    $nfs[] = PaperColumn::make($fdef, $this->conf);
+                    $nfs[] = PaperColumn::make($this->conf, $fdef);
                 else {
                     if (!array_key_exists($fdef->name, $this->_columns_by_name))
-                        $this->_columns_by_name[$fdef->name][] = PaperColumn::make($fdef, $this->conf);
+                        $this->_columns_by_name[$fdef->name][] = PaperColumn::make($this->conf, $fdef);
                     $nfs = array_merge($nfs, $this->_columns_by_name[$fdef->name]);
                 }
             }
@@ -324,33 +423,54 @@ class PaperList {
         return get($this->find_columns($name), 0);
     }
 
+    function _sort_compare($a, $b) {
+        foreach ($this->sorters as $s) {
+            if (($x = $s->field->compare($a, $b, $s))) {
+                return $x < 0 === $s->reverse ? 1 : -1;
+            }
+        }
+        if ($a->paperId != $b->paperId) {
+            return $a->paperId < $b->paperId ? -1 : 1;
+        } else {
+            return 0;
+        }
+    }
+    function _then_sort_compare($a, $b) {
+        if (($x = $a->_then_sort_info - $b->_then_sort_info)) {
+            return $x < 0 ? -1 : 1;
+        }
+        foreach ($this->sorters as $s) {
+            if (($s->thenmap === null || $s->thenmap === $a->_then_sort_info)
+                && ($x = $s->field->compare($a, $b, $s))) {
+                return $x < 0 === $s->reverse ? 1 : -1;
+            }
+        }
+        if ($a->paperId != $b->paperId) {
+            return $a->paperId < $b->paperId ? -1 : 1;
+        } else {
+            return 0;
+        }
+    }
     private function _sort($rows) {
-        $code = "\$x = 0;\n";
+        $overrides = $this->user->add_overrides($this->_view_force ? Contact::OVERRIDE_CONFLICT : 0);
+
         if (($thenmap = $this->search->thenmap)) {
             foreach ($rows as $row)
                 $row->_then_sort_info = $thenmap[$row->paperId];
-            $code .= "if ((\$x = \$a->_then_sort_info - \$b->_then_sort_info)) return \$x < 0 ? -1 : 1;\n";
         }
-
-        self::$magic_sort_info = $this->sorters;
-        foreach ($this->sorters as $s)
+        foreach ($this->sorters as $s) {
             $s->assign_uid();
-        foreach ($this->sorters as $i => $s) {
+            $s->list = $this;
+        }
+        foreach ($this->sorters as $s) {
             $s->field->analyze_sort($this, $rows, $s);
-            $rev = ($s->reverse ? "-" : "");
-            if ($s->thenmap === null)
-                $code .= "if (!\$x)";
-            else
-                $code .= "if (!\$x && \$a->_then_sort_info == {$s->thenmap})";
-            $code .= " { \$s = PaperList::\$magic_sort_info[$i]; "
-                . "\$x = $rev\$s->field->compare(\$a, \$b, \$s); }\n";
         }
 
-        $code .= "if (!\$x) \$x = \$a->paperId - \$b->paperId;\n";
-        $code .= "return \$x < 0 ? -1 : (\$x == 0 ? 0 : 1);\n";
+        usort($rows, [$this, $thenmap ? "_then_sort_compare" : "_sort_compare"]);
 
-        usort($rows, create_function("\$a, \$b", $code));
-        self::$magic_sort_info = null;
+        foreach ($this->sorters as $s)
+            $s->list = null; // break circular ref
+        $this->user->set_overrides($overrides);
         return $rows;
     }
 
@@ -375,9 +495,6 @@ class PaperList {
         if ($row->size == 0 || !$this->user->can_view_pdf($row))
             return "";
         $dtype = $row->finalPaperStorageId <= 0 ? DTYPE_SUBMISSION : DTYPE_FINAL;
-        if ($dtype == DTYPE_FINAL)
-            $this->mark_has("final");
-        $this->mark_has("paper");
         return "&nbsp;" . $row->document($dtype)->link_html("", DocumentInfo::L_SMALL | DocumentInfo::L_NOSIZE | DocumentInfo::L_FINALTITLE);
     }
 
@@ -408,11 +525,10 @@ class PaperList {
     }
 
     function reviewer_user() {
-        return $this->search->reviewer_user();
+        return $this->_reviewer_user;
     }
-
-    function context_user() {
-        return $this->search->context_user();
+    function set_reviewer_user(Contact $user) {
+        $this->_reviewer_user = $user;
     }
 
     function _content_pc($contactId) {
@@ -423,6 +539,17 @@ class PaperList {
     function _text_pc($contactId) {
         $pc = $this->conf->pc_member_by_id($contactId);
         return $pc ? $this->user->reviewer_text_for($pc) : "";
+    }
+
+    function _compare_pc($contactId1, $contactId2) {
+        $pc1 = $this->conf->pc_member_by_id($contactId1);
+        $pc2 = $this->conf->pc_member_by_id($contactId2);
+        if ($pc1 === $pc2)
+            return 0;
+        else if (!$pc1 || !$pc2)
+            return $pc1 ? -1 : 1;
+        else
+            return Contact::compare($pc1, $pc2);
     }
 
     function displayable_list_actions($prefix) {
@@ -554,7 +681,7 @@ class PaperList {
         $lllgroups = [];
         $whichlll = -1;
         foreach ($renderers as $rf) {
-            if (($lllg = call_user_func($rf->renderer, $this))) {
+            if (($lllg = call_user_func($rf->render_callback, $this, $rf))) {
                 if (is_string($lllg))
                     $lllg = [$lllg];
                 array_unshift($lllg, $rf->name, $rf->title);
@@ -565,7 +692,6 @@ class PaperList {
             }
         }
 
-        $this->add_header_script('$("#plact").on("click", "input[type=submit], button[type=submit]", function (evt) { $(this).closest("form").data("submitFn", evt.target.value); })');
         $footsel_ncol = $this->_view_columns ? 0 : 1;
         return self::render_footer_row($footsel_ncol, $ncol - $footsel_ncol,
             "<b>Select papers</b> (or <a class=\"ui js-select-all\" href=\""
@@ -585,35 +711,36 @@ class PaperList {
             return "id title revstat statusfull authors collab abstract topics reviewers shepherd scores formulas";
         case "authorHome":
             return "id title statusfull";
-        case "all":
         case "act":
-            return "sel id title revtype revstat statusfull authors collab abstract topics pcconf allpref reviewers tags tagreports lead shepherd scores formulas";
+        case "all":
+            return "sel id title revtype revstat statusfull authors collab abstract topics pcconflicts allpref reviewers tags tagreports lead shepherd scores formulas";
         case "reviewerHome":
             $this->_default_linkto("finishreview");
             return "id title revtype status";
-        case "s":
-        case "acc":
+        case "ar":
         case "r":
+        case "rable":
+            $this->_default_linkto("finishreview");
+            /* fallthrough */
+        case "acc":
         case "lead":
         case "manager":
-            if ($this->report_id == "r")
-                $this->_default_linkto("finishreview");
-            return "sel id title revtype revstat status authors collab abstract topics pcconf allpref reviewers tags tagreports lead shepherd scores formulas";
+        case "s":
+        case "vis":
+            return "sel id title revtype revstat status authors collab abstract topics pcconflicts allpref reviewers tags tagreports lead shepherd scores formulas";
+        case "req":
         case "rout":
             $this->_default_linkto("review");
-            return "sel id title revtype revstat status authors collab abstract topics pcconf allpref reviewers tags tagreports lead shepherd scores formulas";
-        case "req":
-            $this->_default_linkto("review");
-            return "sel id title revtype revstat status authors collab abstract topics pcconf allpref reviewers tags tagreports lead shepherd scores formulas";
+            return "sel id title revtype revstat status authors collab abstract topics pcconflicts allpref reviewers tags tagreports lead shepherd scores formulas";
         case "reqrevs":
             $this->_default_linkto("review");
-            return "id title revdelegation revstat status authors collab abstract topics pcconf allpref reviewers tags tagreports lead shepherd scores formulas";
+            return "id title revdelegation revstat status authors collab abstract topics pcconflicts allpref reviewers tags tagreports lead shepherd scores formulas";
         case "reviewAssignment":
             $this->_default_linkto("assign");
-            return "id title revpref topicscore desirability assrev authors authorsmatch collabmatch topics allrevtopicpref reviewers tags scores formulas";
-        case "conflict":
+            return "id title revpref topicscore desirability assrev authors potentialconflict topics allrevtopicpref reviewers tags scores formulas";
+        case "conflictassign":
             $this->_default_linkto("assign");
-            return "selconf id title abstract authors authorsmatch collabmatch tags foldall";
+            return "id title abstract authors potentialconflict revtype editconf tags";
         case "editpref":
             $this->_default_linkto("paper");
             return "sel id title topicscore revtype editpref authors abstract topics";
@@ -624,6 +751,7 @@ class PaperList {
             $this->_default_linkto("assign");
             return "sel id title status reviewers";
         default:
+            error_log($this->conf->dbname . ": No such report {$this->report_id}");
             return null;
         }
     }
@@ -633,10 +761,6 @@ class PaperList {
             $fields = explode(" ", $fields);
         $field_list = array();
         foreach ($fields as $fid) {
-            if (($fid == "scores" || $fid == "formulas") && !$this->scoresOk)
-                continue;
-            if ($fid == "scores")
-                $this->scoresOk = "present";
             foreach ($this->find_columns($fid) as $fdef)
                 $field_list[] = $fdef;
         }
@@ -646,47 +770,34 @@ class PaperList {
     }
 
 
+    function rowset() {
+        if ($this->_rowset === null) {
+            $this->qopts["scores"] = array_keys($this->qopts["scores"]);
+            if (empty($this->qopts["scores"]))
+                unset($this->qopts["scores"]);
+            $result = $this->conf->paper_result($this->user, $this->qopts);
+            $this->_rowset = new PaperInfoSet;
+            while (($row = PaperInfo::fetch($result, $this->user))) {
+                assert(!$this->_rowset->get($row->paperId));
+                $this->_rowset->add($row);
+            }
+            Dbl::free($result);
+        }
+        return $this->_rowset;
+    }
+
     private function _rows($field_list) {
         if (!$field_list)
             return null;
 
-        // make query, fetch rows
-        $this->qopts["scores"] = array_keys($this->qopts["scores"]);
-        if (empty($this->qopts["scores"]))
-            unset($this->qopts["scores"]);
-        $result = $this->user->paper_result($this->qopts);
-        if (!$result)
-            return null;
-        $rowset = new PaperInfoSet;
-        while (($row = PaperInfo::fetch($result, $this->user)))
-            if (!$this->_only_selected || $this->is_selected($row->paperId)) {
-                assert(!$rowset->get($row->paperId));
-                $rowset->add($row);
-            }
-        Dbl::free($result);
-
         // analyze rows (usually noop)
-        $rows = $rowset->all();
+        $rows = $this->rowset()->all();
         foreach ($field_list as $fdef)
             $fdef->analyze($this, $rows, $field_list);
 
         // sort rows
         if (!empty($this->sorters))
             $rows = $this->_sort($rows);
-
-        // set `any->optID`
-        if (($nopts = $this->conf->paper_opts->count_option_list())) {
-            foreach ($rows as $prow) {
-                foreach ($prow->options() as $o)
-                    if (!$this->has("opt$o->id")
-                        && $this->user->can_view_paper_option($prow, $o->option)) {
-                        $this->mark_has("opt$o->id");
-                        --$nopts;
-                    }
-                if (!$nopts)
-                    break;
-            }
-        }
 
         // set `ids`
         $this->ids = [];
@@ -740,28 +851,7 @@ class PaperList {
             $fname = "au";
         if (!$fname || $this->_unfold_all || $this->qreq["show$fname"])
             return false;
-        $x = get($this->_view_fields, $fname);
-        if ($x === null && is_object($fdef)
-            && ($fname = $fdef->alternate_display_name()))
-            $x = get($this->_view_fields, $fname);
-        return !$x;
-    }
-
-    private function _check_option_presence(PaperInfo $row) {
-        for ($i = 0; $i < count($this->_any_option_checks); ) {
-            $opt = $this->_any_option_checks[$i];
-            if ($opt->id == DTYPE_SUBMISSION)
-                $got = $row->paperStorageId > 1;
-            else if ($opt->id == DTYPE_FINAL)
-                $got = $row->finalPaperStorageId > 1;
-            else
-                $got = ($ov = $row->option($opt->id)) && $ov->value > 1;
-            if ($got && $this->user->can_view_paper_option($row, $opt)) {
-                $this->mark_has($opt->field_key());
-                array_splice($this->_any_option_checks, $i, 1);
-            } else
-                ++$i;
-        }
+        return !get($this->_view_fields, $fname);
     }
 
     private function _wrap_conflict($main_content, $override_content, PaperColumn $fdef) {
@@ -777,10 +867,10 @@ class PaperList {
 
     private function _row_field_content(PaperColumn $fdef, PaperInfo $row) {
         $content = "";
-        if ($this->row_overridable && $fdef->override === PaperColumn::OVERRIDE_FOLD) {
+        if ($this->row_overridable && $fdef->override === PaperColumn::OVERRIDE_FOLD_IFEMPTY) {
             $empty = $fdef->content_empty($this, $row);
             if ($empty) {
-                $overrides = $this->user->set_overrides($this->user->overrides() | Contact::OVERRIDE_CONFLICT);
+                $overrides = $this->user->add_overrides(Contact::OVERRIDE_CONFLICT);
                 $empty = $fdef->content_empty($this, $row);
                 if (!$empty && $fdef->is_visible)
                     $content = $this->_wrap_conflict("", $fdef->content($this, $row), $fdef);
@@ -792,7 +882,7 @@ class PaperList {
             $empty1 = $fdef->content_empty($this, $row);
             if (!$empty1 && $fdef->is_visible)
                 $content1 = $fdef->content($this, $row);
-            $overrides = $this->user->set_overrides($this->user->overrides() | Contact::OVERRIDE_CONFLICT);
+            $overrides = $this->user->add_overrides(Contact::OVERRIDE_CONFLICT);
             $empty2 = $fdef->content_empty($this, $row);
             if (!$empty2 && $fdef->is_visible)
                 $content2 = $fdef->content($this, $row);
@@ -800,7 +890,7 @@ class PaperList {
             $empty = $empty1 && $empty2;
             $content = $this->_wrap_conflict($content1, $content2, $fdef);
         } else if ($this->row_overridable && $fdef->override === PaperColumn::OVERRIDE_ALWAYS) {
-            $overrides = $this->user->set_overrides($this->user->overrides() | Contact::OVERRIDE_CONFLICT);
+            $overrides = $this->user->add_overrides(Contact::OVERRIDE_CONFLICT);
             $empty = $fdef->content_empty($this, $row);
             if (!$empty && $fdef->is_visible)
                 $content = $fdef->content($this, $row);
@@ -813,44 +903,25 @@ class PaperList {
         return [$empty, $content];
     }
 
-    private function _row_content($rstate, PaperInfo $row, $fieldDef) {
-        if ((string) $row->abstract !== "")
-            $this->mark_has("abstract");
-        if (!empty($this->_any_option_checks))
-            $this->_check_option_presence($row);
+    private function _row_setup(PaperInfo $row) {
+        ++$this->count;
         $this->row_attr = [];
-        $this->row_overridable = $row->conflictType > 0 && $this->user->allow_administer($row);
+        $this->row_overridable = $this->user->can_meaningfully_override($row);
 
-        $trclass = [];
-        $cc = "";
-        if (get($row, "paperTags")) {
+        $this->row_tags = $this->row_tags_overridable = null;
+        if (isset($row->paperTags) && $row->paperTags !== "") {
             if ($this->row_overridable) {
-                if (($vto = $row->viewable_tags($this->user, true))
-                    && ($cco = $row->conf->tags()->color_classes($vto))) {
-                    $vtx = $row->viewable_tags($this->user, false);
-                    $ccx = $row->conf->tags()->color_classes($vtx);
-                    if ($cco !== $ccx) {
-                        $this->row_attr["data-color-classes"] = $cco;
-                        $this->row_attr["data-color-classes-conflicted"] = $ccx;
-                        $trclass[] = "colorconflict";
-                    }
-                    $cc = $this->_view_force ? $cco : $ccx;
-                }
-            } else if (($vt = $row->viewable_tags($this->user)))
-                $cc = $row->conf->tags()->color_classes($vt);
+                $overrides = $this->user->add_overrides(Contact::OVERRIDE_CONFLICT);
+                $this->row_tags_overridable = $row->viewable_tags($this->user);
+                $this->user->remove_overrides(Contact::OVERRIDE_CONFLICT);
+                $this->row_tags = $row->viewable_tags($this->user);
+                $this->user->set_overrides($overrides);
+            } else
+                $this->row_tags = $row->viewable_tags($this->user);
         }
-        if ($cc) {
-            $trclass[] = $cc;
-            $rstate->hascolors = $rstate->hascolors || str_ends_with($cc, " tagbg");
-        }
-        if (!$cc || !$rstate->hascolors)
-            $trclass[] = "k" . $rstate->colorindex;
-        if (($highlightclass = get($this->search->highlightmap, $row->paperId)))
-            $trclass[] = $highlightclass[0] . "highlightmark";
-        $trclass = join(" ", $trclass);
-        $rstate->colorindex = 1 - $rstate->colorindex;
-        $rstate->last_trclass = $trclass;
+    }
 
+    private function _row_content($rstate, PaperInfo $row, $fieldDef) {
         // main columns
         $tm = "";
         foreach ($fieldDef as $fdef) {
@@ -898,11 +969,51 @@ class PaperList {
                 $fdef->has_content = !$empty;
         }
 
-        if (isset($row->folded) && $row->folded) {
-            $trclass .= " fx3";
-            $rstate->row_folded = true;
-        } else if ($rstate->row_folded)
-            $rstate->row_folded = false;
+        // filter
+        if ($this->_row_filter
+            && !call_user_func($this->_row_filter, $this, $row, $fieldDef, $tm, $tt)) {
+            --$this->count;
+            return "";
+        }
+
+        // tags
+        if ($this->need_tag_attr) {
+            if ($this->row_tags_overridable
+                && $this->row_tags_overridable !== $this->row_tags) {
+                $this->row_attr["data-tags"] = trim($this->row_tags_overridable);
+                $this->row_attr["data-tags-conflicted"] = trim($this->row_tags);
+            } else
+                $this->row_attr["data-tags"] = trim($this->row_tags);
+        }
+
+        // row classes
+        $trclass = [];
+        $cc = "";
+        if (get($row, "paperTags")) {
+            if ($this->row_tags_overridable
+                && ($cco = $row->conf->tags()->color_classes($this->row_tags_overridable))) {
+                $ccx = $row->conf->tags()->color_classes($this->row_tags);
+                if ($cco !== $ccx) {
+                    $this->row_attr["data-color-classes"] = $cco;
+                    $this->row_attr["data-color-classes-conflicted"] = $ccx;
+                    $trclass[] = "colorconflict";
+                }
+                $cc = $this->_view_force ? $cco : $ccx;
+                $rstate->hascolors = $rstate->hascolors || str_ends_with($cco, " tagbg");
+            } else if ($this->row_tags)
+                $cc = $row->conf->tags()->color_classes($this->row_tags);
+        }
+        if ($cc) {
+            $trclass[] = $cc;
+            $rstate->hascolors = $rstate->hascolors || str_ends_with($cc, " tagbg");
+        }
+        if (!$cc || !$rstate->hascolors)
+            $trclass[] = "k" . $rstate->colorindex;
+        if (($highlightclass = get($this->search->highlightmap, $row->paperId)))
+            $trclass[] = $highlightclass[0] . "highlightmark";
+        $trclass = join(" ", $trclass);
+        $rstate->colorindex = 1 - $rstate->colorindex;
+        $rstate->last_trclass = $trclass;
 
         $t = "  <tr";
         if ($this->_row_id_pattern)
@@ -931,18 +1042,18 @@ class PaperList {
                 $rstate->groupstart[] = $did_groupstart = count($body);
             $ginfo = $this->groups[$grouppos];
             if ($ginfo->is_empty()) {
-                $body[] = "  <tr class=\"plheading_blank\"><td class=\"plheading_blank\" colspan=\"$rstate->ncol\"></td></tr>\n";
+                $body[] = $rstate->heading_row(null);
             } else {
-                $x = "  <tr class=\"plheading\"";
+                $attr = [];
                 if ($ginfo->tag)
-                    $x .= " data-anno-tag=\"{$ginfo->tag}\"";
-                if ($ginfo->annoId)
-                    $x .= " data-anno-id=\"{$ginfo->annoId}\" data-tags=\"{$ginfo->tag}#{$ginfo->tagIndex}\"";
-                $x .= ">";
-                if ($rstate->titlecol)
-                    $x .= "<td class=\"plheading_spacer\" colspan=\"$rstate->titlecol\"></td>";
-                $x .= "<td class=\"plheading\" colspan=\"" . ($rstate->ncol - $rstate->titlecol) . "\">";
-                $x .= "<span class=\"plheading_group";
+                    $attr["data-anno-tag"] = $ginfo->tag;
+                if ($ginfo->annoId) {
+                    $attr["data-anno-id"] = $ginfo->annoId;
+                    $attr["data-tags"] = "{$ginfo->tag}#{$ginfo->tagIndex}";
+                    if (get($this->table_attr, "data-drag-tag"))
+                        $attr["tdclass"] = "need-draghandle";
+                }
+                $x = "<span class=\"plheading-group";
                 if ($ginfo->heading !== ""
                     && ($format = $this->conf->check_format($ginfo->annoFormat, $ginfo->heading))) {
                     $x .= " need-format\" data-format=\"$format";
@@ -951,9 +1062,9 @@ class PaperList {
                 $x .= "\" data-title=\"" . htmlspecialchars($ginfo->heading)
                     . "\">" . htmlspecialchars($ginfo->heading)
                     . ($ginfo->heading !== "" ? " " : "")
-                    . "</span><span class=\"plheading_count\">"
-                    . plural($ginfo->count, "paper") . "</span></td></tr>";
-                $body[] = $x;
+                    . "</span><span class=\"plheading-count\">"
+                    . plural($ginfo->count, "paper") . "</span>";
+                $body[] = $rstate->heading_row($x, $attr);
                 $rstate->colorindex = 0;
             }
         }
@@ -981,6 +1092,8 @@ class PaperList {
             $sort_url .= $s0->reverse ? "" : urlencode(" reverse");
         }
 
+        if ($this->user->overrides() & Contact::OVERRIDE_CONFLICT)
+            $sort_url .= "&amp;forceShow=1";
         return '<a class="' . $sort_class . '" rel="nofollow" href="' . $sort_url . '">' . $t . '</a>';
     }
 
@@ -1017,18 +1130,16 @@ class PaperList {
             $jscol[] = $j;
             if ($fdef->fold)
                 $classes[] = "fold" . $fdef->fold . ($fdef->is_visible ? "o" : "c");
-            if (isset($fdef->is_selector))
+            if ($fdef instanceof SelectorPaperColumn)
                 $has_sel = true;
         }
         // authorship requires special handling
         if ($this->has("anonau"))
             $classes[] = "fold2" . ($this->is_folded("anonau") ? "c" : "o");
-        // total folding, row number folding
-        if (isset($rstate->row_folded))
-            $classes[] = "fold3c";
+        // row number folding
         if ($has_sel)
             $classes[] = "fold6" . ($this->_view_row_numbers ? "o" : "c");
-        if ($this->user->privChair)
+        if ($this->user->is_track_manager())
             $classes[] = "fold5" . ($this->_view_force ? "o" : "c");
         $classes[] = "fold7" . ($this->_view_statistics ? "o" : "c");
         $classes[] = "fold8" . ($has_statistics ? "o" : "c");
@@ -1039,8 +1150,6 @@ class PaperList {
 
     private function _make_title_header_extra($rstate, $fieldDef, $show_links) {
         $titleextra = "";
-        if (isset($rstate->row_folded))
-            $titleextra .= '<span class="sep"></span><a class="ui js-foldup" href="#" data-fold-target="3"><span class="fn3">Show all papers</span><span class="fx3">Hide unlikely conflicts</span></a>';
         if ($show_links && $this->has("authors")) {
             $titleextra .= '<span class="sep"></span>';
             if ($this->conf->submission_blindness() == Conf::BLIND_NEVER)
@@ -1054,8 +1163,8 @@ class PaperList {
                     . '<a class="ui js-plinfo fx1 fn2" href="#" data-plinfo-field="anonau">Show all authors</a>'
                     . '<a class="ui js-plinfo fx1 fx2" href="#" data-plinfo-field="au anonau">Hide authors</a>';
             else
-                $titleextra .= '<a class="ui js-plinfo" href="#" data-plinfo-field="tags">'
-                    . '<span class="fn1">Show non-anonymous authors</span><span class="fx1">Hide authors</span></a>';
+                $titleextra .= '<a class="ui js-plinfo" href="#" data-plinfo-field="au">'
+                    . '<span class="fn1">Show authors</span><span class="fx1">Hide authors</span></a>';
         }
         if ($show_links && $this->has("tags")) {
             $tagfold = $this->find_column("tags")->fold;
@@ -1063,10 +1172,8 @@ class PaperList {
             $titleextra .= '<a class="ui js-plinfo" href="#" data-plinfo-field="tags">'
                 . '<span class="fn' . $tagfold . '">Show tags</span><span class="fx' . $tagfold . '">Hide tags</span></a>';
         }
-        if ($titleextra) {
-            $titleextra = '<span id="plheaderlinks" class="pl_titleextra">' . $titleextra . '</span>';
-            $this->add_header_script('$("#plheaderlinks").on("click", "a.js-plinfo", plinfo.a_click)');
-        }
+        if ($titleextra)
+            $titleextra = '<span class="pl_titleextra">' . $titleextra . '</span>';
         return $titleextra;
     }
 
@@ -1090,7 +1197,7 @@ class PaperList {
                     $pos += strlen($rownum_marker);
                     $x = substr($x, 0, $pos) . preg_replace('/\A\d+/', $number, substr($x, $pos));
                     ++$number;
-                } else if (strpos($x, "<tr class=\"plheading_blank") !== false)
+                } else if (strpos($x, "<td class=\"plheading-blank") !== false)
                     $x = "";
                 $nbody[] = $x;
             }
@@ -1144,11 +1251,10 @@ class PaperList {
         }
         foreach ($viewmap_add as $k => $v)
             $this->_view_fields[$k] = $v;
-        foreach ($field_list as $fi => &$f) {
+        foreach ($field_list as $fi => $f) {
             if (get($this->_view_fields, $f->name) === "edit")
-                $f = $f->make_editable($this);
+                $f->mark_editable();
         }
-        unset($f);
 
         // remove deselected columns;
         // in compactcolumns view, remove non-minimal columns
@@ -1156,7 +1262,9 @@ class PaperList {
         $field_list2 = array();
         foreach ($field_list as $fdef) {
             $v = get($this->_view_fields, $fdef->name);
-            if ($v || $fdef->fold || ($v !== false && (!$minimal || $fdef->minimal)))
+            if ($v
+                || $fdef->fold
+                || ($v !== false && (!$minimal || $fdef->minimal)))
                 $field_list2[] = $fdef;
         }
         return $field_list2;
@@ -1203,7 +1311,8 @@ class PaperList {
 
     private function _prepare_columns($field_list) {
         $field_list2 = [];
-        $this->tbody_attr = [];
+        $this->need_tag_attr = false;
+        $this->table_attr = [];
         foreach ($field_list as $fdef) {
             if ($fdef) {
                 $fdef->is_visible = !$this->is_folded($fdef);
@@ -1236,9 +1345,8 @@ class PaperList {
 
     private function _columns($field_list, $table_html) {
         $field_list = $this->_canonicalize_columns($field_list);
-        if ($table_html) {
+        if ($table_html)
             $field_list = $this->_view_columns($field_list);
-        }
         $this->_prepare_sort(); // NB before prepare_columns so columns see sorter
         return $this->_prepare_columns($field_list);
     }
@@ -1302,8 +1410,6 @@ class PaperList {
         switch ($this->report_id) {
         case "reviewAssignment":
             return "Review assignments";
-        case "conflict":
-            return "Potential conflicts";
         case "editpref":
             return "Review preferences";
         case "reviewers":
@@ -1319,36 +1425,40 @@ class PaperList {
         return $this->search->create_session_list_object($this->ids, $this->_listDescription(), $this->sortdef());
     }
 
-    function table_html($report_id, $options = array()) {
+    function table_render($report_id, $options = array()) {
         if (!$this->_prepare($report_id))
-            return null;
+            return PaperListTableRender::make_error("Internal error");
         // need tags for row coloring
         if ($this->user->can_view_tags(null))
-            $this->qopts["tags"] = 1;
+            $this->qopts["tags"] = true;
 
-        // get column list, check sort
+        // get column list
         if (isset($options["field_list"]))
             $field_list = $options["field_list"];
         else
             $field_list = $this->_list_columns();
-        if (!$field_list) {
-            Conf::msg_error("There is no paper list query named “" . htmlspecialchars($this->report_id) . "”.");
-            return null;
-        }
+        if (!$field_list)
+            return PaperListTableRender::make_error("No matching report");
+
+        // turn off forceShow
+        $overrides = $this->user->remove_overrides(Contact::OVERRIDE_CONFLICT);
+
+        // expand fields, check sort
         $field_list = $this->_columns($field_list, true);
         $rows = $this->_rows($field_list);
-        if ($rows === null)
-            return null;
 
         if (empty($rows)) {
+            $this->user->set_overrides($overrides);
+            if ($rows === null)
+                return null;
             if (($altq = $this->search->alternate_query())) {
                 $altqh = htmlspecialchars($altq);
                 $url = $this->search->url_site_relative_raw($altq);
                 if (substr($url, 0, 5) == "search")
                     $altqh = "<a href=\"" . htmlspecialchars(Navigation::siteurl() . $url) . "\">" . $altqh . "</a>";
-                return "No matching papers. Did you mean “${altqh}”?";
-            } else
-                return "No matching papers";
+                return PaperListTableRender::make_error("No matching papers. Did you mean “{$altqh}”?");
+            }
+            return PaperListTableRender::make_error("No matching papers");
         }
 
         // get field array
@@ -1359,7 +1469,7 @@ class PaperList {
         $next_fold = 9;
         foreach ($field_list as $fdef) {
             if ($fdef->viewable()) {
-                $fieldDef[] = $fdef;
+                $fieldDef[$fdef->name] = $fdef;
                 if ($fdef->fold === true) {
                     $fdef->fold = $next_fold;
                     ++$next_fold;
@@ -1373,29 +1483,22 @@ class PaperList {
 
         // count non-callout columns
         $skipcallout = 0;
-        foreach ($fieldDef as $fdef)
-            if ($fdef->name != "id" && !isset($fdef->is_selector))
+        foreach ($fieldDef as $fdef) {
+            if ($fdef->position === null || $fdef->position >= 100)
                 break;
             else
                 ++$skipcallout;
+        }
 
         // create render state
-        $rstate = new PaperListRenderState($ncol, $titlecol, $skipcallout);
-        $this->_any_option_checks = [$this->conf->paper_opts->get(DTYPE_SUBMISSION),
-                                     $this->conf->paper_opts->get(DTYPE_FINAL)];
-        foreach ($this->user->user_option_list() as $o)
-            if ($o->is_document())
-                $this->_any_option_checks[] = $o;
-
-        // turn off forceShow
-        $overrides = $this->user->set_overrides($this->user->overrides() & ~Contact::OVERRIDE_CONFLICT);
+        $rstate = new PaperListTableRender($ncol, $titlecol, $skipcallout);
 
         // collect row data
         $body = array();
         $grouppos = empty($this->groups) ? -1 : 0;
         $need_render = false;
         foreach ($rows as $row) {
-            ++$this->count;
+            $this->_row_setup($row);
             if ($grouppos >= 0)
                 $grouppos = $this->_groups_for($grouppos, $rstate, $body, false);
             $body[] = $this->_row_content($rstate, $row, $fieldDef);
@@ -1410,27 +1513,17 @@ class PaperList {
         }
         if ($grouppos >= 0 && $grouppos < count($this->groups))
             $this->_groups_for($grouppos, $rstate, $body, true);
+        if ($this->count === 0)
+            return PaperListTableRender::make_error("No matching papers");
 
         // analyze `has`, including authors
         foreach ($fieldDef as $fdef)
-            if ($fdef->has_content)
-                $this->mark_has($fdef->name);
-        if ($this->has("authors")) {
-            if (!$this->user->is_manager())
-                $this->mark_has("openau");
-            else {
-                foreach ($rows as $row)
-                    if ($this->user->can_view_authors($row))
-                        $this->mark_has("openau");
-                    else if ($this->user->allow_view_authors($row))
-                        $this->mark_has("anonau");
-            }
-        }
+            $this->mark_has($fdef->name, $fdef->has_content);
 
         // statistics rows
-        $statistics_rows = "";
+        $tfoot = "";
         if (!$this->_view_columns)
-            $statistics_rows = $this->_statistics_rows($rstate, $fieldDef);
+            $tfoot = $this->_statistics_rows($rstate, $fieldDef);
 
         // restore forceShow
         $this->user->set_overrides($overrides);
@@ -1468,9 +1561,10 @@ class PaperList {
             $colhead .= "</tr>\n";
 
             if ($this->search->is_order_anno
-                && isset($this->tbody_attr["data-drag-tag"])) {
-                $drag_tag = $this->tagger->check($this->tbody_attr["data-drag-tag"]);
-                if (strcasecmp($drag_tag, $this->search->is_order_anno) == 0) {
+                && isset($this->table_attr["data-drag-tag"])) {
+                $drag_tag = $this->tagger->check($this->table_attr["data-drag-tag"]);
+                if (strcasecmp($drag_tag, $this->search->is_order_anno) == 0
+                    && $this->user->can_change_tag_anno($drag_tag)) {
                     $colhead .= "  <tr class=\"pl_headrow pl_annorow\" data-anno-tag=\"{$this->search->is_order_anno}\">";
                     if ($rstate->titlecol)
                         $colhead .= "<td class=\"plh\" colspan=\"$rstate->titlecol\"></td>";
@@ -1489,7 +1583,7 @@ class PaperList {
         if ($this->_table_class)
             $enter .= " " . $this->_table_class;
         if (get($options, "list"))
-            $enter .= " has-hotlist";
+            $enter .= " has-hotlist has-fold";
         if (!empty($foldclasses))
             $enter .= " " . join(" ", $foldclasses);
         if ($this->_table_id)
@@ -1503,7 +1597,7 @@ class PaperList {
             $enter .= "\" data-order-tag=\"{$this->search->is_order_anno}";
         if ($this->groups)
             $enter .= "\" data-groups=\"" . htmlspecialchars(json_encode_browser($this->groups));
-        foreach ($this->tbody_attr as $k => $v)
+        foreach ($this->table_attr as $k => $v)
             $enter .= "\" $k=\"" . htmlspecialchars($v);
         if (get($options, "list"))
             $enter .= "\" data-hotlist=\"" . htmlspecialchars($this->session_list_object()->info_string());
@@ -1511,41 +1605,54 @@ class PaperList {
             $url = Navigation::siteurl() . $url . (strpos($url, "?") ? "&" : "?") . "sort={sort}";
             $enter .= "\" data-sort-url-template=\"" . htmlspecialchars($url);
         }
-        $enter .= "\" data-fold=\"true\">\n";
+        $enter .= "\">\n";
         if (self::$include_stash)
             $enter .= Ht::unstash();
-        $exit = "</table>";
+        $rstate->table_start = $enter;
+        $rstate->table_end = "</table>";
 
         // maybe make columns, maybe not
-        $tbody_class = "pltable";
         if ($this->_view_columns && !empty($this->ids)
             && $this->_column_split($rstate, $colhead, $body)) {
-            $enter = '<div class="plsplit_col_ctr_ctr"><div class="plsplit_col_ctr">' . $enter;
-            $exit = $exit . "</div></div>";
+            $rstate->table_start = '<div class="plsplit_col_ctr_ctr"><div class="plsplit_col_ctr">' . $rstate->table_start;
+            $rstate->table_end .= "</div></div>";
             $ncol = $rstate->split_ncol;
-            $tbody_class = "pltable_split";
+            $rstate->tbody_class = "pltable_split";
         } else {
-            $enter .= $colhead;
-            $tbody_class .= $rstate->hascolors ? " pltable_colored" : "";
+            $rstate->thead = $colhead;
+            $rstate->tbody_class = "pltable" . ($rstate->hascolors ? " pltable_colored" : "");
         }
+        if ($this->has_editable_tags)
+            $rstate->tbody_class .= " need-editable-tags";
 
         // footer
-        $foot = $statistics_rows;
-        if ($fieldDef[0] instanceof SelectorPaperColumn
+        reset($fieldDef);
+        if (current($fieldDef) instanceof SelectorPaperColumn
             && !get($options, "nofooter"))
-            $foot .= $this->_footer($ncol, get_s($options, "footer_extra"));
-        if ($foot)
-            $enter .= ' <tfoot class="pltable' . ($rstate->hascolors ? ' pltable_colored' : "")
-                . "\">" . $foot . "</tfoot>\n";
-
-        // body
-        $enter .= " <tbody class=\"$tbody_class\">\n";
+            $tfoot .= $this->_footer($ncol, get_s($options, "footer_extra"));
+        if ($tfoot)
+            $rstate->tfoot = ' <tfoot class="pltable' . ($rstate->hascolors ? " pltable_colored" : "") . '">' . $tfoot . "</tfoot>\n";
 
         // header scripts to set up delegations
         if ($this->_header_script)
-            $enter .= '  ' . Ht::script($this->_header_script) . "\n";
+            $rstate->thead .= '  ' . Ht::script($this->_header_script) . "\n";
 
-        return $enter . join("", $body) . " </tbody>\n" . $exit;
+        $rstate->body_rows = $body;
+        return $rstate;
+    }
+
+    function table_html($report_id, $options = array()) {
+        $render = $this->table_render($report_id, $options);
+        if ($render->error)
+            return $render->error;
+        else
+            return $render->table_start
+                . ($render->thead ? : "")
+                . $render->tbody_start()
+                . join("", $render->body_rows)
+                . "  </tbody>\n"
+                . ($render->tfoot ? : "")
+                . "</table>";
     }
 
     function column_json($fieldId) {
@@ -1567,7 +1674,7 @@ class PaperList {
         $fdef = $field_list[0];
 
         // turn off forceShow
-        $overrides = $this->user->set_overrides($this->user->overrides() & ~Contact::OVERRIDE_CONFLICT);
+        $overrides = $this->user->remove_overrides(Contact::OVERRIDE_CONFLICT);
 
         // output field data
         $data = array();
@@ -1575,9 +1682,7 @@ class PaperList {
             $data["{$fdef->name}.headerhtml"] = $x;
         $m = array();
         foreach ($rows as $row) {
-            ++$this->count;
-            $this->row_attr = [];
-            $this->row_overridable = $row->conflictType > 0 && $this->user->allow_administer($row);
+            $this->_row_setup($row);
             list($empty, $content) = $this->_row_field_content($fdef, $row);
             $m[$row->paperId] = $content;
             foreach ($this->row_attr as $k => $v) {
@@ -1595,8 +1700,7 @@ class PaperList {
                 $m[ScoreInfo::$stat_keys[$stat]] = $fdef->statistic($this, $stat);
             $data["{$fdef->name}.stat.html"] = $m;
         }
-        if ($fdef->has_content)
-            $this->mark_has($fdef->name);
+        $this->mark_has($fdef->name, $fdef->has_content);
 
         // restore forceShow
         $this->user->set_overrides($overrides);
@@ -1615,9 +1719,8 @@ class PaperList {
 
         $x = array();
         foreach ($rows as $row) {
+            $this->_row_setup($row);
             $p = array("id" => $row->paperId);
-            ++$this->count;
-            $this->row_overridable = $row->conflictType > 0 && $this->user->allow_administer($row);
             foreach ($field_list as $fdef) {
                 if ($fdef->viewable()
                     && !$fdef->content_empty($this, $row)
@@ -1631,12 +1734,6 @@ class PaperList {
     }
 
     private function _row_text_csv_data(PaperInfo $row, $fieldDef) {
-        ++$this->count;
-        if ((string) $row->abstract !== "")
-            $this->mark_has("abstract");
-        if (!empty($this->_any_option_checks))
-            $this->_check_option_presence($row);
-        $this->row_overridable = $row->conflictType > 0 && $this->user->allow_administer($row);
         $csv = [];
         foreach ($fieldDef as $fdef) {
             $empty = $fdef->content_empty($this, $row);
@@ -1685,6 +1782,7 @@ class PaperList {
         $body = array();
         $grouppos = empty($this->groups) ? -1 : 0;
         foreach ($rows as $row) {
+            $this->_row_setup($row);
             $csv = $this->_row_text_csv_data($row, $fieldDef);
             if ($grouppos >= 0)
                 $grouppos = $this->_groups_for_csv($grouppos, $csv);

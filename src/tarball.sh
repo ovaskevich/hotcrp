@@ -1,4 +1,4 @@
-export VERSION=2.101
+export VERSION=2.102
 
 # check that schema.sql and updateschema.php agree on schema version
 updatenum=`grep 'settings.*allowPaperOption.*=\|update_schema_version' src/updateschema.php | tail -n 1 | sed 's/.*= *//;s/.*[(] *//;s/[;)].*//'`
@@ -54,6 +54,7 @@ buzzer.php
 cacheable.php
 checkupdates.php
 comment.php
+conflictassign.php
 deadlines.php
 doc.php
 graph.php
@@ -75,9 +76,9 @@ settings.php
 users.php
 
 batch/.htaccess
-batch/adddoc.php
 batch/addusers.php
 batch/checkinvariants.php
+batch/deletepapers.php
 batch/fixdelegation.php
 batch/killinactivedoc.php
 batch/s3test.php
@@ -89,22 +90,27 @@ batch/updatecontactdb.php
 conf/.htaccess
 
 etc/.htaccess
-etc/affiliationmatching.json
+etc/affiliationmatchers.json
 etc/apifunctions.json
 etc/assignmentparsers.json
 etc/emojicodes.json
 etc/formulafunctions.json
 etc/helptopics.json
 etc/listactions.json
+etc/mailkeywords.json
 etc/msgs.json
+etc/optiontypes.json
 etc/papercolumns.json
+etc/profilegroups.json
 etc/reviewformlibrary.json
 etc/searchkeywords.json
 etc/settings.json
 etc/settinggroups.json
+etc/submissioneditgroups.json
 
 lib/.htaccess
 lib/abbreviationmatcher.php
+lib/archiveinfo.php
 lib/backupdb.sh
 lib/base.php
 lib/cleanhtml.php
@@ -113,6 +119,7 @@ lib/countmatcher.php
 lib/countries.php
 lib/createdb.sh
 lib/csv.php
+lib/curls3document.php
 lib/dbhelper.sh
 lib/dbl.php
 lib/filer.php
@@ -141,12 +148,16 @@ lib/tagger.php
 lib/text.php
 lib/unicodehelper.php
 lib/xlsx.php
+lib/zipdocument.php
 
 pages/.htaccess
 pages/adminhome.php
 pages/home.php
 
 src/.htaccess
+src/api/api_alltags.php
+src/api/api_error.php
+src/api/api_requestreview.php
 src/api/api_search.php
 src/api/api_searchconfig.php
 src/api/api_taganno.php
@@ -158,6 +169,8 @@ src/assigners/a_preference.php
 src/assigners/a_status.php
 src/assigners/a_tag.php
 src/assignmentset.php
+src/author.php
+src/authormatcher.php
 src/autoassigner.php
 src/banal
 src/capability.php
@@ -175,7 +188,7 @@ src/formatspec.php
 src/formula.php
 src/formulagraph.php
 src/groupedextensions.php
-src/help/h_chairsgude.php
+src/help/h_chairsguide.php
 src/help/h_formulas.php
 src/help/h_keywords.php
 src/help/h_ranking.php
@@ -184,10 +197,8 @@ src/help/h_revround.php
 src/help/h_scoresort.php
 src/help/h_search.php
 src/help/h_tags.php
-src/help/h_tracks.php
 src/help/h_votetags.php
 src/helpers.php
-src/hotcrpdocument.php
 src/hotcrpmailer.php
 src/init.php
 src/initweb.php
@@ -195,6 +206,7 @@ src/listaction.php
 src/listactions/la_assign.php
 src/listactions/la_decide.php
 src/listactions/la_getallrevpref.php
+src/listactions/la_getdocument.php
 src/listactions/la_getjson.php
 src/listactions/la_getjsonrqc.php
 src/listactions/la_getrevpref.php
@@ -213,6 +225,8 @@ src/paperapi.php
 src/papercolumn.php
 src/papercolumns/pc_administrator.php
 src/papercolumns/pc_commenters.php
+src/papercolumns/pc_conflict.php
+src/papercolumns/pc_conflictmatch.php
 src/papercolumns/pc_desirability.php
 src/papercolumns/pc_formula.php
 src/papercolumns/pc_formulagraph.php
@@ -237,6 +251,7 @@ src/paperstatus.php
 src/papertable.php
 src/paperrank.php
 src/review.php
+src/reviewdiffinfo.php
 src/reviewinfo.php
 src/reviewtable.php
 src/reviewtimes.php
@@ -246,7 +261,9 @@ src/search/st_author.php
 src/search/st_comment.php
 src/search/st_conflict.php
 src/search/st_decision.php
+src/search/st_editfinal.php
 src/search/st_formula.php
+src/search/st_option.php
 src/search/st_paperpc.php
 src/search/st_paperstatus.php
 src/search/st_pdf.php
@@ -256,12 +273,17 @@ src/search/st_revpref.php
 src/search/st_tag.php
 src/search/st_topic.php
 src/searchselection.php
+src/sessionlist.php
 src/settings/s_basics.php
 src/settings/s_decisions.php
+src/settings/s_decisionvisibility.php
+src/settings/s_finalversions.php
 src/settings/s_messages.php
 src/settings/s_options.php
+src/settings/s_responses.php
 src/settings/s_reviewform.php
 src/settings/s_reviews.php
+src/settings/s_reviewvisibility.php
 src/settings/s_submissions.php
 src/settings/s_subform.php
 src/settings/s_tags.php
@@ -274,7 +296,7 @@ src/updateschema.php
 src/useractions.php
 src/userstatus.php
 
-extra/hotcrp.vim
+devel/hotcrp.vim
 
 images/.htaccess
 images/_.gif
@@ -320,7 +342,6 @@ images/review24.png
 images/review48.png
 images/sortdown.png
 images/sortup.png
-images/sprite.png
 images/stophand45.png
 images/txt.png
 images/txt24.png
@@ -334,6 +355,7 @@ scripts/buzzer.js
 scripts/graph.js
 scripts/jquery-1.12.4.min.js
 scripts/jquery-1.12.4.min.map
+scripts/jquery-3.3.1.min.js
 scripts/script.js
 scripts/settings.js
 

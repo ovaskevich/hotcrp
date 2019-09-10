@@ -1,7 +1,6 @@
 <?php
 // meetingtracker.php -- HotCRP meeting tracker support
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class MeetingTracker {
     static function lookup(Conf $conf) {
@@ -50,7 +49,7 @@ class MeetingTracker {
         $old_tracker = self::lookup($user->conf);
         if ($old_tracker->trackerid == $trackerid) {
             $start_at = $old_tracker->start_at;
-            if ($old_tracker->listid == $list->listid) {
+            if ($old_tracker->listid === $list->listid) {
                 if ($position === false)
                     $position = $old_tracker->position;
                 if ($old_tracker->position == $position)
@@ -164,16 +163,18 @@ class MeetingTracker {
             $pcm = $acct->conf->pc_members();
         }
 
-        $result = $acct->conf->qe_raw("select p.paperId, p.title, p.paperFormat, p.leadContactId, p.managerContactId, r.reviewType, conf.conflictType{$col}
+        $result = $acct->conf->qe_raw("select p.paperId, p.title, p.paperFormat, p.leadContactId, p.managerContactId, " . PaperInfo::my_review_permissions_sql("r.") . " myReviewPermissions, conf.conflictType{$col}
             from Paper p
             left join PaperReview r on (r.paperId=p.paperId and " . ($acct->contactId ? "r.contactId=$acct->contactId" : "false") . ")
             left join PaperConflict conf on (conf.paperId=p.paperId and " . ($acct->contactId ? "conf.contactId=$acct->contactId" : "false") . ")
-            ${j}where p.paperId in (" . join(",", $pids) . ")");
+            ${j}where p.paperId in (" . join(",", $pids) . ")
+            group by p.paperId");
 
         $papers = array();
         while (($row = PaperInfo::fetch($result, $acct))) {
             $papers[$row->paperId] = $p = (object) array();
-            if (($acct->privChair || !$row->conflictType
+            if (($acct->privChair
+                 || !$row->conflictType
                  || !get($status, "hide_conflicts"))
                 && $acct->tracker_kiosk_state != 1) {
                 $p->pid = (int) $row->paperId;
@@ -181,16 +182,16 @@ class MeetingTracker {
                 if (($format = $row->title_format()))
                     $p->format = $format;
             }
-            if ($acct->contactId > 0
-                && $row->managerContactId == $acct->contactId)
-                $p->is_manager = true;
-            if ($row->reviewType)
-                $p->is_reviewer = true;
-            if ($row->conflictType)
-                $p->is_conflict = true;
-            if ($acct->contactId > 0
-                && $row->leadContactId == $acct->contactId)
-                $p->is_lead = true;
+            if ($acct->contactId > 0) {
+                if ($row->managerContactId == $acct->contactId)
+                    $p->is_manager = true;
+                if ($row->has_reviewer($acct))
+                    $p->is_reviewer = true;
+                if ($row->conflictType)
+                    $p->is_conflict = true;
+                if ($row->leadContactId == $acct->contactId)
+                    $p->is_lead = true;
+            }
             if ($pc_conflicts) {
                 $p->pc_conflicts = array();
                 foreach (explode(",", (string) $row->conflictIds) as $cid)
@@ -231,7 +232,7 @@ class MeetingTracker {
             $status->hide_conflicts = true;
         if ($status->position !== false)
             self::status_papers($status, $tracker, $acct);
-        if (!$acct->is_actas_user())
+        if (!$acct->is_actas_user() && false)
             $acct->conf->save_session("tracker", $status);
         return $status;
     }
@@ -251,7 +252,7 @@ class MeetingTracker {
     }
 
     static function track_api(Contact $user, $qreq) {
-        if (!$user->privChair || !check_post($qreq))
+        if (!$user->privChair || !$qreq->post_ok())
             json_exit(["ok" => false]);
         // argument: IDENTIFIER LISTNUM [POSITION] -OR- stop
         if ($qreq->track === "stop") {

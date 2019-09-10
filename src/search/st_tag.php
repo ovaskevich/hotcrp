@@ -1,7 +1,6 @@
 <?php
 // search/st_tag.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class TagSearchMatcher {
     public $tags = [];
@@ -43,15 +42,19 @@ class TagSearchMatcher {
     function evaluate(Contact $user, $taglist) {
         if (!$this->_re) {
             $res = [];
-            foreach ($this->tags as $tm)
-                if (($starpos = strpos($tm, "*")) !== false)
+            foreach ($this->tags as $tm) {
+                $starpos = strpos($tm, "*");
+                if ($starpos === 0)
                     $res[] = '(?!.*~)' . str_replace('\\*', '.*', preg_quote($tm));
+                else if ($starpos !== false)
+                    $res[] = str_replace('\\*', '.*', preg_quote($tm));
                 else if ($tm === "any" && $user->privChair)
                     $res[] = "(?:{$user->contactId}~.*|~~.*|(?!.*~).*)";
                 else if ($tm === "any")
                     $res[] = "(?:{$user->contactId}~.*|(?!.*~).*)";
                 else
                     $res[] = preg_quote($tm);
+            }
             $this->_re = '{\A(?:' . join("|", $res) . ')\z}i';
         }
         foreach (TagInfo::split_unpack($taglist) as $ti) {
@@ -62,10 +65,20 @@ class TagSearchMatcher {
         }
         return false;
     }
+    function single_tag() {
+        if (count($this->tags) == 1
+            && $this->tags[0] !== "any"
+            && strpos($this->tags[0], "*") === false)
+            return $this->tags[0];
+        else
+            return false;
+    }
 }
 
 class Tag_SearchTerm extends SearchTerm {
     private $tsm;
+    private $tag1;
+    private $tag1nz;
 
     function __construct(TagSearchMatcher $tsm) {
         parent::__construct("tag");
@@ -149,6 +162,10 @@ class Tag_SearchTerm extends SearchTerm {
         $term = $value->make_term()->negate_if($negated);
         if (!$negated && $sword->kwdef->sorting && !empty($value->tags))
             $term->set_float("sort", [($revsort ? "-#" : "#") . $value->tags[0]]);
+        if (!$negated && $sword->kwdef->is_hash && ($tag = $value->single_tag())) {
+            $term->tag1 = $tag;
+            $term->tag1nz = false;
+        }
         return $term;
     }
     function sqlexpr(SearchQueryInfo $sqi) {
@@ -158,7 +175,29 @@ class Tag_SearchTerm extends SearchTerm {
         return 'exists (select * from PaperTag where paperId=Paper.paperId' . ($tm_sql ? : "") . ')';
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
-        return $this->tsm->evaluate($srch->user, $row->searchable_tags($srch->user));
+        $ok = $this->tsm->evaluate($srch->user, $row->searchable_tags($srch->user));
+        if ($ok && $this->tag1 && !$this->tag1nz)
+            $this->tag1nz = $row->tag_value($this->tag1) != 0;
+        return $ok;
+    }
+    function compile_edit_condition(PaperInfo $row, PaperSearch $srch) {
+        if (!$this->tag1
+            || $srch->conf->tags()->is_autosearch($this->tag1))
+            return null;
+        else
+            return $this->tsm->evaluate($srch->user, $row->searchable_tags($srch->user));
+    }
+    function default_sorter($top, $thenmap, PaperSearch $srch) {
+        if ($top && $this->tag1) {
+            $dt = $srch->conf->tags()->check(TagInfo::base($this->tag1));
+            if (($dt && $dt->order_anno) || $this->tag1nz) {
+                $s = new ListSorter("#{$this->tag1}");
+                $s->reverse = $dt && $dt->votish;
+                $s->thenmap = $thenmap;
+                return $s;
+            }
+        }
+        return false;
     }
 }
 

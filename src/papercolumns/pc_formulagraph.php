@@ -1,23 +1,22 @@
 <?php
 // pc_formulagraph.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
     public $formula;
     private $indexes_function;
     private $formula_function;
     private $results;
-    function __construct($cj) {
-        parent::__construct($cj);
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
         $this->formula = $cj->formula;
     }
     function prepare(PaperList $pl, $visible) {
-        if (!$pl->scoresOk
-            || !$this->formula->check($pl->user)
+        if (!$this->formula->check($pl->user)
             || !($this->formula->result_format() instanceof ReviewField)
-            || !$pl->user->can_view_formula($this->formula, $pl->search->limitName == "a"))
+            || !$pl->user->can_view_formula($this->formula, $pl->search->limit_author()))
             return false;
+        $this->format_field = $this->formula->result_format();
         $this->formula_function = $this->formula->compile_sortable_function();
         $this->indexes_function = null;
         if ($this->formula->is_indexed())
@@ -45,9 +44,6 @@ class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
             return "<span class=\"need-tooltip\" data-tooltip=\"" . htmlspecialchars($this->formula->headingTitle) . "\">" . htmlspecialchars($x) . "</span>";
         else
             return htmlspecialchars($x);
-    }
-    function content(PaperList $pl, PaperInfo $row) {
-        return parent::field_content($pl, $this->formula->result_format(), $row);
     }
 }
 

@@ -1,8 +1,7 @@
 <?php
 // buzzer.php -- HotCRP buzzer page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 // First buzzer version by Nickolai B. Zeldovich
-// Distributed under an MIT-like license; see LICENSE
 
 require_once("src/initweb.php");
 $show_papers = true;
@@ -37,10 +36,10 @@ if ($Me->privChair) {
         $Conf->save_setting("__tracker_kiosk", 1, $kiosks);
 }
 
-if ($Me->privChair && isset($_POST["signout_to_kiosk"]) && check_post()) {
+if ($Me->privChair && $Qreq->signout_to_kiosk && $Qreq->post_ok()) {
     LoginHelper::logout(false);
-    $Me->set_capability("tracker_kiosk", $kiosk_keys[get($_POST, "buzzer_showpapers") ? 1 : 0]);
-    redirectSelf();
+    $Me->set_capability("tracker_kiosk", $kiosk_keys[$Qreq->buzzer_showpapers ? 1 : 0]);
+    SelfHref::redirect($Qreq);
 }
 
 function kiosk_lookup($key) {
@@ -52,7 +51,8 @@ function kiosk_lookup($key) {
 }
 
 $kiosk = null;
-if (!$Me->has_email() && !$Me->capability("tracker_kiosk")
+if (!$Me->has_email()
+    && !$Me->capability("tracker_kiosk")
     && ($key = Navigation::path_component(0))
     && ($kiosk = kiosk_lookup($key)))
     $Me->set_capability("tracker_kiosk", $key);
@@ -69,7 +69,7 @@ if (!$Me->isPC && !$Me->tracker_kiosk_state)
     $Me->escape();
 
 
-$Conf->header("Discussion status", "buzzer", false);
+$Conf->header("Discussion status", "buzzer", ["action_bar" => false, "class" => "hide-tracker"]);
 
 echo '<div id="trackertable" class="demargin" style="margin-top:1em"></div>';
 echo "<audio id=\"buzzersound\"><source src=\"", Ht::$img_base, "buzzer.mp3\"></audio>";

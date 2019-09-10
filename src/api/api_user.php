@@ -1,11 +1,22 @@
 <?php
 // api_user.php -- HotCRP user-related API calls
-// HotCRP is Copyright (c) 2008-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
 
 class User_API {
     static function whoami(Contact $user, Qrequest $qreq) {
         return ["ok" => true, "email" => $user->email];
+    }
+
+    static function user(Contact $user, Qrequest $qreq) {
+        if (!($email = trim($qreq->email)))
+            return new JsonResult(400, "Parameter error.");
+        $ask = $user->conf->cached_user_by_email($email);
+        if (!$ask)
+            $ask = $user->conf->contactdb_user_by_email($email);
+        if ($ask)
+            return new JsonResult(200, ["ok" => true, "email" => $ask->email, "firstName" => $ask->firstName, "lastName" => $ask->lastName, "affiliation" => $ask->affiliation]);
+        else
+            return new JsonResult(404, ["ok" => false, "user_error" => true]);
     }
 
     static function clickthrough(Contact $user, Qrequest $qreq) {

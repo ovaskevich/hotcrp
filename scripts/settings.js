@@ -1,6 +1,5 @@
 // settings.js -- HotCRP JavaScript library for settings
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 function next_lexicographic_permutation(i, size) {
     var y = (i & -i) || 1, c = i + y, highbit = 1 << size;
@@ -14,51 +13,94 @@ function next_lexicographic_permutation(i, size) {
 }
 
 
-function settings_option_type() {
-    var v = this.value;
-    foldup.call(this, null, {n: 2, f: !/:final/.test(v)});
-    foldup.call(this, null, {n: 3, f: v != "pdf:final"});
-    foldup.call(this, null, {n: 4, f: v != "selector" && v != "radio"});
-    return true;
-}
+handle_ui.on("js-settings-option-type", function (event) {
+    var issel = /^(?:selector|radio)/.test(this.value);
+    foldup.call(this, null, {n: 4, f: !issel});
+    // ensure display and visibility are shown
+    var which = this.id.replace(/^.*_/, "_");
+    if ($("#optd" + which).val())
+        foldup.call(this, null, {n: 3, f: false});
+    if ($("#optp" + which).val() !== "rev")
+        foldup.call(this, null, {n: 6, f: false});
+    if ($("#optdt" + which).val() !== "prominent")
+        foldup.call(this, null, {n: 7, f: false});
+    /* if (document.activeElement === this && issel)
+        $("#optv" + which).focus(); */
+});
 
-function settings_option_move() {
+handle_ui.on("js-settings-option-description", function () {
+    foldup.call(this, null, {n: 3, f: false});
+    if (document.activeElement === this)
+        $(this).closest(".settings-opt").find(".settings-opt-description").focus();
+});
+
+handle_ui.on("js-settings-option-presence", function (event) {
+    foldup.call(this, null, {n: 5, f: false});
+    if (document.activeElement === this)
+        $(this).closest(".settings-opt").find(".settings-opt-presence").focus();
+});
+
+handle_ui.on("js-settings-option-condition", function (event) {
+    foldup.call(this, null, {n: 8, f: !/^search/.test(this.value)});
+});
+
+handle_ui.on("js-settings-option-visibility", function (event) {
+    foldup.call(this, null, {n: 6, f: false});
+    if (document.activeElement === this)
+        $(this).closest(".settings-opt").find(".settings-opt-visibility").focus();
+});
+
+handle_ui.on("js-settings-option-display", function (event) {
+    foldup.call(this, null, {n: 7, f: false});
+    if (document.activeElement === this)
+        $(this).closest(".settings-opt").find(".settings-opt-display").focus();
+});
+
+handle_ui.on("js-settings-option-move", function (event) {
     var odiv = $(this).closest(".settings-opt")[0];
-    if ($(this).hasClass("settings-opt-moveup") && odiv.previousSibling)
+    if (hasClass(this, "moveup") && odiv.previousSibling)
         odiv.parentNode.insertBefore(odiv, odiv.previousSibling);
-    else if ($(this).hasClass("settings-opt-movedown") && odiv.nextSibling)
+    else if (hasClass(this, "movedown") && odiv.nextSibling)
         odiv.parentNode.insertBefore(odiv, odiv.nextSibling.nextSibling);
-    else if ($(this).hasClass("settings-opt-delete")) {
-        if ($(odiv).find(".settings-opt-id").val() === "new")
-            $(odiv).remove();
+    else if (hasClass(this, "delete")) {
+        var $odiv = $(odiv), x;
+        if ($odiv.find(".settings-opt-id").val() === "new")
+            $odiv.remove();
         else {
-            $(odiv).find(".settings-opt-fp").val("deleted").change();
-            $(odiv).find(".f-i, .f-ix").each(function () {
+            tooltip.erase.call(this);
+            $odiv.find(".settings-opt-fp").val("deleted").change();
+            $odiv.find(".f-i, .entryi").each(function () {
                 if (!$(this).find(".settings-opt-fp").length)
                     $(this).remove();
             });
-            $(odiv).find("input[type=text]").prop("disabled", true).css("text-decoration", "line-through");
-            $(odiv).append('<div class="f-i"><em>(Option deleted)</em></div></div>');
+            $odiv.find("input[type=text]").prop("disabled", true).css("text-decoration", "line-through");
+            if ((x = this.getAttribute("data-option-exists")))
+                $odiv.append('<div class="f-i"><em>This field will be deleted from the submission form and from ' + plural(x, 'submission') + '.</em></div>');
+            else
+                $odiv.append('<div class="f-i"><em>This field will be deleted from the submission form.</em></div>');
         }
-    } else if ($(this).hasClass("settings-opt-new")) {
-        var h = $("#settings_newopt").html();
-        var next = 1;
-        while ($("#optn_" + next).length)
-            ++next;
-        h = h.replace(/_0/g, "_" + next);
-        odiv = $(h).appendTo("#settings_opts");
-        odiv.find("input[placeholder]").each(mktemptext);
-        odiv.find("textarea").autogrow();
-        $("#optn_" + next)[0].focus();
     }
     settings_option_move_enable();
-    return false;
-}
+});
+
+handle_ui.on("js-settings-option-new", function (event) {
+    var h = $("#settings_newopt").attr("data-template");
+    var next = 1;
+    while ($("#optn_" + next).length)
+        ++next;
+    h = h.replace(/_0/g, "_" + next);
+    var odiv = $(h).appendTo("#settings_opts");
+    mktemptext(odiv);
+    odiv.find(".need-autogrow").autogrow();
+    odiv.find(".need-tooltip").each(tooltip);
+    $("#optn_" + next)[0].focus();
+    settings_option_move_enable();
+});
 
 function settings_option_move_enable() {
-    $(".settings-opt-moveup, .settings-opt-movedown").prop("disabled", false);
-    $(".settings-opt:first-child .settings-opt-moveup").prop("disabled", true);
-    $(".settings-opt:last-child .settings-opt-movedown").prop("disabled", true);
+    $(".settings-opt .moveup, .settings-opt .movedown").prop("disabled", false);
+    $(".settings-opt:first-child .moveup").prop("disabled", true);
+    $(".settings-opt:last-child .movedown").prop("disabled", true);
     var index = 0;
     $(".settings-opt-fp").each(function () {
         if (this.value !== "deleted" && this.name !== "optfp_0") {
@@ -70,88 +112,115 @@ function settings_option_move_enable() {
 }
 
 
-function settings_tag_autosearch() {
+handle_ui.on("js-settings-add-decision-type", function (event) {
+    var $t = $("#settings-decision-types"), next = 1;
+    while ($t.find("input[name=dec_name_" + next + "]").length)
+        ++next;
+    $("#settings-decision-type-notes").removeClass("hidden");
+    var h = $("#settings-new-decision-type").html().replace(/_0/g, "_" + next),
+        $r = $(h).appendTo($t);
+    mktemptext($r);
+    $r.find("input[type=text]").autogrow();
+    $r.find("input[name=dec_name_" + next + "]")[0].focus();
+});
+
+handle_ui.on("js-settings-remove-decision-type", function (event) {
+    var $r = $(this).closest("tr");
+    $r.addClass("hidden").find("input[name^=dec_name]").val("");
+    $r.find("select[name^=dec_class]").val("1");
+    form_highlight($r.closest("form"));
+});
+
+handle_ui.on("js-settings-new-autosearch", function (event) {
+    var odiv = $(this).closest(".settings_tag_autosearch")[0],
+        h = $("#settings_newtag_autosearch").html(), next = 1;
+    while ($("#tag_autosearch_t_" + next).length)
+        ++next;
+    h = h.replace(/_0/g, "_" + next);
+    odiv = $(h).appendTo("#settings_tag_autosearch");
+    mktemptext(odiv);
+    odiv.find("input[type=text]").autogrow();
+    $("#tag_autosearch_t_" + next)[0].focus();
+});
+
+handle_ui.on("js-settings-delete-autosearch", function (event) {
     var odiv = $(this).closest(".settings_tag_autosearch")[0];
-    if ($(this).hasClass("settings_tag_autosearch_delete")) {
-        $(odiv).find("input[name^=tag_autosearch_q_]").val("");
-        $(odiv).find("input[type=text]").prop("disabled", true).css("text-decoration", "line-through");
-    } else if ($(this).hasClass("settings_tag_autosearch_new")) {
-        var h = $("#settings_newtag_autosearch").html();
-        var next = 1;
-        while ($("#tag_autosearch_t_" + next).length)
-            ++next;
-        h = h.replace(/_0/g, "_" + next);
-        odiv = $(h).appendTo("#settings_tag_autosearch");
-        odiv.find("input[placeholder]").each(mktemptext);
-        odiv.find("input[type=text]").autogrow();
-        $("#tag_autosearch_t_" + next)[0].focus();
-    }
-    return false;
-}
+    $(odiv).find("input[name^=tag_autosearch_q_]").val("");
+    $(odiv).find("input[type=text]").prop("disabled", true).css("text-decoration", "line-through");
+});
 
-
-function settings_add_track() {
+handle_ui.on("js-settings-add-track", function () {
     for (var i = 1; jQuery("#trackgroup" + i).length; ++i)
         /* do nothing */;
-    $("#trackgroup" + (i - 1)).after("<div id=\"trackgroup" + i + "\" class=\"mg\"></div>");
+    $("#trackgroup" + (i - 1)).after("<div id=\"trackgroup" + i + "\" class=\"mg has-fold fold3o\"></div>");
     var $j = jQuery("#trackgroup" + i);
     $j.html(jQuery("#trackgroup0").html().replace(/_track0/g, "_track" + i));
-    $j.find("input[placeholder]").each(mktemptext);
+    mktemptext($j);
     $j.find("input[name^=name]").focus();
-}
+    suggest($j.find(".settings-track-name"), taghelp_tset);
+    suggest($j.find(".settings-track-perm-tag"), pc_tag_completion);
+});
+
+handle_ui.on("js-settings-copy-topics", function () {
+    var topics = [];
+    $(this).closest(".has-copy-topics").find("[name^=top]").each(function () {
+        topics.push(escape_entities(this.value));
+    });
+    var node = $("<textarea></textarea>").appendTo(document.body);
+    node.val(topics.join("\n"));
+    node[0].select();
+    document.execCommand("copy");
+    node.remove();
+});
 
 
-window.review_round_settings = (function () {
+window.review_round_settings = (function ($) {
 var added = 0;
 
 function namechange() {
-    var roundnum = this.id.substr(10), name = jQuery.trim(jQuery(this).val());
-    jQuery("#rev_roundtag_" + roundnum + ", #extrev_roundtag_" + roundnum)
+    var roundnum = this.id.substr(10), name = $.trim($(this).val());
+    $("#rev_roundtag_" + roundnum + ", #extrev_roundtag_" + roundnum)
         .text(name === "" ? "(no name)" : name);
-}
-
-function init() {
-    jQuery("#roundtable input[type=text]").on("input change", namechange);
 }
 
 function add() {
     var i, h, j;
-    for (i = 1; jQuery("#roundname_" + i).length; ++i)
+    for (i = 1; $("#roundname_" + i).length; ++i)
         /* do nothing */;
-    jQuery("#round_container").show();
-    jQuery("#roundtable").append(jQuery("#newround").html().replace(/\$/g, i));
-    if (++added == 1 && i == 1)
-        jQuery("div[data-round-number=" + i + "] > :first-child").append('<div class="hint">Example name: “R1”</div>');
-    jQuery("#rev_roundtag").append('<option value="#' + i + '" id="rev_roundtag_' + i + '">(new round)</option>');
-    jQuery("#extrev_roundtag").append('<option value="#' + i + '" id="extrev_roundtag_' + i + '">(new round)</option>');
-    jQuery("div[data-round-number=" + i + "] input[placeholder]").each(mktemptext);
-    jQuery("#roundname_" + i).focus().on("input change", namechange);
+    $("#round_container").show();
+    $("#roundtable").append($("#newround").html().replace(/\$/g, i));
+    var $mydiv = $("#roundname_" + i).closest(".js-settings-review-round");
+    $("#rev_roundtag").append('<option value="#' + i + '" id="rev_roundtag_' + i + '">(new round)</option>');
+    $("#extrev_roundtag").append('<option value="#' + i + '" id="extrev_roundtag_' + i + '">(new round)</option>');
+    mktemptext($mydiv);
+    $("#roundname_" + i).focus().on("input change", namechange);
 }
 
 function kill() {
-    var divj = jQuery(this).closest("div[data-round-number]"),
-        roundnum = divj.attr("data-round-number"),
+    var divj = $(this).closest(".js-settings-review-round"),
+        roundnum = divj.data("reviewRoundNumber"),
         vj = divj.find("input[name=deleteround_" + roundnum + "]"),
         ej = divj.find("input[name=roundname_" + roundnum + "]");
     if (vj.val()) {
         vj.val("");
-        ej.val(ej.attr("data-round-name"));
-        ej.removeClass("dim").prop("disabled", false);
-        jQuery(this).html("Delete round");
+        divj.find(".js-settings-review-round-deleted").remove();
+        ej.prop("disabled", false);
+        $(this).html("Delete round");
     } else {
         vj.val(1);
-        var x = ej.val();
-        ej.attr("data-round-name", x);
-        ej.val(x == "(no name)" ? "(deleted)" : "(" + (ej.val() || "unnamed round") + " deleted)")
-            .addClass("dim").prop("disabled", true);
-        jQuery(this).html("Restore round");
+        ej.prop("disabled", true);
+        $(this).html("Restore round").after('<strong class="js-settings-review-round-deleted" style="padding-left:1.5em;font-style:italic;color:red">&nbsp; Review round deleted</strong>');
     }
     divj.find("table").toggle(!vj.val());
     form_highlight("#settingsform");
 }
 
-return {init: init, add: add, kill: kill};
-})();
+return function () {
+    $("#roundtable input[type=text]").on("input change", namechange);
+    $("#settings_review_round_add").on("click", add);
+    $("#roundtable").on("click", ".js-settings-review-round-delete", kill);
+};
+})($);
 
 
 window.review_form_settings = (function () {
@@ -234,34 +303,6 @@ function option_class_prefix(fieldj) {
     return sv;
 }
 
-function check_change(fid) {
-    var fieldj = original[fid] || {}, j, sv;
-    function ch(why) {
-        hiliter("reviewform_container");
-        return true;
-    }
-    if ($.trim($("#shortName_" + fid).val()) != fieldj.name)
-        return ch("shortName");
-    if ($("#order_" + fid).val() != (fieldj.position || 0))
-        return ch("order");
-    if (!text_eq($("#description_" + fid).val(), fieldj.description))
-        return ch("description");
-    if ($("#authorView_" + fid).val() != (fieldj.visibility || "pc"))
-        return ch("authorView");
-    if (!text_eq($.trim($("#options_" + fid).val()), $.trim(options_to_text(fieldj))))
-        return ch("options");
-    if ((j = $("#option_class_prefix_" + fid)) && j.length
-        && j.val() != option_class_prefix(fieldj))
-        return ch("option_class_prefix");
-    if (($("#round_list_" + fid).val() || "") != (fieldj.round_list || []).join(" "))
-        return ch("round_list");
-    return false;
-}
-
-function check_this_change() {
-    check_change(get_fid(this));
-}
-
 function fill_order() {
     var i, c = $("#reviewform_container")[0], n;
     for (i = 1, n = c.firstChild; n; ++i, n = n.nextSibling)
@@ -269,6 +310,7 @@ function fill_order() {
     c = $("#reviewform_removedcontainer")[0];
     for (n = c.firstChild; n; n = n.nextSibling)
         $(n).find(".revfield_order").val(0);
+    form_highlight("#settingsform");
 }
 
 function fill_field1(sel, value, order) {
@@ -289,7 +331,6 @@ function fill_field(fid, fieldj, order) {
     $("#revfield_" + fid + " textarea").trigger("change");
     $("#revfieldview_" + fid).html("").append(create_field_view(fid, fieldj));
     $("#remove_" + fid).html(fieldj.has_any_nonempty ? "Delete from form and current reviews" : "Delete from form");
-    check_change(fid);
     return false;
 }
 
@@ -298,23 +339,22 @@ function remove() {
         fid = $f.attr("data-revfield");
     $f.find(".revfield_order").val(0);
     $f.detach().hide().appendTo("#reviewform_removedcontainer");
-    check_change(fid);
     $("#reviewform_removedcontainer").append('<div id="revfieldremoved_' + fid + '" class="settings-revfieldremoved"><span class="settings-revfn" style="text-decoration:line-through">' + escape_entities($f.find("#shortName_" + fid).val()) + '</span>&nbsp; (field removed)</div>');
     fill_order();
 }
 
-var revfield_template = '<table id="revfield_$" class="settings-revfield f-contain fold2c errloc_$" data-revfield="$" data-fold="true"><tbody>\
-<tr><td class="nw"><a href="#" class="q revfield-folder">\
+var revfield_template = '<div id="revfield_$" class="settings-revfield f-contain has-fold fold2c errloc_$" data-revfield="$">\
+<a href="" class="q settings-field-folder">\
 <span class="expander"><span class="in0 fx2">▼</span><span class="in1 fn2 need-tooltip" data-tooltip="Edit field" data-tooltip-dir="r">▶</span></span>\
-</a></td><td>\
-<div id="revfieldview_$" class="settings-revfieldview fn2 js-foldup"></div>\
+</a>\
+<div id="revfieldview_$" class="settings-revfieldview fn2 ui js-foldup"></div>\
 <div id="revfieldedit_$" class="settings-revfieldedit fx2">\
-  <div class="f-i errloc_shortName_$">\
+  <div class="f-i">\
     <input name="shortName_$" id="shortName_$" type="text" size="50" style="font-weight:bold" placeholder="Field name" />\
   </div>\
-  <div class="f-i">\
-    <div class="f-ix">\
-      <div class="f-c">Visibility</div>\
+  <div class="f-horizontal">\
+    <div class="f-i">\
+      <label for="authorView_$">Visibility</label>\
       <select name="authorView_$" id="authorView_$" class="reviewfield_authorView">\
         <option value="au">Shown to authors</option>\
         <option value="pc">Hidden from authors</option>\
@@ -322,33 +362,29 @@ var revfield_template = '<table id="revfield_$" class="settings-revfield f-conta
         <option value="admin">Shown only to administrators</option>\
       </select>\
     </div>\
-    <div class="f-ix reviewrow_options">\
-      <div class="f-c">Colors</div>\
+    <div class="f-i reviewrow_options">\
+      <label for="option_class_prefix_$">Colors</label>\
       <select name="option_class_prefix_$" id="option_class_prefix_$" class="reviewfield_option_class_prefix"></select>\
 <input type="hidden" name="option_class_prefix_flipped_$" id="option_class_prefix_flipped_$" value="" />\
     </div>\
-    <div class="f-ix reviewrow_rounds">\
-      <div class="f-c">Rounds</div>\
+    <div class="f-i reviewrow_rounds">\
+      <label for="round_list_$">Rounds</label>\
       <select name="round_list_$" id="round_list_$" class="reviewfield_round_list"></select>\
     </div>\
-    <hr class="c" />\
-  </div>\
-  <div class="f-i errloc_description_$">\
-    <div class="f-c">Description</div>\
-    <textarea name="description_$" id="description_$" class="reviewtext need-tooltip" rows="6" data-tooltip-info="settings-review-form" data-tooltip-type="focus"></textarea>\
-  </div>\
-  <div class="f-i errloc_options_$ reviewrow_options">\
-    <div class="f-c">Options</div>\
-    <textarea name="options_$" id="options_$" class="reviewtext need-tooltip" rows="6" data-tooltip-info="settings-review-form" data-tooltip-type="focus"></textarea>\
   </div>\
   <div class="f-i">\
-    <button id="moveup_$" class="btn revfield_moveup" type="button">Move up</button><span class="sep"></span>\
-<button id="movedown_$" class="btn revfield_movedown" type="button">Move down</button><span class="sep"></span>\
-<button id="remove_$" class="btn revfield_remove" type="button">Delete from form</button><span class="sep"></span>\
+    <label for="description_$">Description</label>\
+    <textarea name="description_$" id="description_$" class="reviewtext need-tooltip" rows="2" data-tooltip-info="settings-review-form" data-tooltip-type="focus"></textarea></div>\
+  <div class="f-i reviewrow_options">\
+    <label for="options_$">Options</label>\
+    <textarea name="options_$" id="options_$" class="reviewtext need-tooltip" rows="6" data-tooltip-info="settings-review-form" data-tooltip-type="focus"></textarea></div>\
+  <div class="f-i">\
+    <button id="moveup_$" class="btn btn-sm revfield_moveup" type="button">Move up</button><span class="sep"></span>\
+<button id="movedown_$" class="btn btn-sm revfield_movedown" type="button">Move down</button><span class="sep"></span>\
+<button id="remove_$" class="btn btn-sm revfield_remove" type="button">Delete from form</button><span class="sep"></span>\
 <input type="hidden" name="order_$" id="order_$" class="revfield_order" value="0" />\
   </div>\
-</div><hr class="c" />\
-</td></tr></tbody></table>';
+</div></div>';
 
 var revfieldview_template = '<div style="line-height:1.35">\
 <span class="settings-revfn"></span>\
@@ -361,6 +397,15 @@ tooltip.add_builder("settings-review-form", function (info) {
     return $.extend({
         dir: "h", content: $(/^description/.test(this.name) ? "#review_form_caption_description" : "#review_form_caption_options").html()
     }, info);
+});
+
+tooltip.add_builder("settings-option", function (info) {
+    var x = "#option_caption_options";
+    if (/^optn/.test(this.name))
+        x = "#option_caption_name";
+    else if (/^optecs/.test(this.name))
+        x = "#option_caption_condition_search";
+    return $.extend({dir: "h", content: $(x).html()}, info);
 });
 
 function option_value_html(fieldj, value) {
@@ -442,7 +487,6 @@ function move_field(event) {
         /* nada */;
     $c.insertBefore($f[0], $n);
     fill_order();
-    check_change(fid);
 }
 
 function append_field(fid, pos) {
@@ -488,7 +532,6 @@ function append_field(fid, pos) {
 
     $f.find(".revfield_remove").on("click", remove);
     $f.find(".revfield_moveup, .revfield_movedown").on("click", move_field);
-    $f.find("input, textarea, select").on("change input", check_this_change);
     $f.appendTo("#reviewform_container");
 
     fill_field(fid, original[fid], true);
@@ -513,12 +556,12 @@ function rfs(data) {
     // construct form
     for (i = 0; i != fieldorder.length; ++i)
         append_field(fieldorder[i], i + 1);
-    $("#reviewform_container").on("click", "a.revfield-folder", view_unfold);
+    $("#reviewform_container").on("click", "a.settings-field-folder", view_unfold);
     $("#reviewform_container").on("fold", ".settings-revfield", function (evt, opts) {
         if (!opts.f) {
             $(this).find("textarea").css("height", "auto").autogrow();
             $(this).find("input[type=text]").autogrow();
-            $(this).find("input[placeholder]").each(mktemptext);
+            mktemptext($(this));
         }
     });
 
@@ -529,15 +572,17 @@ function rfs(data) {
         $j = $("#" + i);
         if (!text_eq($j.val(), data.req[i])) {
             $j.val(data.req[i]);
-            hiliter("reviewform_container");
             foldup.call($j[0], null, {n: 2, f: false});
         }
     }
     for (i in data.errf || {}) {
-        $j = $(".errloc_" + i);
-        $j.addClass("error");
+        $j = $("#" + i).closest(".f-i");
+        if (!$j.length)
+            $j = $(".errloc_" + i);
+        $j.addClass("has-error");
         foldup.call($j[0], null, {n: 2, f: false});
     }
+    form_highlight("#settingsform");
 };
 
 function add_field(fid) {
@@ -546,7 +591,8 @@ function add_field(fid) {
     original[fid].position = fieldorder.length;
     append_field(fid, fieldorder.length);
     foldup.call($("#revfield_" + fid)[0], null, {n: 2, f: false});
-    hiliter("reviewform_container");
+    $("#order_" + fid).attr("data-default-value", "0");
+    form_highlight("#settingsform");
     return true;
 }
 
@@ -617,13 +663,13 @@ function add_dialog(fid, focus) {
         hc.push('<h2>' + (has_options ? "Add score field" : "Add text field") + '</h2>');
         hc.push('<p>Choose a template for the new field.</p>');
         hc.push('<table style="width:500px;max-width:90%;margin-bottom:2em"><tbody><tr>', '</tr></tbody></table>');
-        hc.push('<td style="text-align:left"><button name="prev" type="button" tabindex="1002" class="btn need-tooltip" data-tooltip="Previous template">&lt;</button></td>');
+        hc.push('<td style="text-align:left"><button name="prev" type="button" class="btn need-tooltip" data-tooltip="Previous template">&lt;</button></td>');
         hc.push('<td class="newreviewfield-template-name" style="text-align:center"></td>');
-        hc.push('<td style="text-align:right"><button name="next" type="button" tabindex="1002" class="btn need-tooltip" data-tooltip="Next template">&gt;</button></td>');
+        hc.push('<td style="text-align:right"><button name="next" type="button" class="btn need-tooltip" data-tooltip="Next template">&gt;</button></td>');
         hc.pop();
         hc.push('<div class="newreviewfield-template" style="width:500px;max-width:90%;min-height:6em"></div>');
-        hc.push_actions(['<button type="submit" name="add" tabindex="1000" class="btn btn-default want-focus">Create field</button>',
-            '<button type="button" name="cancel" tabindex="1001" class="btn">Cancel</button>']);
+        hc.push_actions(['<button type="submit" name="add" class="btn btn-primary want-focus">Create field</button>',
+            '<button type="button" name="cancel" class="btn">Cancel</button>']);
         $d = hc.show();
         render_template();
         $d.find(".newreviewfield-template-name").on("click", change_template);
@@ -669,23 +715,28 @@ return rfs;
 })();
 
 
-function settings_add_resp_round() {
+handle_ui.on("js-settings-resp-round-new", function () {
     var i, j;
     for (i = 1; jQuery("#response_" + i).length; ++i)
         /* do nothing */;
-    jQuery("#response_n").before("<div id=\"response_" + i + "\" style=\"padding-top:1em\"></div>");
+    jQuery("#response_n").before("<div id=\"response_" + i + "\" class=\"settings-g\"></div>");
     j = jQuery("#response_" + i);
     j.html(jQuery("#response_n").html().replace(/_n\"/g, "_" + i + "\""));
-    j.find("input[placeholder]").each(mktemptext);
+    mktemptext(j);
     j.find("textarea").css({height: "auto"}).autogrow().val(jQuery("#response_n textarea").val());
+    suggest(j.find(".papersearch"), taghelp_q);
     return false;
-}
+});
 
 
-function settings_radio_table(name) {
-    var $j = $("#" + name + "_table");
-    fold($j.find("tr"), true);
-    var value = $j.find("input[name=" + name + "]:checked").val();
-    if (value != null)
-        fold($("#" + name + "_row_" + value), false);
+(function ($) {
+function handle() {
+    var $self = $(this);
+    fold($self.find(".settings-radioitem"), true);
+    fold($self.find(".js-settings-radio:checked").closest(".settings-radioitem"), false);
 }
+$(document).on("change", ".js-settings-radio", function (event) {
+    handle.call($(event.target).closest(".settings-radio")[0]);
+});
+$(function () { $(".settings-radio").each(handle); });
+})($);

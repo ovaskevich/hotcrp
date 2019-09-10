@@ -1,68 +1,215 @@
 [
     {
         "name": "basics", "synonym": ["info"], "position": 0,
-        "title": "Basics",
-        "renderer": "Basics_SettingRenderer::render"
+        "title": "Basics"
     },
     {
-        "name": "decisions", "synonym": ["dec"], "position": 800,
-        "title": "Decisions",
-        "crosschecker": "Decisions_SettingRenderer::crosscheck",
-        "renderer": "Decisions_SettingRenderer::render"
+        "name": "basics/names", "position": 10,
+        "render_callback": "Basics_SettingParser::render_names",
+        "title": "Conference information"
     },
+    {
+        "name": "basics/site-contact", "position": 20,
+        "render_callback": "Basics_SettingParser::render_site_contact",
+        "title": "Site contact"
+    },
+    {
+        "name": "basics/email", "position": 30,
+        "render_callback": "Basics_SettingParser::render_email",
+        "title": "Email configuration"
+    },
+
+    {
+        "name": "decisions", "synonym": ["dec"], "position": 800,
+        "title": "Decisions"
+    },
+    {
+        "name": "decisions/responses", "synonym": ["responses"], "position": 10,
+        "title": "Responses",
+        "render_callback": "Responses_SettingParser::render"
+    },
+    {
+        "name": "responses/properties/name", "position": 10,
+        "render_response_property_callback": "Responses_SettingParser::render_name_property"
+    },
+    {
+        "name": "responses/properties/deadline", "position": 20,
+        "render_response_property_callback": "Responses_SettingParser::render_deadline_property"
+    },
+    {
+        "name": "responses/properties/word-limit", "position": 30,
+        "render_response_property_callback": "Responses_SettingParser::render_wordlimit_property"
+    },
+    {
+        "name": "responses/properties/instructions", "position": 40,
+        "render_response_property_callback": "Responses_SettingParser::render_instructions_property"
+    },
+    {
+        "name": "decisions/review-visibility", "position": 20,
+        "title": "Review visibility",
+        "render_callback": "ReviewVisibility_SettingParser::render",
+        "crosscheck_callback": "ReviewVisibility_SettingParser::crosscheck"
+    },
+    {
+        "name": "decisions/decision-visibility", "position": 25,
+        "title": "Decision visibility",
+        "render_callback": "DecisionVisibility_SettingParser::render",
+        "crosscheck_callback": "DecisionVisibility_SettingParser::crosscheck"
+    },
+    {
+        "name": "decisions/decision-types", "position": 30,
+        "title": "Decision types",
+        "render_callback": "Decisions_SettingParser::render"
+    },
+    {
+        "name": "decisions/final-versions", "position": 100,
+        "title": "Final versions",
+        "render_callback": "FinalVersions_SettingParser::render",
+        "crosscheck_callback": "FinalVersions_SettingParser::crosscheck"
+    },
+
     {
         "name": "msg", "position": 200,
         "title": "Messages",
-        "renderer": "Messages_SettingRenderer::render"
+        "render_callback": "Messages_SettingRenderer::render"
     },
     {
         "name": "reviewform", "synonym": ["rfo"], "position": 600,
         "title": "Review form",
-        "renderer": "ReviewForm_SettingRenderer::render"
+        "render_callback": "ReviewForm_SettingRenderer::render"
     },
     {
         "name": "reviews", "synonym": ["rev", "review"], "position": 500,
         "title": "Reviews",
-        "crosschecker": "Reviews_SettingRenderer::crosscheck",
-        "renderer": "Reviews_SettingRenderer::render"
+        "crosscheck_callback": "Reviews_SettingRenderer::crosscheck"
     },
     {
-        "name": "sub", "position": 300,
+        "name": "reviews/deadlines", "position": 10,
+        "render_callback": "Reviews_SettingRenderer::render"
+    },
+    {
+        "name": "reviews/pc-reviews", "position": 20,
+        "title": "PC reviews",
+        "render_callback": "Reviews_SettingRenderer::render_pc"
+    },
+    {
+        "name": "reviews/external", "position": 30,
+        "title": "External reviews",
+        "render_callback": "Reviews_SettingRenderer::render_external"
+    },
+    {
+        "name": "reviews/ratings", "position": 40,
+        "title": "Review ratings",
+        "render_callback": "Reviews_SettingRenderer::render_ratings"
+    },
+    {
+        "name": "submissions", "synonym": ["sub"], "position": 300,
         "title": "Submissions",
-        "crosschecker": "Submissions_SettingRenderer::crosscheck",
-        "renderer": "Submissions_SettingRenderer::render"
+        "crosscheck_callback": "Submissions_SettingRenderer::crosscheck"
+    },
+    {
+        "name": "submissions/open", "position": 10,
+        "render_callback": "Submissions_SettingRenderer::render_open"
+    },
+    {
+        "name": "submissions/deadlines", "position": 20,
+        "render_callback": "Submissions_SettingRenderer::render_deadlines"
+    },
+    {
+        "name": "submissions/updates", "position": 30,
+        "render_callback": "Submissions_SettingRenderer::render_updates"
+    },
+    {
+        "name": "submissions/blind", "position": 40,
+        "render_callback": "Submissions_SettingRenderer::render_blind",
+        "title": "Reviewer visibility"
+    },
+    {
+        "name": "submissions/pcseeall", "position": 50,
+        "render_callback": "Submissions_SettingRenderer::render_pcseeall"
     },
     {
         "name": "subform", "position": 400,
         "title": "Submission form",
-        "renderer": "SubForm_SettingRenderer::render"
+        "render_callback": "SubForm_SettingRenderer::render"
     },
     {
         "name": "options", "group": "subform", "synonym": ["opt"], "position": 440,
-        "crosschecker": "Options_SettingRenderer::crosscheck",
-        "renderer": "Options_SettingRenderer::render"
+        "crosscheck_callback": "Options_SettingRenderer::crosscheck",
+        "render_callback": "Options_SettingRenderer::render"
+    },
+    {
+        "name": "options/properties/type", "position": 10,
+        "render_option_property_callback": "Options_SettingRenderer::render_type_property"
+    },
+    {
+        "name": "options/properties/description", "position": 20,
+        "render_option_property_callback": "Options_SettingRenderer::render_description_property"
+    },
+    {
+        "name": "options/properties/presence", "position": 30,
+        "render_option_property_callback": "Options_SettingRenderer::render_presence_property"
+    },
+    {
+        "name": "options/properties/visibility", "position": 40,
+        "render_option_property_callback": "Options_SettingRenderer::render_visibility_property"
+    },
+    {
+        "name": "options/properties/display", "position": 50,
+        "render_option_property_callback": "Options_SettingRenderer::render_display_property"
     },
     {
         "name": "topics", "group": "subform", "position": 480,
-        "renderer": "Topics_SettingRenderer::render"
+        "render_callback": "Topics_SettingRenderer::render"
     },
     {
         "name": "tags", "position": 700,
         "title": "Tags &amp; tracks",
-        "renderer": "Tags_SettingRenderer::render"
+        "render_callback": "Tags_SettingRenderer::render"
+    },
+    {
+        "name": "tags/main/chair", "position": 10,
+        "render_callback": "Tags_SettingRenderer::render_tag_chair"
+    },
+    {
+        "name": "tags/main/sitewide", "position": 20,
+        "render_callback": "Tags_SettingRenderer::render_tag_sitewide"
+    },
+    {
+        "name": "tags/main/approval", "position": 30,
+        "render_callback": "Tags_SettingRenderer::render_tag_approval"
+    },
+    {
+        "name": "tags/main/vote", "position": 40,
+        "render_callback": "Tags_SettingRenderer::render_tag_vote"
+    },
+    {
+        "name": "tags/main/rank", "position": 50,
+        "render_callback": "Tags_SettingRenderer::render_tag_rank"
     },
     {
         "name": "tagstyles", "group": "tags", "position": 720,
-        "renderer": "Tags_SettingRenderer::render_styles"
+        "render_callback": "Tags_SettingRenderer::render_styles"
     },
     {
         "name": "tracks", "group": "tags", "position": 750,
-        "crosschecker": "Tracks_SettingRenderer::crosscheck",
-        "renderer": "Tracks_SettingRenderer::render"
+        "crosscheck_callback": "Tracks_SettingRenderer::crosscheck",
+        "render_callback": "Tracks_SettingRenderer::render",
+        "title": "Tracks", "anchorid": "tracks"
+    },
+    {
+        "name": "tracks/permissions/view", "position": 10,
+        "render_track_permission_callback": "Tracks_SettingRenderer::render_view_permission",
+        "default_unfolded": true
+    },
+    {
+        "name": "tracks/permissions/viewrev", "position": 30,
+        "render_track_permission_callback": "Tracks_SettingRenderer::render_viewrev_permission",
+        "default_unfolded": true
     },
     {
         "name": "users", "position": 100,
         "title": "Accounts",
-        "renderer": "Users_SettingRenderer::render"
+        "render_callback": "Users_SettingRenderer::render"
     }
 ]

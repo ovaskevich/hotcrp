@@ -1,18 +1,16 @@
 <?php
 // listactions/la_getallrevpref.php -- HotCRP helper classes for list actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class GetAllRevpref_ListAction extends ListAction {
     function allow(Contact $user) {
         return $user->is_manager();
     }
     function run(Contact $user, $qreq, $ssel) {
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "allReviewerPreference" => 1, "allConflictType" => 1, "topics" => 1]);
         $texts = array();
         $pcm = $user->conf->pc_members();
         $has_conflict = $has_expertise = $has_topic_score = false;
-        foreach (PaperInfo::fetch_all($result, $user) as $prow) {
+        foreach ($user->paper_set($ssel, ["allReviewerPreference" => 1, "allConflictType" => 1, "topics" => 1]) as $prow) {
             if (!$user->allow_administer($prow))
                 continue;
             $conflicts = $prow->conflicts();
@@ -33,13 +31,14 @@ class GetAllRevpref_ListAction extends ListAction {
             }
         }
 
-        $headers = array("paper", "title", "first", "last", "email", "preference");
+        $headers = ["paper", "title", "first", "last", "email", "preference"];
         if ($has_expertise)
             $headers[] = "expertise";
         if ($has_topic_score)
             $headers[] = "topic_score";
         if ($has_conflict)
             $headers[] = "conflict";
-        return new Csv_SearchResult("allprefs", $headers, $ssel->reorder($texts), true);
+        return $user->conf->make_csvg("allprefs")->select($headers)
+            ->add($ssel->reorder($texts));
     }
 }

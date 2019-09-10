@@ -1,14 +1,13 @@
 <?php
 // pc_tagreport.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class TagReport_PaperColumn extends PaperColumn {
     private $tag;
     private $viewtype;
-    function __construct($cj) {
-        parent::__construct($cj);
-        $this->override = PaperColumn::OVERRIDE_FOLD;
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
+        $this->override = PaperColumn::OVERRIDE_FOLD_IFEMPTY;
         $this->tag = $cj->tag;
     }
     function prepare(PaperList $pl, $visible) {
@@ -24,7 +23,7 @@ class TagReport_PaperColumn extends PaperColumn {
         return true;
     }
     function header(PaperList $pl, $is_text) {
-        return "#~" . $this->tag . " reports";
+        return "#~" . $this->tag . " report";
     }
     function content_empty(PaperList $pl, PaperInfo $row) {
         return !$pl->user->can_view_peruser_tags($row, $this->tag);

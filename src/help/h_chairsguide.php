@@ -1,19 +1,13 @@
 <?php
 // src/help/h_chairsguide.php -- HotCRP help functions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ChairsGuide_HelpTopic {
-    private $hth;
-    function __construct($hth) {
-        $this->hth = $hth;
-    }
-    function render_presubmission($gj) {
-        $hth = $this->hth;
+    static function render_presubmission($hth, $gj) {
         if (!isset($gj->index)) {
             echo $hth->subhead("Submission time");
             echo "<p>Follow these steps to prepare to accept paper submissions.</p>\n\n<ol>\n";
-            $hth->echo_topic("chair/presubmission/*");
+            $hth->render_group("chair/presubmission/*");
             echo "</ol>\n\n";
 
         } else if ($gj->index === 1) {
@@ -21,7 +15,7 @@ class ChairsGuide_HelpTopic {
 "</strong>. Many PCs are divided into classes, such as
   “heavy” and “light”, or “PC” and “ERC”. Mark these classes with user tags.
   It’s also useful to configure ", $hth->settings_link("tag colors", "tags"),
-  "so that PC member names are displayed
+  " so that PC member names are displayed
   differently based on class (for instance, heavy PC member names might appear
   in <b>bold</b>).</p></li>\n";
 
@@ -63,11 +57,11 @@ form also can include:</p>
   may still be submitted, since the checker itself can make mistakes, but the
   automated checker leaves cheating authors no excuse.</p></li>
 
-  <li><p><strong>Options</strong> such as checkboxes, selectors, freeform
-  text, and uploaded attachments. Checkbox options might include “Consider
+  <li><p><strong>Additional fields</strong> such as checkboxes, selectors, freeform
+  text, and uploaded attachments. Checkbox fields might include “Consider
   this paper for the Best Student Paper award” or “Provide this paper to the
-  European shadow PC.” Attachment options might include supplemental material.
-  You can search for papers with or without each option.</p></li>
+  European shadow PC.” Attachment fields might include supplemental material.
+  You can search for papers with or without each field.</p></li>
 
   <li><p><strong>Topics.</strong> Authors can select topics, such as
   “Applications” or “Network databases,” that characterize their paper’s
@@ -88,12 +82,11 @@ form also can include:</p>
         }
     }
 
-    function render_assignments($gj) {
-        $hth = $this->hth;
+    static function render_assignments($hth, $gj) {
         if (!isset($gj->index)) {
             echo $hth->subhead("Assignments");
             echo "<p>After the submission deadline has passed:</p>\n<ol>\n";
-            $hth->echo_topic("chair/assignments/*");
+            $hth->render_group("chair/assignments/*");
             echo "</ol>\n\n";
 
         } else if ($gj->index === 1) {
@@ -143,16 +136,12 @@ form also can include:</p>
   been submitted.</p></li>\n";
 
         } else if ($gj->index === 7) {
-            echo "<li><p><strong><a href='" . hoturl("manualassign", "kind=c") . "'>Assign
-  conflicts.</a></strong> HotCRP automatically installs the authors’ declared
-  conflicts. HotCRP <i>does not</i> automatically install other conflicts, such
+            echo "<li><p><strong><a href='" . hoturl("conflictassign") . "'>Check for
+  missing conflicts.</a></strong> HotCRP does not automatically confirm all conflicts, such
   as conflicts indicated by PC members’ “Collaborators and other affiliations”
   or their review preferences. Use <a href='" .
-  hoturl("manualassign", "kind=c") . "'>the manual assignment tool</a> to
-  search for potential missing conflicts, and use <a href='" .
-  hoturl("autoassign", "a=prefconflict") . "'>the automatic assigner</a>
-  to assign conflicts when PC members have entered preferences of &minus;100
-  or less.</p></li>\n";
+  hoturl("conflictassign") . "'>the conflict assignment tool</a> to search for and
+  confirm such conflicts.</p></li>\n";
 
         } else if ($gj->index === 8) {
             echo "<li><p><strong><a href='" . hoturl("manualassign") . "'>Assign
@@ -178,8 +167,7 @@ form also can include:</p>
         }
     }
 
-    function render_chair_conflicts() {
-        $hth = $this->hth;
+    static function render_chair_conflicts($hth, $gj) {
         echo $hth->subhead("Chair conflicts");
         echo "<p>Chairs and system administrators can access any information stored in the
 conference system, including reviewer identities for conflicted papers.
@@ -187,25 +175,22 @@ It is easiest to simply accept such conflicts as a fact of life. Chairs
 who can’t handle conflicts fairly shouldn’t be chairs. However, HotCRP
 does offer other mechanisms for conflicted reviews.</p>
 
-<p>The key step is to pick a PC member to manage the reviewing and
-discussion process for the relevant papers. This PC member is called the
-<em>paper administrator</em>. Use the left-hand side of the
-<a href='" . hoturl("assign") . "'>paper assignment pages</a> to enter paper administrators. (You may need to
-“Override conflicts” to access the assignment page.)
-A paper’s administrators have full privilege to assign and view reviews
-for that paper, although they cannot change conference settings.</p>
+<p>A PC member can manage the reviewing and
+discussion process for specific papers. This PC member is called the
+<em>paper administrator</em>. Use the left-hand side of a
+<a href='" . hoturl("assign") . "'>paper’s assignment page</a> to enter its administrator. (You may need to
+“Override conflicts” to access the assignment page.)</p>
 
-<p>Assigned administrators change conflicted chairs’
-access rights. Normally, a conflicted chair can easily override
-their conflict. If a paper has an administrator, however, conflicts cannot
-be overridden until the administrator is removed.</p>
+<p>Paper administrators have full privilege to assign and view reviews for their
+papers, and can, for example, use the autoassignment tool. They cannot change
+conference settings.</p>
 
-<p>Paper administrators make life easy for PC reviewers while hiding
-conflicts from chairs in most circumstances.
-However, determined chairs can still discover reviewer identities
-via HotCRP logs, review counts, and mails (and, of course,
-by removing the administrator).
-For additional privacy, a conference can use
+<p>Normally, a conflicted chair can easily override their conflict. When a paper
+has an administrator, however, chair conflicts cannot be overridden.</p>
+
+<p>Paper administrators make life easy for PC reviewers and greatly restrict
+conflicted chairs’ access. Usually this suffices.
+For additional privacy, use
 <em>review tokens</em>, which are completely anonymous
 review slots. To create a token, an administrator
 goes to an <a href='" . hoturl("assign") . "'>assignment page</a>
@@ -222,12 +207,11 @@ review tokens; then even web server access logs store only the
 administrator’s identity.</p>\n\n";
     }
 
-    function render_premeeting($gj) {
-        $hth = $this->hth;
+    static function render_premeeting($hth, $gj) {
         if (!isset($gj->index)) {
             echo $hth->subhead("Before the meeting");
             echo "<ol>\n";
-            $hth->echo_topic("chair/premeeting/*");
+            $hth->render_group("chair/premeeting/*");
             echo "</ol>\n\n";
 
         } else if ($gj->index === 1) {
@@ -286,12 +270,11 @@ administrator’s identity.</p>\n\n";
     }
 
 
-    function render_atmeeting($gj) {
-        $hth = $this->hth;
+    static function render_atmeeting($hth, $gj) {
         if (!isset($gj->index)) {
             echo $hth->subhead("At the meeting");
             echo "<ol>\n";
-            $hth->echo_topic("chair/atmeeting/*");
+            $hth->render_group("chair/atmeeting/*");
             echo "</ol>\n\n";
 
         } else if ($gj->index === 1) {
@@ -325,12 +308,11 @@ administrator’s identity.</p>\n\n";
         }
     }
 
-    function render_postmeeting($gj) {
-        $hth = $this->hth;
+    static function render_postmeeting($hth, $gj) {
         if (!isset($gj->index)) {
             echo $hth->subhead("After the meeting");
             echo "<ol>\n";
-            $hth->echo_topic("chair/postmeeting/*");
+            $hth->render_group("chair/postmeeting/*");
             echo "</ol>\n\n";
 
         } else if ($gj->index === 1) {

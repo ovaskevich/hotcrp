@@ -1,12 +1,11 @@
 <?php
 // pc_reviewdelegation.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ReviewDelegation_PaperColumn extends PaperColumn {
     private $requester;
-    function __construct($cj) {
-        parent::__construct($cj);
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
         if (!$pl->user->isPC)
@@ -22,12 +21,13 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
         global $Now;
         $rx = [];
         $row->ensure_reviewer_names();
+        $old_overrides = $pl->user->add_overrides(Contact::OVERRIDE_CONFLICT);
         foreach ($row->reviews_by_display() as $rrow) {
             if ($rrow->reviewType == REVIEW_EXTERNAL
                 && $rrow->requestedBy == $this->requester->contactId) {
-                if (!$pl->user->can_view_review($row, $rrow, true))
+                if (!$pl->user->can_view_review_assignment($row, $rrow))
                     continue;
-                if ($pl->user->can_view_review_identity($row, $rrow, true))
+                if ($pl->user->can_view_review_identity($row, $rrow))
                     $t = $pl->user->reviewer_html_for($rrow);
                 else
                     $t = "review";
@@ -35,7 +35,7 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
                 $description = $ranal->description_text();
                 if ($rrow->reviewOrdinal)
                     $description = rtrim("#" . unparseReviewOrdinal($rrow) . " " . $description);
-                $description = $ranal->wrap_link($description, "uu");
+                $description = $ranal->wrap_link($description, "uu nw");
                 if (!$rrow->reviewSubmitted && $rrow->reviewNeedsSubmit >= 0)
                     $description = '<strong class="overdue">' . $description . '</strong>';
                 $t .= ", $description";
@@ -52,6 +52,7 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
                 $rx[] = $t;
             }
         }
+        $pl->user->set_overrides($old_overrides);
         return join('; ', $rx);
     }
 }

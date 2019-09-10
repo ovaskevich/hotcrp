@@ -1,12 +1,11 @@
 <?php
 // a_lead.php -- HotCRP assignment helper classes
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Lead_AssignmentParser extends AssignmentParser {
     private $key;
     private $remove;
-    function __construct($aj) {
+    function __construct(Conf $conf, $aj) {
         parent::__construct($aj->name);
         $this->key = $aj->type;
         $this->remove = $aj->remove;
@@ -53,6 +52,7 @@ class Lead_AssignmentParser extends AssignmentParser {
         $state->remove(array("type" => $this->key, "pid" => $prow->paperId, "_cid" => $remcid));
         if (!$this->remove && $contact->contactId)
             $state->add(array("type" => $this->key, "pid" => $prow->paperId, "_cid" => $contact->contactId));
+        return true;
     }
 }
 
@@ -77,9 +77,6 @@ class Lead_Assigner extends Assigner {
         return $this->description;
     }
     function unparse_display(AssignmentSet $aset) {
-        $aset->show_column($this->description);
-        if (!$this->item->deleted())
-            $aset->show_column("reviewers");
         $t = [];
         if ($this->item->existed())
             $t[] = '<del>' . $aset->user->reviewer_html_for($this->item->get(true, "_cid")) . " " . $this->icon() . '</del>';
@@ -97,7 +94,10 @@ class Lead_Assigner extends Assigner {
         }
         return $x;
     }
-    function account(AssignmentCountSet $deltarev) {
+    function account(AssignmentSet $aset, AssignmentCountSet $deltarev) {
+        $aset->show_column($this->description);
+        if (!$this->item->deleted())
+            $aset->show_column("reviewers");
         $k = $this->type;
         if ($k === "lead" || $k === "shepherd") {
             $deltarev->$k = true;
@@ -119,7 +119,7 @@ class Lead_Assigner extends Assigner {
     function execute(AssignmentSet $aset) {
         $new_cid = $this->item->get(false, "_cid") ? : 0;
         $old_cid = $this->item->get(true, "_cid") ? : 0;
-        $aset->conf->qe("update Paper set {$this->type}ContactId=? where paperId=? and {$this->type}ContactId=?", $new_cid, $this->pid, $old_cid);
+        $aset->stage_qe("update Paper set {$this->type}ContactId=? where paperId=? and {$this->type}ContactId=?", $new_cid, $this->pid, $old_cid);
         if ($new_cid)
             $aset->user->log_activity_for($new_cid, "Set {$this->description}", $this->pid);
         else

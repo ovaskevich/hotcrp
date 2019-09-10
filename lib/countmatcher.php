@@ -1,7 +1,6 @@
 <?php
 // countmatcher.php -- HotCRP helper class for textual comparators
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class CountMatcher {
     private $_countexpr;
@@ -28,7 +27,7 @@ class CountMatcher {
             return false;
     }
     function ok() {
-        return $this->allowed != 0;
+        return $this->allowed !== 0;
     }
     function test($n) {
         return self::compare($n, $this->allowed, $this->value);
@@ -71,12 +70,12 @@ class CountMatcher {
             return $cm->filter($x);
         }
     }
+    function test_explicit_zero() {
+        return $this->value == 0 && ($this->allowed & 2);
+    }
     function countexpr() {
         assert(!!$this->allowed);
-        if ($this->allowed)
-            return self::$oparray[$this->allowed] . $this->value;
-        else
-            return $this->_countexpr;
+        return self::$oparray[$this->allowed] . $this->value;
     }
     function simplified_nonnegative_countexpr() {
         if ($this->value == 1 && $this->allowed === 6)
@@ -98,6 +97,13 @@ class CountMatcher {
         $t = new CountMatcher($str);
         if ($t->allowed)
             return self::$oparray[$t->allowed ^ 7] . $t->value;
+        else
+            return $str;
+    }
+    static function flip_countexpr_string($str) {
+        $t = new CountMatcher($str);
+        if ($t->allowed & 5)
+            return self::$oparray[$t->allowed ^ 5] . $t->value;
         else
             return $str;
     }

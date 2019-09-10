@@ -1,9 +1,8 @@
 <?php
 // init.php -- HotCRP initialization (test or site)
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
-define("HOTCRP_VERSION", "2.101");
+define("HOTCRP_VERSION", "2.102");
 
 // All review types must be 1 digit
 define("REVIEW_META", 5);
@@ -20,17 +19,6 @@ define("CONFLICT_CHAIRMARK", 8);
 define("CONFLICT_AUTHOR", 9);
 define("CONFLICT_CONTACTAUTHOR", 10);
 
-// User explicitly set notification preference (only in PaperWatch.watch)
-define("WATCHSHIFT_ISSET", 0);
-// Notify if author, reviewer, commenter
-define("WATCHSHIFT_ON", 1);
-// Always notify (only in ContactInfo.defaultWatch, generally admin only)
-define("WATCHSHIFT_ALLON", 2);
-
-define("WATCHTYPE_COMMENT", (1 << 0));
-define("WATCHTYPE_REVIEW", (1 << 0)); // same as WATCHTYPE_COMMENT
-define("WATCHTYPE_FINAL_SUBMIT", (1 << 3));
-
 define("REV_RATINGS_PC", 0);
 define("REV_RATINGS_PC_EXTERNAL", 1);
 define("REV_RATINGS_NONE", 2);
@@ -38,17 +26,6 @@ define("REV_RATINGS_NONE", 2);
 define("DTYPE_SUBMISSION", 0);
 define("DTYPE_FINAL", -1);
 define("DTYPE_COMMENT", -2);
-
-define("OPTIONTYPE_CHECKBOX", 0);
-define("OPTIONTYPE_SELECTOR", 1); /* see also script.js:doopttype */
-define("OPTIONTYPE_NUMERIC", 2);
-define("OPTIONTYPE_TEXT", 3);
-define("OPTIONTYPE_PDF", 4);    /* order matters */
-define("OPTIONTYPE_SLIDES", 5);
-define("OPTIONTYPE_VIDEO", 6);
-define("OPTIONTYPE_FINALPDF", 100);
-define("OPTIONTYPE_FINALSLIDES", 101);
-define("OPTIONTYPE_FINALVIDEO", 102);
 
 define("VIEWSCORE_FALSE", -3);
 define("VIEWSCORE_ADMINONLY", -2);
@@ -62,6 +39,7 @@ define("COMMENTTYPE_DRAFT", 1);
 define("COMMENTTYPE_BLIND", 2);
 define("COMMENTTYPE_RESPONSE", 4);
 define("COMMENTTYPE_BYAUTHOR", 8);
+define("COMMENTTYPE_BYSHEPHERD", 16);
 define("COMMENTTYPE_ADMINONLY", 0x00000);
 define("COMMENTTYPE_PCONLY", 0x10000);
 define("COMMENTTYPE_REVIEWER", 0x20000);
@@ -108,7 +86,6 @@ class SiteLoader {
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
         "FormatChecker" => "src/formatspec.php",
-        "Formula_PaperColumn" => "src/papercolumn.php",
         "JsonSerializable" => "lib/json.php",
         "LoginHelper" => "lib/login.php",
         "MailPreparation" => "lib/mailer.php",
@@ -117,7 +94,6 @@ class SiteLoader {
         "NumericOrderPaperColumn" => "src/papercolumn.php",
         "Option_SearchTerm" => "src/search/st_option.php",
         "PaperInfoSet" => "src/paperinfo.php",
-        "PaperInfo_AuthorMatcher" => "src/paperinfo.php",
         "PaperOptionList" => "src/paperoption.php",
         "Review_Assigner" => "src/assignmentset.php",
         "ReviewField" => "src/review.php",
@@ -125,14 +101,13 @@ class SiteLoader {
         "ReviewForm" => "src/review.php",
         "ReviewSearchMatcher" => "src/search/st_review.php",
         "ReviewValues" => "src/review.php",
-        "SearchAction" => "src/listaction.php",
-        "SearchTerm" => "src/search.php",
+        "SearchSplitter" => "src/papersearch.php",
+        "SearchTerm" => "src/papersearch.php",
         "TagAnno" => "lib/tagger.php",
         "TagInfo" => "lib/tagger.php",
         "TagMap" => "lib/tagger.php",
         "TextPaperOption" => "src/paperoption.php",
-        "XlsxGenerator" => "lib/xlsx.php",
-        "ZipDocument" => "lib/filer.php"
+        "XlsxGenerator" => "lib/xlsx.php"
     ];
 
     static $suffix_map = [
@@ -144,7 +119,8 @@ class SiteLoader {
         "_papercolumnfactory.php" => ["pc_", "papercolumns"],
         "_searchterm.php" => ["st_", "search"],
         "_settingrenderer.php" => ["s_", "settings"],
-        "_settingparser.php" => ["s_", "settings"]
+        "_settingparser.php" => ["s_", "settings"],
+        "_userinfo.php" => ["u_", "userinfo"]
     ];
 
     static function read_main_options() {
@@ -161,7 +137,7 @@ class SiteLoader {
     }
 }
 
-function __autoload($class_name) {
+spl_autoload_register(function ($class_name) {
     global $ConfSitePATH;
     $f = null;
     if (isset(SiteLoader::$map[$class_name]))
@@ -170,7 +146,7 @@ function __autoload($class_name) {
         $f = strtolower($class_name) . ".php";
     foreach (expand_includes($f, ["autoload" => true]) as $fx)
         require_once($fx);
-}
+});
 
 require_once("$ConfSitePATH/lib/base.php");
 require_once("$ConfSitePATH/lib/redirect.php");
@@ -183,6 +159,10 @@ require_once("$ConfSitePATH/src/contact.php");
 // Set locale to C (so that, e.g., strtolower() on UTF-8 data doesn't explode)
 setlocale(LC_COLLATE, "C");
 setlocale(LC_CTYPE, "C");
+
+// Don't want external entities parsed by default
+if (function_exists("libxml_disable_entity_loader"))
+    libxml_disable_entity_loader(true);
 
 
 // Set up conference options (also used in mailer.php)
@@ -295,27 +275,10 @@ function expand_json_includes_callback($includelist, $callback) {
                 continue;
             $entry = $x;
         }
-        if (is_object($entry) && !isset($entry->name) && !isset($entry->match)) {
-            $isassoc = true;
-            $nassoctest = 5;
-            foreach (get_object_vars($entry) as $k => $v) {
-                if (!is_object($v))
-                    $isassoc = false;
-                if (!$isassoc || --$nassoctest === 0)
-                    break;
-            }
-            if ($isassoc)
-                $entry = get_object_vars($entry);
-        } else {
-            $isassoc = false;
-        }
         foreach (is_array($entry) ? $entry : [$entry] as $k => $v) {
-            if (is_object($v)) {
-                if ($isassoc && !isset($v->name))
-                    $v->name = $k;
+            if (is_object($v))
                 $v->__subposition = ++Conf::$next_xt_subposition;
-            }
-            if (!call_user_func($callback, $v, $k))
+            if (!call_user_func($callback, $v, $k, $landmark))
                 error_log("$landmark: Invalid expansion " . json_encode($v) . ".");
         }
     }
@@ -334,7 +297,7 @@ if (!get($Opt, "loaded")) {
 if (!get($Opt, "loaded") || get($Opt, "missing"))
     Multiconference::fail_bad_options();
 if (get($Opt, "dbLogQueries"))
-    Dbl::log_queries($Opt["dbLogQueries"]);
+    Dbl::log_queries($Opt["dbLogQueries"], get($Opt, "dbLogQueryFile"));
 
 
 // Allow lots of memory

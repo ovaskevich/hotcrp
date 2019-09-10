@@ -1,6 +1,5 @@
 ## dbhelper.sh -- shell program helpers for HotCRP database access
-## HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-## Distributed under an MIT-like license; see LICENSE
+## Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 echo_n () {
         # suns can't echo -n, and Mac OS X can't echo "x\c"
@@ -122,6 +121,13 @@ if ("'$1'" =~ /^db/
 
 sql_quote () {
     sed -e 's,\([\\"'"'"']\),\\\1,g' | sed -e 's,,\\Z,g'
+}
+
+json_quote () {
+    echo_n '"'
+    perl -pe 's{([\\\"])}{\\$1}g;s{([\000-\017])}{sprintf("\\%03o", ord($1))}eg'
+    # sed -e 's,\([\\"]\),\\\1,g' | tr -d '\n'
+    echo_n '"'
 }
 
 check_mysqlish () {

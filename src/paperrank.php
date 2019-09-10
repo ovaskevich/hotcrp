@@ -1,7 +1,6 @@
 <?php
 // paperrank.php -- HotCRP helper functions for dealing with ranks
-// HotCRP is Copyright (c) 2009-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2009-2018 Eddie Kohler; see LICENSE.
 
 class PaperRank {
 
@@ -84,7 +83,7 @@ class PaperRank {
         $pct = round($n / count($this->papersel) * 100);
         if (!$this->info_printed) {
             if ($this->header_title)
-                $Conf->header($this->header_title, $this->header_id, actionBar());
+                $Conf->header($this->header_title, $this->header_id);
             echo "<div id='foldrankcalculation' class='foldc'><div class='fn info'>Calculating ranks; this can take a while.  <span id='rankpercentage'>$pct</span>% of ranks assigned<span id='rankdeletedpref'></span>.</div></div>";
             $this->info_printed = true;
         }
@@ -108,7 +107,6 @@ class PaperRank {
     }
 
     function irv() {
-        global $Conf;
         if (!count($this->papersel))
             return;
 
@@ -137,7 +135,6 @@ class PaperRank {
             uasort($papervotes, array("PaperRank", "_comparRankIRV"));
             // the loser is the first paper in the sort order
             $loser = key($papervotes);
-            //$Conf->infoMsg("choose $loser");
             $reverseorder[] = $loser;
             unset($papervotes[$loser]);
             // redistribute votes for the loser
@@ -160,8 +157,6 @@ class PaperRank {
 
     // global rank calculation by conversion of ranks to range values
     function rangevote() {
-        global $Conf;
-
         // calculate $minuserrank, $maxuserrank
         $minuserrank = $maxuserrank = array();
         foreach ($this->userrank as $user => &$ranks) {
@@ -195,8 +190,6 @@ class PaperRank {
 
     // global rank calculation by range values (1-99)
     function rawrangevote() {
-        global $Conf;
-
         // calculate $minuserrank, $maxuserrank
         $minuserrank = $maxuserrank = array();
         foreach ($this->userrank as $user => &$ranks) {

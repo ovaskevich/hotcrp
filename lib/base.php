@@ -1,7 +1,6 @@
 <?php
 // base.php -- HotCRP base helper functions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 // string helpers
 
@@ -20,7 +19,16 @@ function stri_ends_with($haystack, $needle) {
     return $p >= 0 && strcasecmp(substr($haystack, $p), $needle) == 0;
 }
 
+function preg_matchpos($pattern, $subject) {
+    if (preg_match($pattern, $subject, $m, PREG_OFFSET_CAPTURE))
+        return $m[0][1];
+    else
+        return false;
+}
+
 function cleannl($text) {
+    if (substr($text, 0, 3) === "\xEF\xBB\xBF")
+        $text = substr($text, 3);
     if (strpos($text, "\r") !== false) {
         $text = str_replace("\r\n", "\n", $text);
         $text = strtr($text, "\r", "\n");
@@ -70,6 +78,8 @@ if (!function_exists("mac_os_roman_to_utf8")) {
 }
 
 function convert_to_utf8($str) {
+    if (substr($str, 0, 3) === "\xEF\xBB\xBF")
+        $str = substr($str, 3);
     if (is_valid_utf8($str))
         return $str;
     $pfx = substr($str, 0, 5000);
@@ -259,23 +269,6 @@ function opt($idx, $default = null) {
     return get($Conf ? $Conf->opt : $Opt, $idx, $default);
 }
 
-function req($idx, $default = null) {
-    if (isset($_POST[$idx]))
-        return $_POST[$idx];
-    else if (isset($_GET[$idx]))
-        return $_GET[$idx];
-    else
-        return $default;
-}
-
-function req_s($idx, $default = null) {
-    return (string) req($idx, $default);
-}
-
-function set_req($idx, $value) {
-    $_GET[$idx] = $_POST[$idx] = $_REQUEST[$idx] = $value;
-}
-
 function uploaded_file_error($finfo) {
     $e = $finfo["error"];
     $name = get($finfo, "name") ? "<span class=\"lineno\">" . htmlspecialchars($finfo["name"]) . ":</span> " : "";
@@ -292,18 +285,30 @@ function uploaded_file_error($finfo) {
 function make_qreq() {
     $qreq = new Qrequest($_SERVER["REQUEST_METHOD"]);
     foreach ($_GET as $k => $v)
-        $qreq[$k] = $v;
+        $qreq->set_req($k, $v);
     foreach ($_POST as $k => $v)
-        $qreq[$k] = $v;
+        $qreq->set_req($k, $v);
+    if (empty($_POST))
+        $qreq->set_post_empty();
 
     // $_FILES requires special processing since we want error messages.
     $errors = [];
-    foreach ($_FILES as $f => $finfo) {
-        if ($finfo["error"] == UPLOAD_ERR_OK) {
-            if (is_uploaded_file($finfo["tmp_name"]))
-                $qreq->set_file($f, $finfo);
-        } else if (($err = uploaded_file_error($finfo)))
-            $errors[] = $err;
+    foreach ($_FILES as $nx => $fix) {
+        if (is_array($fix["error"])) {
+            $fis = [];
+            foreach (array_keys($fix["error"]) as $i) {
+                $fis[$i ? "$nx.$i" : $nx] = ["name" => $fix["name"][$i], "type" => $fix["type"][$i], "size" => $fix["size"][$i], "tmp_name" => $fix["tmp_name"][$i], "error" => $fix["error"][$i]];
+            }
+        } else {
+            $fis = [$nx => $fix];
+        }
+        foreach ($fis as $n => $fi) {
+            if ($fi["error"] == UPLOAD_ERR_OK) {
+                if (is_uploaded_file($fi["tmp_name"]))
+                    $qreq->set_file($n, $fi);
+            } else if (($err = uploaded_file_error($fi)))
+                $errors[] = $err;
+        }
     }
     if (!empty($errors) && Conf::$g)
         Conf::msg_error("<div class=\"parseerr\"><p>" . join("</p>\n<p>", $errors) . "</p></div>");

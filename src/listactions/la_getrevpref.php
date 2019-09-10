@@ -1,11 +1,10 @@
 <?php
 // listactions/la_get_revpref.php -- HotCRP helper classes for list actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class GetRevpref_ListAction extends ListAction {
     private $extended;
-    function __construct($fj) {
+    function __construct($conf, $fj) {
         $this->extended = $fj->name === "get/revprefx";
     }
     function allow(Contact $user) {
@@ -13,12 +12,12 @@ class GetRevpref_ListAction extends ListAction {
     }
     static function render_upload(PaperList $pl) {
         return ["<b>&nbsp;preference file:</b> &nbsp;"
-                . "<input class=\"want-focus js-autosubmit\" type='file' name='uploadedFile' accept='text/plain' size='20' tabindex='6' data-autosubmit-type=\"uploadpref\" />&nbsp; "
-                . Ht::submit("fn", "Go", ["value" => "uploadpref", "tabindex" => 6, "data-default-submit-all" => 1])];
+                . "<input class=\"want-focus js-autosubmit\" type='file' name='uploadedFile' accept='text/plain' size='20' data-autosubmit-type=\"uploadpref\" />&nbsp; "
+                . Ht::submit("fn", "Go", ["value" => "uploadpref", "data-default-submit-all" => 1, "class" => "btn uix js-submit-mark"])];
     }
     static function render_set(PaperList $pl) {
-        return [Ht::entry("pref", "", array("class" => "want-focus js-autosubmit", "size" => 4, "tabindex" => 6, "data-autosubmit-type" => "setpref"))
-                . " &nbsp;" . Ht::submit("fn", "Go", ["value" => "setpref", "tabindex" => 6])];
+        return [Ht::entry("pref", "", array("class" => "want-focus js-autosubmit", "size" => 4, "data-autosubmit-type" => "setpref"))
+                . " &nbsp;" . Ht::submit("fn", "Go", ["value" => "setpref", "class" => "btn uix js-submit-mark"])];
     }
     function run(Contact $user, $qreq, $ssel) {
         // maybe download preferences for someone else
@@ -39,9 +38,8 @@ class GetRevpref_ListAction extends ListAction {
 
         $not_me = $user->contactId !== $Rev->contactId;
         $has_conflict = false;
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "topics" => 1, "reviewerPreference" => 1]);
         $texts = array();
-        foreach (PaperInfo::fetch_all($result, $user) as $prow) {
+        foreach ($user->paper_set($ssel, ["topics" => 1, "reviewerPreference" => 1]) as $prow) {
             if ($not_me && !$user->allow_administer($prow))
                 continue;
             $item = ["paper" => $prow->paperId, "title" => $prow->title];
@@ -67,6 +65,7 @@ class GetRevpref_ListAction extends ListAction {
         $title = "revprefs";
         if ($not_me)
             $title .= "-" . (preg_replace('/@.*|[^\w@.]/', "", $Rev->email) ? : "user");
-        return new Csv_SearchResult($title, $fields, $ssel->reorder($texts), true);
+        return $user->conf->make_csvg($title, CsvGenerator::FLAG_ITEM_COMMENTS)
+            ->select($fields)->add($ssel->reorder($texts));
     }
 }

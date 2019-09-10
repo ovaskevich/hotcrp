@@ -1,7 +1,6 @@
 <?php
 // search/st_decision.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Decision_SearchTerm extends SearchTerm {
     private $match;
@@ -24,7 +23,10 @@ class Decision_SearchTerm extends SearchTerm {
         return "(Paper.outcome" . CountMatcher::sqlexpr_using($this->match) . ")";
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
-        return $srch->user->can_view_decision($row, true)
+        return $srch->user->can_view_decision($row)
             && CountMatcher::compare_using($row->outcome, $this->match);
+    }
+    function compile_edit_condition(PaperInfo $row, PaperSearch $srch) {
+        return $this->exec($row, $srch);
     }
 }

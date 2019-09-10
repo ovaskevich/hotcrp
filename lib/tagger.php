@@ -1,7 +1,6 @@
 <?php
 // tagger.php -- HotCRP helper class for dealing with tags
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 // Note that tags MUST NOT contain HTML or URL special characters:
 // no "'&<>.  If you add PHP-protected characters, such as $, make sure you
@@ -15,6 +14,8 @@ class TagMapItem {
     public $pattern_version = 0;
     public $is_private = false;
     public $chair = false;
+    public $readonly = false;
+    public $hidden = false;
     public $track = false;
     public $votish = false;
     public $vote = false;
@@ -38,11 +39,15 @@ class TagMapItem {
             $this->colors[] = $color;
             $this->basic_color = true;
         }
-        if ($tag[0] === "~" && $tag[1] !== "~")
-            $this->is_private = true;
+        if ($tag[0] === "~") {
+            if ($tag[1] !== "~")
+                $this->is_private = true;
+            else
+                $this->chair = true;
+        }
     }
     function merge(TagMapItem $t) {
-        foreach (["chair", "track", "votish", "vote", "approval", "sitewide", "rank", "autosearch"] as $property)
+        foreach (["chair", "readonly", "hidden", "track", "votish", "vote", "approval", "sitewide", "rank", "autosearch"] as $property)
             if ($t->$property)
                 $this->$property = $t->$property;
         foreach (["colors", "badges", "emoji"] as $property)
@@ -147,6 +152,8 @@ class TagMap implements IteratorAggregate {
     public $conf;
     public $has_pattern = false;
     public $has_chair = true;
+    public $has_readonly = true;
+    public $has_hidden = false;
     public $has_votish = false;
     public $has_vote = false;
     public $has_approval = false;
@@ -166,6 +173,7 @@ class TagMap implements IteratorAggregate {
     private $color_re = null;
     private $badge_re = null;
     private $emoji_re = null;
+    private $hidden_re = null;
     private $sitewide_re_part = null;
 
     const STYLE_FG = 1;
@@ -318,6 +326,12 @@ class TagMap implements IteratorAggregate {
         else
             return !!$this->check_property($tag, "chair");
     }
+    function is_readonly($tag) {
+        return !!$this->check_property($tag, "readonly");
+    }
+    function is_hidden($tag) {
+        return !!$this->check_property($tag, "hidden");
+    }
     function is_sitewide($tag) {
         return !!$this->check_property($tag, "sitewide");
     }
@@ -344,6 +358,9 @@ class TagMap implements IteratorAggregate {
     function is_emoji($tag) {
         return !!$this->check_property($tag, "emoji");
     }
+    function is_autosearch($tag) {
+        return !!$this->check_property($tag, "autosearch");
+    }
 
     function sitewide_regex_part() {
         if ($this->sitewide_re_part === null) {
@@ -353,6 +370,16 @@ class TagMap implements IteratorAggregate {
             $this->sitewide_re_part = join("|", $x);
         }
         return $this->sitewide_re_part;
+    }
+
+    function hidden_regex_part() {
+        if ($this->hidden_re === null) {
+            $x = [];
+            foreach ($this->filter("hidden") as $t)
+                $x[] = $t->tag_regex();
+            $this->hidden_re = join("|", $x);
+        }
+        return $this->hidden_re;
     }
 
 
@@ -469,15 +496,39 @@ class TagMap implements IteratorAggregate {
     }
 
 
+    function strip_nonviewable($tags, Contact $user = null, PaperInfo $prow = null) {
+        if ($this->has_hidden || strpos($tags, "~") !== false) {
+            $re = "(?:";
+            if ($user && $user->contactId)
+                $re .= "(?!" . $user->contactId . "~)";
+            $re .= "\\d+~";
+            if (!($user && $user->privChair))
+                $re .= "|~+";
+            $re .= ")\\S+";
+            if ($this->has_hidden
+                && $user
+                && !($prow ? $user->can_view_hidden_tags($prow) : $user->privChair))
+                $re = "(?:" . $re . "|(?:" . $this->hidden_regex_part() . ")(?:#\\S+|(?= )))";
+            $tags = trim(preg_replace("{ " . $re . "}i", "", " $tags "));
+        }
+        return $tags;
+    }
+
+
     static function make(Conf $conf) {
         $map = new TagMap($conf);
         $ct = $conf->setting_data("tag_chair", "");
-        foreach (TagInfo::split_unpack($ct) as $ti)
-            $map->add($ti[0])->chair = true;
+        foreach (TagInfo::split_unpack($ct) as $ti) {
+            $t = $map->add($ti[0]);
+            $t->chair = $t->readonly = true;
+        }
         foreach ($conf->track_tags() as $tn) {
             $t = $map->add(TagInfo::base($tn));
-            $t->chair = $t->track = true;
+            $t->chair = $t->readonly = $t->track = true;
         }
+        $ct = $conf->setting_data("tag_hidden", "");
+        foreach (TagInfo::split_unpack($ct) as $ti)
+            $map->add($ti[0])->hidden = $map->has_hidden = true;
         $ct = $conf->setting_data("tag_sitewide", "");
         foreach (TagInfo::split_unpack($ct) as $ti)
             $map->add($ti[0])->sitewide = $map->has_sitewide = true;
@@ -529,7 +580,11 @@ class TagMap implements IteratorAggregate {
                 foreach (json_decode($ods) as $tag => $data) {
                     $t = $map->add($tag);
                     if (get($data, "chair"))
-                        $t->chair = $map->has_chair = true;
+                        $t->chair = $t->readonly = true;
+                    if (get($data, "readonly"))
+                        $t->readonly = true;
+                    if (get($data, "hidden"))
+                        $t->hidden = $map->has_hidden = true;
                     if (get($data, "sitewide"))
                         $t->sitewide = $map->has_sitewide = true;
                     if (($x = get($data, "autosearch"))) {
@@ -648,8 +703,13 @@ class Tagger {
             $tag = substr($tag, 1);
         if ((string) $tag === "")
             return $this->set_error_html("Tag missing.");
-        if (!preg_match('/\A(|~|~~|[1-9][0-9]*~)(' . TAG_REGEX_NOTWIDDLE . ')(|[#=](?:-?\d+(?:\.\d*)?|-?\.\d+|))\z/', $tag, $m))
-            return $this->set_error_html("Invalid tag.");
+        if (!preg_match('/\A(|~|~~|[1-9][0-9]*~)(' . TAG_REGEX_NOTWIDDLE . ')(|[#=](?:-?\d+(?:\.\d*)?|-?\.\d+|))\z/', $tag, $m)) {
+            if (preg_match('/\A([-a-zA-Z0-9!@*_:.\/#=]+)[\s,]+\S+/', $tag, $m)
+                && $this->check($m[1], $flags))
+                return $this->set_error_html("Expected a single tag.");
+            else
+                return $this->set_error_html("Invalid tag.");
+        }
         if (!($flags & self::ALLOWSTAR) && strpos($tag, "*") !== false)
             return $this->set_error_html("Wildcards aren’t allowed in tag names.");
         // After this point we know `$tag` contains no HTML specials
@@ -711,19 +771,6 @@ class Tagger {
             return VIEWSCORE_PC;
     }
 
-
-    static function strip_nonviewable($tags, Contact $user = null) {
-        if (strpos($tags, "~") !== false) {
-            $re = "{ (?:";
-            if ($user && $user->contactId)
-                $re .= "(?!" . $user->contactId . "~)";
-            $re .= "\\d+~";
-            if (!($user && $user->privChair))
-                $re .= "|~+";
-            $tags = trim(preg_replace($re . ")\\S+}", "", " $tags "));
-        }
-        return $tags;
-    }
 
     static function strip_nonsitewide($tags, Contact $user) {
         $re = "{ (?:(?!" . $user->contactId . "~)\\d+~|~+|(?!"
@@ -792,22 +839,23 @@ class Tagger {
                 $b = self::unparse_emoji_html($e, $count);
                 if (!empty($links))
                     $b = '<a class="qq" href="' . hoturl("search", ["q" => join(" OR ", $links)]) . '">' . $b . '</a>';
-                $x .= ' ' . $b;
+                if ($x === "")
+                    $x = " ";
+                $x .= $b;
             }
         }
         if ($dt->has_badges
             && preg_match_all($dt->badge_regex(), $tags, $m, PREG_SET_ORDER))
             foreach ($m as $mx)
                 if (($t = $dt->check($mx[1])) && $t->badges) {
+                    $klass = ' class="badge ' . $t->badges[0] . 'badge"';
                     $tag = $this->unparse(trim($mx[0]));
                     if (($link = $this->link($tag))) {
-                        if (($hash = strpos($tag, "#")) !== false)
-                            $b = '<a class="nn" href="' . $link . '"><u class="x">#' . substr($tag, 0, $hash) . '</u>' . substr($tag, $hash) . '</a>';
-                        else
-                            $b = '<a class="qq" href="' . $link . '">#' . $tag . '</a>';
-                    } else
-                        $b = "#$tag";
-                    $x .= ' <span class="badge ' . $t->badges[0] . 'badge">' . $b . '</span>';
+                        $b = '<a href="' . $link . '"' . $klass . '>#' . $tag . '</a>';
+                    } else {
+                        $b = '<span' . $klass . '>#' . $tag . '</span>';
+                    }
+                    $x .= ' ' . $b;
                 }
         return $x === "" ? "" : '<span class="tagdecoration">' . $x . '</span>';
     }

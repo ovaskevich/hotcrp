@@ -1,7 +1,6 @@
 <?php
 // search/st_comment.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Comment_SearchTerm extends SearchTerm {
     private $csm;
@@ -31,7 +30,7 @@ class Comment_SearchTerm extends SearchTerm {
     static function comment_factory($keyword, Conf $conf, $kwfj, $m) {
         $tword = str_replace("-", "", $m[1]);
         return (object) [
-            "name" => $keyword, "parser" => "Comment_SearchTerm::parse",
+            "name" => $keyword, "parse_callback" => "Comment_SearchTerm::parse",
             "response" => $tword === "any", "comment" => true,
             "round" => null, "draft" => false,
             "only_author" => $tword === "au" || $tword === "author",
@@ -43,7 +42,7 @@ class Comment_SearchTerm extends SearchTerm {
         if ($round === false || ($m[1] && $m[3]))
             return null;
         return (object) [
-            "name" => $keyword, "parser" => "Comment_SearchTerm::parse",
+            "name" => $keyword, "parse_callback" => "Comment_SearchTerm::parse",
             "response" => true, "comment" => false,
             "round" => $round, "draft" => ($m[1] || $m[3]),
             "only_author" => false, "has" => ">0"
@@ -60,7 +59,7 @@ class Comment_SearchTerm extends SearchTerm {
             if (empty($tags))
                 return new False_SearchTerm;
         } else if ($m[0] !== "")
-            $contacts = $srch->matching_reviewers($m[0], $sword->quoted, false);
+            $contacts = $srch->matching_users($m[0], $sword->quoted, false);
         $csm = new ContactCountMatcher($m[1], $contacts);
         return new Comment_SearchTerm($csm, $tags, $sword->kwdef);
     }
@@ -84,7 +83,7 @@ class Comment_SearchTerm extends SearchTerm {
         return "coalesce($thistab.count,0)" . $this->csm->conservative_nonnegative_countexpr();
     }
     private function _check_tags(CommentInfo $crow, Contact $user) {
-        $tags = $crow->viewable_tags($user, true);
+        $tags = $crow->viewable_tags($user);
         if ($this->tags[0] === "none")
             return (string) $tags === "";
         else if ($this->tags[0] === "any")
@@ -98,7 +97,7 @@ class Comment_SearchTerm extends SearchTerm {
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
         $n = 0;
-        foreach ($row->viewable_comment_skeletons($srch->user, true) as $crow)
+        foreach ($row->viewable_comment_skeletons($srch->user) as $crow)
             if ($this->csm->test_contact($crow->contactId)
                 && ($crow->commentType & $this->type_mask) == $this->type_value
                 && (!$this->only_author || $crow->commentType >= COMMENTTYPE_AUTHOR)

@@ -1,17 +1,16 @@
 <?php
 // listactions/la_getjson.php -- HotCRP helper classes for list actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class GetJson_ListAction extends ListAction {
     private $iszip;
     private $zipdoc;
-    function __construct($fj) {
+    function __construct($conf, $fj) {
         $this->iszip = $fj->name === "get/jsonattach";
     }
     function document_callback($dj, DocumentInfo $doc, $dtype, PaperStatus $pstatus) {
-        if ($doc->docclass->load($doc, true)) {
-            $dj->content_file = HotCRPDocument::filename($doc);
+        if ($doc->ensure_content()) {
+            $dj->content_file = $doc->export_filename();
             $this->zipdoc->add_as($doc, $dj->content_file);
         }
     }
@@ -19,21 +18,24 @@ class GetJson_ListAction extends ListAction {
         return $user->is_manager();
     }
     function run(Contact $user, $qreq, $ssel) {
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "topics" => true, "options" => true]);
+        $old_overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
         $pj = [];
-        $ps = new PaperStatus($user->conf, $user, ["forceShow" => true, "hide_docids" => true]);
+        $ps = new PaperStatus($user->conf, $user, ["hide_docids" => true]);
         if ($this->iszip) {
             $this->zipdoc = new ZipDocument($user->conf->download_prefix . "data.zip");
             $ps->on_document_export([$this, "document_callback"]);
         }
-        foreach (PaperInfo::fetch_all($result, $user) as $prow)
-            if ($user->allow_administer($prow))
-                $pj[$prow->paperId] = $ps->paper_json($prow);
+        foreach ($user->paper_set($ssel, ["topics" => true, "options" => true]) as $prow) {
+            $pj1 = $ps->paper_json($prow);
+            if ($pj1)
+                $pj[$prow->paperId] = $pj1;
             else {
                 $pj[$prow->paperId] = (object) ["pid" => $prow->paperId, "error" => "You don’t have permission to administer this paper."];
                 if ($this->iszip)
                     $this->zipdoc->warnings[] = "#$prow->paperId: You don’t have permission to administer this paper.";
             }
+        }
+        $user->set_overrides($old_overrides);
         $pj = array_values($ssel->reorder($pj));
         if (count($pj) == 1) {
             $pj = $pj[0];
@@ -41,10 +43,10 @@ class GetJson_ListAction extends ListAction {
         } else
             $pj_filename = $user->conf->download_prefix . "data.json";
         if ($this->iszip) {
-            $this->zipdoc->add(json_encode($pj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n", $pj_filename);
+            $this->zipdoc->add_as(json_encode($pj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n", $pj_filename);
             $this->zipdoc->download();
         } else {
-            header("Content-Type: application/json");
+            header("Content-Type: application/json; charset=utf-8");
             header("Content-Disposition: attachment; filename=" . mime_quote_string($pj_filename));
             echo json_encode($pj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
         }

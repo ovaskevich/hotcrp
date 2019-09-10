@@ -1,7 +1,6 @@
 <?php
 // search/st_reviewtoken.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ReviewToken_SearchTerm extends SearchTerm {
     private $any;
@@ -37,11 +36,11 @@ class ReviewToken_SearchTerm extends SearchTerm {
     function exec(PaperInfo $prow, PaperSearch $srch) {
         $nr = $nt = 0;
         foreach ($prow->reviews_by_id() as $rrow)
-            if ($srch->user->can_view_review_assignment($prow, $rrow, true)) {
+            if ($srch->user->can_view_review_assignment($prow, $rrow)) {
                 ++$nr;
                 if ($this->token
                     ? $rrow->reviewToken == $this->token
-                    : !$rrow->reviewToken && $srch->user->can_view_review_identity($prow, $rrow, true))
+                    : !$rrow->reviewToken && $srch->user->can_view_review_identity($prow, $rrow))
                     ++$nt;
             }
         if ($this->any === false)

@@ -1,7 +1,6 @@
 <?php
 // src/settings/s_tags.php -- HotCRP settings > tags page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Tags_SettingRenderer {
     static function render_tags($tl) {
@@ -10,33 +9,42 @@ class Tags_SettingRenderer {
         });
         return join(" ", array_map(function ($t) { return $t->tag; }, $tl));
     }
+    static function render_tag_chair(SettingValues $sv) {
+        $sv->set_oldv("tag_chair", self::render_tags($sv->conf->tags()->filter("chair")));
+        $sv->echo_entry_group("tag_chair", null, ["class" => "need-tagcompletion"], "PC members can see these tags, but only administrators can change them.");
+    }
+    static function render_tag_sitewide(SettingValues $sv) {
+        $sv->set_oldv("tag_sitewide", self::render_tags($sv->conf->tags()->filter("sitewide")));
+        if ($sv->newv("tag_sitewide") || $sv->conf->has_any_manager())
+            $sv->echo_entry_group("tag_sitewide", null, ["class" => "need-tagcompletion"], "Administrators can see and change these tags for every paper.");
+    }
+    static function render_tag_approval(SettingValues $sv) {
+        $sv->set_oldv("tag_approval", self::render_tags($sv->conf->tags()->filter("approval")));
+        $sv->echo_entry_group("tag_approval", null, ["class" => "need-tagcompletion"], "<a href=\"" . hoturl("help", "t=votetags") . "\">Help</a>");
+    }
+    static function render_tag_vote(SettingValues $sv) {
+        $x = [];
+        foreach ($sv->conf->tags()->filter("vote") as $t)
+            $x[] = "{$t->tag}#{$t->vote}";
+        $sv->set_oldv("tag_vote", join(" ", $x));
+        $sv->echo_entry_group("tag_vote", null, ["class" => "need-tagcompletion"], "“vote#10” declares an allotment of 10 votes per PC member. (<a href=\"" . hoturl("help", "t=votetags") . "\">Help</a>)");
+    }
+    static function render_tag_rank(SettingValues $sv) {
+        $sv->set_oldv("tag_rank", $sv->conf->setting_data("tag_rank", ""));
+        $sv->echo_entry_group("tag_rank", null, null, "The <a href='" . hoturl("offline") . "'>offline reviewing page</a> will expose support for uploading rankings by this tag. (<a href='" . hoturl("help", "t=ranking") . "'>Help</a>)");
+    }
     static function render(SettingValues $sv) {
         // Tags
         $tagmap = $sv->conf->tags();
         echo "<h3 class=\"settings\">Tags</h3>\n";
-        echo "<table><tbody class=\"secondary-settings\">";
-        $sv->set_oldv("tag_chair", self::render_tags($tagmap->filter("chair")));
-        $sv->echo_entry_row("tag_chair", "Chair-only tags", "PC members can view these tags, but only administrators can change them.", ["class" => "need-tagcompletion"]);
 
-        $sv->set_oldv("tag_sitewide", self::render_tags($tagmap->filter("sitewide")));
-        if ($sv->newv("tag_sitewide") || $sv->conf->has_any_manager())
-            $sv->echo_entry_row("tag_sitewide", "Site-wide tags", "Administrators can view and change these tags for every paper.", ["class" => "need-tagcompletion"]);
+        echo '<div class="settings-g">';
+        $sv->render_group("tags/main");
+        echo "</div>\n";
 
-        $sv->set_oldv("tag_approval", self::render_tags($tagmap->filter("approval")));
-        $sv->echo_entry_row("tag_approval", "Approval voting tags", "<a href=\"" . hoturl("help", "t=votetags") . "\">Help</a>", ["class" => "need-tagcompletion"]);
-
-        $x = [];
-        foreach ($tagmap->filter("vote") as $t)
-            $x[] = "{$t->tag}#{$t->vote}";
-        $sv->set_oldv("tag_vote", join(" ", $x));
-        $sv->echo_entry_row("tag_vote", "Allotment voting tags", "“vote#10” declares an allotment of 10 votes per PC member. (<a href=\"" . hoturl("help", "t=votetags") . "\">Help</a>)", ["class" => "need-tagcompletion"]);
-
-        $sv->set_oldv("tag_rank", $sv->conf->setting_data("tag_rank", ""));
-        $sv->echo_entry_row("tag_rank", "Ranking tag", "The <a href='" . hoturl("offline") . "'>offline reviewing page</a> will expose support for uploading rankings by this tag. (<a href='" . hoturl("help", "t=ranking") . "'>Help</a>)");
-        echo "</tbody></table>";
-
-        echo "<div class='g'></div>\n";
+        echo '<div class="settings-g">';
         $sv->echo_checkbox('tag_seeall', "PC can see tags for conflicted papers");
+        echo "</div>\n";
 
         Ht::stash_script('suggest($(".need-tagcompletion"), taghelp_tset)', "taghelp_tset");
     }
@@ -119,7 +127,7 @@ class Tags_SettingParser extends SettingParser {
         if ($si->name == "tag_rank" && isset($sv->req["tag_rank"])) {
             $ts = $this->my_parse_list($si, Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE, false);
             if (count($ts) > 1)
-                $sv->error_at("tag_rank", "At most one rank tag is currently supported.");
+                $sv->error_at("tag_rank", "Multiple ranking tags are not supported yet.");
             else
                 $sv->update("tag_rank", join(" ", $ts));
         }
@@ -164,8 +172,8 @@ class Tags_SettingParser extends SettingParser {
                         $sv->error_at(null, "Removed " . Text::user_html($pcm[$who]) . "’s negative “{$base}” vote for paper #$row[0].");
                         $negative = true;
                     } else {
-                        $pvals[$row[0]] = defval($pvals, $row[0], 0) + $row[2];
-                        $cvals[$who] = defval($cvals, $who, 0) + $row[2];
+                        $pvals[$row[0]] = get($pvals, $row[0], 0) + $row[2];
+                        $cvals[$who] = get($cvals, $who, 0) + $row[2];
                     }
                 }
 
@@ -198,7 +206,7 @@ class Tags_SettingParser extends SettingParser {
                         $sv->error_at(null, "Removed " . Text::user_html($pcm[$who]) . "’s negative “{$t}” approval vote for paper #$row[0].");
                         $negative = true;
                     } else
-                        $pvals[$row[0]] = defval($pvals, $row[0], 0) + 1;
+                        $pvals[$row[0]] = get($pvals, $row[0], 0) + 1;
                 }
 
                 $q = ($negative ? " or (tag like '%~" . sqlq_for_like($t) . "' and tagIndex<0)" : "");

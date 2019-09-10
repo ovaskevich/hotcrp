@@ -1,10 +1,9 @@
 <?php
 // ldaplogin.php -- HotCRP helper function for LDAP login
-// HotCRP is Copyright (c) 2009-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2009-2018 Eddie Kohler; see LICENSE.
 
-function ldapLoginBindFailure($ldapc) {
-    global $Conf, $email_class, $password_class;
+function ldapLoginBindFailure(Qrequest $qreq, $ldapc) {
+    global $Conf;
 
     // connection failed, report error
     $lerrno = ldap_errno($ldapc);
@@ -14,18 +13,19 @@ function ldapLoginBindFailure($ldapc) {
 
     if ($lerrno < 5)
         return Conf::msg_error("LDAP protocol error.  Logins will fail until this error is fixed.$suffix");
-    else if (req_s("password") == "") {
-        $password_class = " error";
+    else if ((string) $qreq->password === "") {
+        Ht::error_at("password");
         if ($lerrno == 53)
             $suffix = "";
         return Conf::msg_error("Enter your LDAP password.$suffix");
     } else {
-        $email_class = $password_class = " error";
+        Ht::error_at("email");
+        Ht::error_at("password");
         return Conf::msg_error("Those credentials are invalid.  Please use your LDAP username and password.$suffix");
     }
 }
 
-function ldapLoginAction() {
+function ldapLoginAction(Qrequest $qreq) {
     global $Conf;
 
     if (!preg_match('/\A\s*(\S+)\s+(\d+\s+)?([^*]+)\*(.*?)\s*\z/s', opt("ldapLogin"), $m))
@@ -40,16 +40,16 @@ function ldapLoginAction() {
         return Conf::msg_error("Internal error: ldap_connect.  Logins disabled until this error is fixed.");
     @ldap_set_option($ldapc, LDAP_OPT_PROTOCOL_VERSION, 3);
 
-    $qemail = addcslashes(req_s("email"), ',=+<>#;\"');
+    $qemail = addcslashes((string) $qreq->email, ',=+<>#;\"');
     $dn = $m[3] . $qemail . $m[4];
 
-    $success = @ldap_bind($ldapc, $dn, req_s("password"));
+    $success = @ldap_bind($ldapc, $dn, (string) $qreq->password);
     if (!$success && @ldap_errno($ldapc) == 2) {
         @ldap_set_option($ldapc, LDAP_OPT_PROTOCOL_VERSION, 2);
-        $success = @ldap_bind($ldapc, $dn, req_s("password"));
+        $success = @ldap_bind($ldapc, $dn, (string) $qreq->password);
     }
     if (!$success)
-        return ldapLoginBindFailure($ldapc);
+        return ldapLoginBindFailure($qreq, $ldapc);
 
     // use LDAP information to prepopulate the database with names
     if (isset($Opt["ldap_addlFilterKey"])) {
@@ -64,15 +64,15 @@ function ldapLoginAction() {
         $e = @ldap_get_entries($ldapc, $sr);
         $e = ($e["count"] == 1 ? $e[0] : array());
         if (isset($e["cn"]) && $e["cn"]["count"] == 1)
-            list($_REQUEST["firstName"], $_REQUEST["lastName"]) = Text::split_name($e["cn"][0]);
+            list($qreq->firstName, $qreq->lastName) = Text::split_name($e["cn"][0]);
         if (isset($e["sn"]) && $e["sn"]["count"] == 1)
-            $_REQUEST["lastName"] = $e["sn"][0];
+            $qreq->lastName = $e["sn"][0];
         if (isset($e["givenname"]) && $e["givenname"]["count"] == 1)
-            $_REQUEST["firstName"] = $e["givenname"][0];
+            $qreq->firstName = $e["givenname"][0];
         if (isset($e["mail"]) && $e["mail"]["count"] == 1)
-            $_REQUEST["preferredEmail"] = $e["mail"][0];
+            $qreq->preferredEmail = $e["mail"][0];
         if (isset($e["telephonenumber"]) && $e["telephonenumber"]["count"] == 1)
-            $_REQUEST["voicePhoneNumber"] = $e["telephonenumber"][0];
+            $qreq->phone = $e["telephonenumber"][0];
     }
 
     // additional filter key set?

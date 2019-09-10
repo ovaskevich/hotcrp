@@ -1,11 +1,39 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+
+class Withdraw_AssignmentFinisher {
+    // When withdrawing a paper, remove voting tags so people don't have
+    // phantom votes.
+    private $pid;
+    private $ltag;
+    function __construct($pid) {
+        $this->pid = $pid;
+    }
+    function apply_finisher(AssignmentState $state) {
+        $res = $state->query_items(["type" => "status", "pid" => $this->pid]);
+        if (!$res
+            || $res[0]["_withdrawn"] <= 0
+            || $res[0]->get_before("_withdrawn") > 0)
+            return;
+        $ltre = [];
+        foreach ($state->conf->tags()->filter("votish") as $dt)
+            $ltre[] = preg_quote(strtolower($dt->tag));
+        $res = $state->query(["type" => "tag", "pid" => $this->pid]);
+        $tag_re = '{\A(?:\d+~|)(?:' . join("|", $ltre) . ')\z}i';
+        foreach ($res as $x) {
+            if (preg_match($tag_re, $x["ltag"])) {
+                $x["_index"] = 0.0;
+                $x["_vote"] = true;
+                $state->add($x);
+            }
+        }
+    }
+}
 
 class Status_AssignmentParser extends UserlessAssignmentParser {
     private $xtype;
-    function __construct($aj) {
+    function __construct(Conf $conf, $aj) {
         parent::__construct("status");
         $this->xtype = $aj->type;
     }
@@ -38,11 +66,14 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                 assert($res["_submitted"] >= 0);
                 $res["_withdrawn"] = $Now;
                 $res["_submitted"] = -$res["_submitted"];
+                if ($state->conf->tags()->has_votish) {
+                    Tag_AssignmentParser::load_tag_state($state);
+                    $state->finishers[] = new Withdraw_AssignmentFinisher($prow->paperId);
+                }
             }
             $r = (string) get($req, "withdraw_reason", get($req, "reason", null));
             if ($r !== "")
                 $res["_withdraw_reason"] = $r;
-            // XXX should update tags
         } else if ($this->xtype === "revive") {
             if ($res["_withdrawn"] !== 0) {
                 assert($res["_submitted"] <= 0);
@@ -55,6 +86,7 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
             }
         }
         $state->add($res);
+        return true;
     }
 }
 
@@ -71,7 +103,7 @@ class Status_Assigner extends Assigner {
         else if ($this->item->get($type, "_submitted"))
             return "Submitted";
         else
-            return "Not ready";
+            return "Not ready";
     }
     function unparse_display(AssignmentSet $aset) {
         return '<del>' . $this->status_html(true) . '</del> '
@@ -97,7 +129,7 @@ class Status_Assigner extends Assigner {
     function execute(AssignmentSet $aset) {
         global $Now;
         $submitted = $this->item["_submitted"];
-        $aset->conf->qe("update Paper set timeSubmitted=?, timeWithdrawn=?, withdrawReason=? where paperId=?", $submitted, $this->item["_withdrawn"], $this->item["_withdraw_reason"], $this->pid);
+        $aset->stage_qe("update Paper set timeSubmitted=?, timeWithdrawn=?, withdrawReason=? where paperId=?", $submitted, $this->item["_withdrawn"], $this->item["_withdraw_reason"], $this->pid);
         if (($submitted > 0) !== ($this->item->get(true, "_submitted") > 0))
             $aset->cleanup_callback("papersub", function ($aset, $vals) {
                 $aset->conf->update_papersub_setting(min($vals));

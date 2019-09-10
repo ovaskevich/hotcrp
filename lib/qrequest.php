@@ -1,12 +1,15 @@
 <?php
 // qrequest.php -- HotCRP helper class for request objects (no warnings)
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSerializable {
+    // NB see also count()
     private $____method;
+    private $____a = [];
     private $____files = [];
     private $____x = [];
+    private $____post_ok = false;
+    private $____post_empty = false;
     function __construct($method, $data = null) {
         $this->____method = $method;
         if ($data)
@@ -27,6 +30,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     }
     function offsetSet($offset, $value) {
         $this->$offset = $value;
+        unset($this->____a[$offset]);
     }
     function offsetUnset($offset) {
         unset($this->$offset);
@@ -36,6 +40,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     }
     function __set($name, $value) {
         $this->$name = $value;
+        unset($this->____a[$name]);
     }
     function& __get($name) {
         $x = null;
@@ -54,8 +59,34 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
             $default = $this->$name;
         return $default;
     }
+    function get_a($name, $default = null) {
+        if (property_exists($this, $name)) {
+            $default = $this->$name;
+            if ($default === "__array__" && isset($this->____a[$name]))
+                $default = $this->____a[$name];
+        }
+        return $default;
+    }
+    function allow_a(/* ... */) {
+        foreach (func_get_args() as $name) {
+            if (property_exists($this, $name)
+                && $this->$name === "__array__"
+                && isset($this->____a[$name])) {
+                $this->$name = $this->____a[$name];
+                unset($this->____a[$name]);
+            }
+        }
+    }
+    function set_req($name, $value) {
+        if (is_array($value)) {
+            $this->$name = "__array__";
+            $this->____a[$name] = $value;
+        } else {
+            $this->$name = $value;
+        }
+    }
     function count() {
-        return count(get_object_vars($this)) - 3;
+        return count(get_object_vars($this)) - 6;
     }
     function jsonSerialize() {
         return $this->make_array();
@@ -65,6 +96,13 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         foreach (get_object_vars($this) as $k => $v)
             if (substr($k, 0, 4) !== "____")
                 $d[$k] = $v;
+        return $d;
+    }
+    function keys() {
+        $d = [];
+        foreach (array_keys(get_object_vars($this)) as $k)
+            if (substr($k, 0, 4) !== "____")
+                $d[] = $k;
         return $d;
     }
     function make_object() {
@@ -120,5 +158,17 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     }
     function attachments() {
         return $this->____x;
+    }
+    function approve_post() {
+        $this->____post_ok = true;
+    }
+    function post_ok() {
+        return $this->____post_ok;
+    }
+    function set_post_empty() {
+        $this->____post_empty = true;
+    }
+    function post_empty() {
+        return $this->____post_empty;
     }
 }

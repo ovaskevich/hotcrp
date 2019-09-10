@@ -1,7 +1,6 @@
 <?php
 // hotcrpmailer.php -- HotCRP mail template manager
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class HotCRPMailPreparation extends MailPreparation {
     public $paperId = -1;
@@ -9,6 +8,22 @@ class HotCRPMailPreparation extends MailPreparation {
     public $paper_expansions = 0;
     public $combination_type = 0;
     public $fake = false;
+
+    function __construct($conf) {
+        parent::__construct($conf);
+    }
+    function can_merge($p) {
+        return parent::can_merge($p)
+            && $this->combination_type == $p->combination_type
+            && (($this->combination_type == 2
+                 && !$this->paper_expansions
+                 && !$p->paper_expansions)
+                || ($this->conflictType == $p->conflictType
+                    && $this->combination_type != 0
+                    && $this->paperId == $p->paperId)
+                || ($this->conflictType == $p->conflictType
+                    && $this->to == $p->to));
+    }
 }
 
 class HotCRPMailer extends Mailer {
@@ -27,10 +42,11 @@ class HotCRPMailer extends Mailer {
     protected $_tagger = null;
     protected $_statistics = null;
     protected $_tagless = array();
-    protected $_tags = array();
 
 
-    function __construct($recipient = null, $row = null, $rest = array()) {
+    function __construct(Conf $conf, $recipient = null, $row = null,
+                         $rest = array()) {
+        parent::__construct($conf);
         $this->reset($recipient, $row, $rest);
         if (isset($rest["combination_type"]))
             $this->combination_type = $rest["combination_type"];
@@ -47,6 +63,7 @@ class HotCRPMailer extends Mailer {
         foreach (array("requester", "reviewer", "other") as $k)
             $this->contacts[$k] = get($rest, $k . "_contact");
         $this->row = $row;
+        assert(!$row || $this->row->paperId > 0);
         foreach (array("rrow", "reviewNumber", "comment_row", "newrev_since") as $k)
             $this->$k = get($rest, $k);
         if (get($rest, "rrow_unsubmitted"))
@@ -61,7 +78,7 @@ class HotCRPMailer extends Mailer {
         else if (!$this->contacts["reviewer"] && $this->comment_row && get($this->comment_row, "reviewEmail"))
             $this->contacts["reviewer"] = self::make_reviewer_contact($this->comment_row);
         // Do not put passwords in email that is cc'd elsewhere
-        if ((!$Me || !$Me->privChair || opt("chairHidePasswords"))
+        if ((!$Me || !$Me->privChair || $this->conf->opt("chairHidePasswords"))
             && (get($rest, "cc") || get($rest, "bcc"))
             && (get($rest, "sensitivity") === null || get($rest, "sensitivity") === "display"))
             $this->sensitivity = "high";
@@ -70,12 +87,11 @@ class HotCRPMailer extends Mailer {
 
     // expansion helpers
     private function _expand_reviewer($type, $isbool) {
-        global $Conf;
         if (!($c = $this->contacts["reviewer"]))
             return false;
         if ($this->row
             && $this->rrow
-            && $Conf->is_review_blind($this->rrow)
+            && $this->conf->is_review_blind($this->rrow)
             && !get($this->permissionContact, "privChair")
             && (!($this->permissionContact instanceof Contact)
                 || !$this->permissionContact->can_view_review_identity($this->row, $this->rrow, false))) {
@@ -96,7 +112,6 @@ class HotCRPMailer extends Mailer {
     }
 
     private function get_reviews() {
-        global $Conf;
         if ($this->rrow)
             $rrows = array($this->rrow);
         else {
@@ -105,52 +120,56 @@ class HotCRPMailer extends Mailer {
         }
 
         // save old au_seerev setting, and reset it so authors can see them.
-        if (!($au_seerev = $Conf->au_seerev))
-            $Conf->au_seerev = Conf::AUSEEREV_YES;
+        if (!($au_seerev = $this->conf->au_seerev))
+            $this->conf->au_seerev = Conf::AUSEEREV_YES;
 
         $text = "";
-        $rf = $Conf->review_form();
+        $rf = $this->conf->review_form();
         foreach ($rrows as $rrow)
-            if (($rrow->reviewSubmitted || ($rrow == $this->rrow && $this->rrow_unsubmitted))
+            if (($rrow->reviewSubmitted
+                 || ($rrow == $this->rrow && $this->rrow_unsubmitted))
                 && $this->permissionContact->can_view_review($this->row, $rrow, false)) {
                 if ($text !== "")
-                    $text .= "\n*" . str_repeat(" *", 37) . "\n\n\n";
-                $text .= $rf->pretty_text($this->row, $rrow, $this->permissionContact, $this->no_send, true) . "\n";
+                    $text .= "\n\n*" . str_repeat(" *", 37) . "\n\n\n";
+                $text .= $rf->pretty_text($this->row, $rrow, $this->permissionContact, $this->no_send, true);
             }
 
-        $Conf->au_seerev = $au_seerev;
+        $this->conf->au_seerev = $au_seerev;
         if ($text === "" && $au_seerev == Conf::AUSEEREV_UNLESSINCOMPLETE && !empty($rrows))
             $text = "[Reviews are hidden since you have incomplete reviews of your own.]\n";
         return $text;
     }
 
     private function get_comments($tag) {
-        global $Conf;
         $crows = $this->comment_row ? array($this->comment_row) : $this->row->all_comments();
 
         // save old au_seerev setting, and reset it so authors can see them.
-        if (!($au_seerev = $Conf->au_seerev))
-            $Conf->au_seerev = Conf::AUSEEREV_YES;
+        if (!($au_seerev = $this->conf->au_seerev))
+            $this->conf->au_seerev = Conf::AUSEEREV_YES;
+
+        $crows = array_filter($crows, function ($crow) use ($tag) {
+            return (!$tag || $crow->has_tag($tag))
+                && $this->permissionContact->can_view_comment($this->row, $crow, false);
+        });
 
         $text = "";
-        foreach ($crows as $crow)
-            if ((!$tag || ($crow->commentTags && stripos($crow->commentTags, " $tag ") !== false))
-                && $this->permissionContact->can_view_comment($this->row, $crow, false)) {
-                if ($text === "")
-                    $text .= "Comments\n" . str_repeat("=", 75) . "\n\n";
-                $text .= $crow->unparse_text($this->permissionContact, true) . "\n";
-            }
+        if (count($crows) > 1)
+            $text .= "Comments\n" . str_repeat("=", 75) . "\n";
+        foreach ($crows as $crow) {
+            if ($text !== "")
+                $text .= "\n";
+            $text .= $crow->unparse_text($this->permissionContact, true);
+        }
 
-        $Conf->au_seerev = $au_seerev;
+        $this->conf->au_seerev = $au_seerev;
         return $text;
     }
 
     private function get_new_assignments($contact) {
-        global $Conf;
         $since = "";
         if ($this->newrev_since)
             $since = " and r.timeRequested>=$this->newrev_since";
-        $result = Dbl::qe("select r.paperId, p.title
+        $result = $this->conf->qe("select r.paperId, p.title
                 from PaperReview r join Paper p using (paperId)
                 where r.contactId=" . $contact->contactId . "
                 and r.timeRequested>r.timeRequestNotified$since
@@ -182,180 +201,142 @@ class HotCRPMailer extends Mailer {
         }
     }
 
-    function expandvar_generic($what, $isbool) {
-        global $Conf;
-        if ($what == "%REVIEWDEADLINE%") {
-            if ($this->row && @$this->row->reviewType > 0)
-                $rev = ($this->row->reviewType >= REVIEW_PC ? "pc" : "ext");
-            else if ($this->row && isset($this->row->roles))
-                $rev = ($this->row->roles & Contact::ROLE_PCLIKE ? "pc" : "ext");
-            else if ($Conf->setting("pcrev_soft") != $Conf->setting("extrev_soft")) {
-                if ($isbool && ($Conf->setting("pcrev_soft") > 0) == ($Conf->setting("extrev_soft") > 0))
-                    return $Conf->setting("pcrev_soft") > 0;
+    function kw_deadline($args, $isbool, $uf) {
+        if ($uf->is_review && $args)
+            $args .= "rev_soft";
+        else if ($uf->is_review) {
+            assert(!$this->row || !isset($this->row->roles));
+            if (!$this->row
+                || !($rt = $this->row->review_type($this->permissionContact))) {
+                $p = $this->conf->setting("pcrev_soft");
+                $e = $this->conf->setting("extrev_soft");
+                if ($p == $e)
+                    $rt = REVIEW_EXTERNAL;
+                else if ($isbool && ($p > 0) == ($e > 0))
+                    return $p > 0;
                 else
-                    return ($isbool ? null : $what);
-            } else
-                $rev = "ext";
-            $what = "%DEADLINE(" . $rev . "rev_soft)%";
-        }
-        $len = strlen($what);
-        if ($len > 12 && substr($what, 0, 10) == "%DEADLINE(" && substr($what, $len - 2) == ")%") {
-            $inner = substr($what, 10, $len - 12);
-            if ($isbool)
-                return $Conf->setting($inner) > 0;
-            else
-                return $Conf->printableTimeSetting($inner);
-        }
-
-        if (($what == "%NUMACCEPTED%" || $what == "%NUMSUBMITTED%")
-            && $this->_statistics === null) {
-            $this->_statistics = array(0, 0);
-            $result = Dbl::q("select outcome, count(paperId) from Paper where timeSubmitted>0 group by outcome");
-            while (($row = edb_row($result))) {
-                $this->_statistics[0] += $row[1];
-                if ($row[0] > 0)
-                    $this->_statistics[1] += $row[1];
+                    return null;
             }
+            $args = ($rt >= REVIEW_PC ? "pc" : "ext") . "rev_soft";
         }
-        if ($what == "%NUMSUBMITTED%")
-            return $this->_statistics[0];
-        if ($what == "%NUMACCEPTED%")
-            return $this->_statistics[1];
-
-        if ($what == "%CONTACTDBDESCRIPTION%")
-            return opt("contactdb_description") ? : "HotCRP";
-
-        if (preg_match('/\A%(OTHER|REQUESTER|REVIEWER)(CONTACT|NAME|EMAIL|FIRST|LAST)%\z/', $what, $m)) {
-            if ($m[1] === "REVIEWER") {
-                $x = $this->_expand_reviewer($m[2], $isbool);
-                if ($x !== false || $isbool)
-                    return $x;
-            } else if (($c = $this->contacts[strtolower($m[1])]))
-                return $this->expand_user($c, $m[2]);
-            else if ($isbool)
-                return false;
-        }
-
-        if ($what == "%AUTHORVIEWCAPABILITY%" && opt("disableCapabilities"))
-            return "";
-
-        return self::EXPANDVAR_CONTINUE;
+        if ($args && $isbool)
+            return $this->conf->setting($args) > 0;
+        else if ($args)
+            return $this->conf->printableTimeSetting($args);
+        else
+            return null;
+    }
+    function kw_statistic($args, $isbool, $uf) {
+        if ($this->_statistics === null)
+            $this->_statistics = $this->conf->count_submitted_accepted();
+        return $this->_statistics[$uf->statindex];
+    }
+    function kw_contactdbdescription() {
+        return $this->conf->opt("contactdb_description") ? : "HotCRP";
+    }
+    function kw_reviewercontact($args, $isbool, $uf) {
+        if ($uf->match_data[1] === "REVIEWER") {
+            if (($x = $this->_expand_reviewer($uf->match_data[2], $isbool)) !== false)
+                return $x;
+        } else if (($u = $this->contacts[strtolower($uf->match_data[1])]))
+            return $this->expand_user($u, $uf->match_data[2]);
+        return $isbool ? false : null;
     }
 
-    function expandvar_recipient($what, $isbool) {
-        global $Conf;
-        if ($what == "%NEWASSIGNMENTS%")
-            return $this->get_new_assignments($this->recipient);
+    function kw_newassignments() {
+        return $this->get_new_assignments($this->recipient);
+    }
+    function kw_haspaper() {
+        if ($this->row && $this->row->paperId > 0) {
+            if ($this->preparation)
+                ++$this->preparation->paper_expansions;
+            return true;
+        } else
+            return false;
+    }
 
-        // rest is only there if we have a real paper
-        if (!$this->row || get($this->row, "paperId") <= 0)
-            return self::EXPANDVAR_CONTINUE;
-        if ($this->preparation)
-            ++$this->preparation->paper_expansions;
-
-        if ($what == "%TITLE%")
-            return $this->row->title;
-        if ($what == "%TITLEHINT%") {
-            if (($tw = UnicodeHelper::utf8_abbreviate($this->row->title, 40)))
-                return "\"$tw\"";
-            else
-                return "";
+    function kw_title() {
+        return $this->row->title;
+    }
+    function kw_titlehint() {
+        if (($tw = UnicodeHelper::utf8_abbreviate($this->row->title, 40)))
+            return "\"$tw\"";
+        else
+            return "";
+    }
+    function kw_pid() {
+        return $this->row->paperId;
+    }
+    function kw_authors($args, $isbool) {
+        if (!$this->permissionContact->is_site_contact
+            && !$this->row->has_author($this->permissionContact)
+            && !$this->permissionContact->can_view_authors($this->row, false))
+            return $isbool ? false : "Hidden for blind review";
+        return rtrim($this->row->pretty_text_author_list());
+    }
+    function kw_authorviewcapability($args, $isbool) {
+        if ($this->conf->opt("disableCapabilities"))
+            return "";
+        else if ($this->row
+                 && isset($this->row->capVersion)
+                 && $this->permissionContact->act_author_view($this->row))
+            return "cap=" . $this->conf->capability_text($this->row, "a");
+        else
+            return null;
+    }
+    function kw_tagvalue($args, $isbool, $uf) {
+        $tag = isset($uf->match_data) ? $uf->match_data[1] : $args;
+        $tag = $this->tagger()->check($tag, Tagger::NOVALUE | Tagger::NOPRIVATE);
+        if (!$tag)
+            return null;
+        $value = $this->row->tag_value($tag);
+        if ($isbool)
+            return $value !== false;
+        else if ($value !== false)
+            return (string) $value;
+        else {
+            $this->_tagless[$this->row->paperId] = true;
+            return "(none)";
         }
-        if ($what == "%NUMBER%" || $what == "%PAPER%")
-            return $this->row->paperId;
-        if ($what == "%REVIEWNAME(SUBJECT)%") {
-            if ($this->reviewNumber !== "")
-                return "review #" . $this->reviewNumber;
-            else
-                return "review";
-        }
-        if ($what == "%REVIEWNAME%" || str_starts_with($what, "%REVIEWNAME(")) {
-            if ($this->reviewNumber !== "")
-                return "Review #" . $this->reviewNumber;
-            else
-                return "A review";
-        }
-        if ($what == "%REVIEWNUMBER%")
-            return $this->reviewNumber;
-        if ($what == "%REVIEWID%") {
-            if ($isbool && !$this->rrow)
+    }
+    function kw_paperpc($args, $isbool, $uf) {
+        $cid = get($this->row, $uf->pctype . "ContactId");
+        if ($cid <= 0 || !($u = $this->conf->cached_user_by_id($cid))) {
+            if ($isbool)
                 return false;
+            else if ($this->expansionType == self::EXPAND_EMAIL
+                     || $uf->userx === "EMAIL")
+                return "<none>";
             else
-                return $this->rrow ? $this->rrow->reviewId : "";
+                return "(no $uf->pctype assigned)";
         }
-        if ($what == "%AUTHOR%" || $what == "%AUTHORS%") {
-            if (!$this->permissionContact->is_site_contact
-                && !$this->row->has_author($this->permissionContact)
-                && !$this->permissionContact->can_view_authors($this->row, false))
-                return ($isbool ? false : "Hidden for blind review");
-            return rtrim($this->row->pretty_text_author_list());
-        }
-        if ($what == "%AUTHORVIEWCAPABILITY%" && isset($this->row->capVersion)
-            && $this->permissionContact->act_author_view($this->row))
-            return "cap=" . $Conf->capability_text($this->row, "a");
-        if ($what == "%SHEPHERD%" || $what == "%SHEPHERDNAME%"
-            || $what == "%SHEPHERDEMAIL%") {
-            $pc = $Conf->pc_members();
-            if (defval($this->row, "shepherdContactId") <= 0
-                || !defval($pc, $this->row->shepherdContactId, null)) {
-                if ($isbool)
-                    return false;
-                else if ($this->expansionType == self::EXPAND_EMAIL)
-                    return "<none>";
-                else
-                    return "(no shepherd assigned)";
-            }
-            $shep = $pc[$this->row->shepherdContactId];
-            if ($what == "%SHEPHERD%")
-                return $this->expand_user($shep, "CONTACT");
-            else if ($what == "%SHEPHERDNAME%")
-                return $this->expand_user($shep, "NAME");
-            else
-                return $this->expand_user($shep, "EMAIL");
-        }
-
-        if ($what == "%REVIEWAUTHOR%" && $this->contacts["reviewer"])
-            return $this->_expand_reviewer("CONTACT", $isbool);
-        if ($what == "%REVIEWS%")
-            return $this->get_reviews();
-        if ($what == "%COMMENTS%")
-            return $this->get_comments(null);
-        $len = strlen($what);
-        if ($len > 12 && substr($what, 0, 10) == "%COMMENTS("
-            && substr($what, $len - 2) == ")%") {
-            if (($t = $this->tagger()->check(substr($what, 10, $len - 12), Tagger::NOVALUE)))
-                return $this->get_comments($t);
-        }
-
-        if (substr($what, 0, 2) == "%#" && substr($what, $len - 1) == "%") {
-            $what = "%TAGVALUE(" . substr($what, 2, $len - 3) . ")%";
-            $len = strlen($what);
-        }
-        if ($len > 12 && substr($what, 0, 10) == "%TAGVALUE("
-            && substr($what, $len - 2) == ")%") {
-            if (($t = $this->tagger()->check(substr($what, 10, $len - 12), Tagger::NOVALUE | Tagger::NOPRIVATE))) {
-                if (!isset($this->_tags[$t])) {
-                    $this->_tags[$t] = array();
-                    $result = Dbl::qe("select paperId, tagIndex from PaperTag where tag=?", $t);
-                    while (($row = edb_row($result)))
-                        $this->_tags[$t][$row[0]] = $row[1];
-                    Dbl::free($result);
-                }
-                $tv = defval($this->_tags[$t], $this->row->paperId);
-                if ($isbool)
-                    return $tv !== null;
-                else if ($tv !== null)
-                    return $tv;
-                else {
-                    $this->_tagless[$this->row->paperId] = true;
-                    return "(none)";
-                }
-            }
-        }
-
-        if ($this->preparation)
-            --$this->preparation->paper_expansions;
-        return self::EXPANDVAR_CONTINUE;
+        return $this->expand_user($u, $uf->userx);
+    }
+    function kw_reviewname($args) {
+        $s = $args === "SUBJECT";
+        if ($this->reviewNumber !== "")
+            return ($s ? "review #" : "Review #") . $this->reviewNumber;
+        else
+            return ($s ? "review" : "A review");
+    }
+    function kw_reviewnumber() {
+        return $this->reviewNumber;
+    }
+    function kw_reviewid($args, $isbool) {
+        if ($isbool && !$this->rrow)
+            return false;
+        else
+            return $this->rrow ? $this->rrow->reviewId : "";
+    }
+    function kw_reviews() {
+        return $this->get_reviews();
+    }
+    function kw_comments($args, $isbool) {
+        $tag = null;
+        if ($args !== ""
+            && !($tag = $this->tagger()->check($args, Tagger::NOVALUE)))
+            return null;
+        return $this->get_comments($tag);
     }
 
 
@@ -386,27 +367,13 @@ class HotCRPMailer extends Mailer {
     }
 
     function create_preparation() {
-        $prep = new HotCRPMailPreparation;
+        $prep = new HotCRPMailPreparation($this->conf);
         if ($this->row && get($this->row, "paperId") > 0) {
             $prep->paperId = $this->row->paperId;
             $prep->conflictType = $this->row->has_author($this->recipient);
         }
         $prep->combination_type = $this->combination_type;
         return $prep;
-    }
-
-    static function preparation_differs($prep1, $prep2) {
-        if (parent::preparation_differs($prep1, $prep2)
-            || $prep1->combination_type != $prep2->combination_type)
-            return true;
-        // allow cross-paper combination in `combination_type 2` (e.g. "pc")
-        if ($prep1->combination_type == 2 && !$prep1->paper_expansions && !$prep2->paper_expansions)
-            return false;
-        return (($prep1->paperId != $prep2->paperId
-                 || $prep1->combination_type == 0)
-                && (count($prep1->to) != 1 || count($prep2->to) != 1
-                    || $prep1->to[0] !== $prep2->to[0]))
-            || $prep1->conflictType != $prep2->conflictType;
     }
 
 
@@ -417,7 +384,7 @@ class HotCRPMailer extends Mailer {
     static function prepare_to($recipient, $template, $row, $rest = array()) {
         if (defval($recipient, "disabled"))
             return null;
-        $mailer = new HotCRPMailer($recipient, $row, $rest);
+        $mailer = new HotCRPMailer($recipient->conf, $recipient, $row, $rest);
         if (($checkf = get($rest, "check_function"))
             && !call_user_func($checkf, $recipient, $mailer->row, $mailer->rrow))
             return null;
@@ -426,30 +393,16 @@ class HotCRPMailer extends Mailer {
 
     static function send_to($recipient, $template, $row, $rest = array()) {
         if (($prep = self::prepare_to($recipient, $template, $row, $rest)))
-            self::send_preparation($prep);
-    }
-
-    static function send_combined_preparations($preps) {
-        $last_p = null;
-        foreach ($preps as $p)
-            if ($last_p && !self::preparation_differs($last_p, $p))
-                self::merge_preparation_to($last_p, $p);
-            else {
-                if ($last_p)
-                    self::send_preparation($last_p);
-                $last_p = $p;
-            }
-        if ($last_p)
-            self::send_preparation($last_p);
+            $prep->send();
     }
 
     static function send_contacts($template, $row, $rest = array()) {
-        global $Conf, $Me;
+        global $Me;
 
-        $result = Dbl::qe("select ContactInfo.contactId,
+        $result = $row->conf->qe("select ContactInfo.contactId,
                 firstName, lastName, email, preferredEmail, password,
                 roles, disabled, contactTags,
-                conflictType, 0 myReviewType
+                conflictType, '' myReviewPermissions
                 from ContactInfo join PaperConflict using (contactId)
                 where paperId=$row->paperId and conflictType>=" . CONFLICT_AUTHOR . "
                 group by ContactInfo.contactId");
@@ -459,7 +412,7 @@ class HotCRPMailer extends Mailer {
 
         $preps = $contacts = array();
         $rest["combination_type"] = 1;
-        while ($result && ($contact = Contact::fetch($result))) {
+        while (($contact = Contact::fetch($result, $row->conf))) {
             $row->load_my_contact_info($contact->contactId, $contact);
             if (($p = self::prepare_to($contact, $template, $row, $rest))) {
                 $preps[] = $p;
@@ -476,60 +429,10 @@ class HotCRPMailer extends Mailer {
                 $contactsmsg = pluralx($contacts, "contact") . ", " . commajoin($contacts);
             else
                 $contactsmsg = "contact(s)";
-            $Conf->infoMsg("Sent email to paper #{$row->paperId}’s $contactsmsg$endmsg");
+            $row->conf->infoMsg("Sent email to paper #{$row->paperId}’s $contactsmsg$endmsg");
         }
         return count($contacts) > 0;
     }
-
-    static function send_reviewers($template, $row, $rest = array()) {
-        global $Conf, $Me;
-
-        $result = Dbl::qe("select ContactInfo.contactId,
-                firstName, lastName, email, preferredEmail, password,
-                roles, disabled, contactTags,
-                conflictType, reviewType myReviewType
-                from ContactInfo
-                join PaperReview on (PaperReview.contactId=ContactInfo.contactId and PaperReview.paperId=$row->paperId)
-                left join PaperConflict on (PaperConflict.contactId=ContactInfo.contactId and PaperConflict.paperId=$row->paperId)
-                group by ContactInfo.contactId");
-
-        if (!isset($rest["cc"]) && opt("emailCc"))
-            $rest["cc"] = opt("emailCc");
-        else if (!isset($rest["cc"]))
-            $rest["cc"] = Text::user_email_to($Conf->site_contact());
-
-        // must set the current conflict type in $row for each contact
-        $contact_info_map = $row->replace_contact_info_map(null);
-
-        $preps = $contacts = array();
-        while ($result && ($contact = Contact::fetch($result))) {
-            $row->load_my_contact_info($contact->contactId, $contact);
-            $rest["combination_type"] = $contact->can_view_review_identity($row, null, true) ? 1 : 0;
-            if (($p = self::prepare_to($contact, $template, $row, $rest))) {
-                $preps[] = $p;
-                $contacts[] = Text::user_html($contact);
-            }
-        }
-        self::send_combined_preparations($preps);
-
-        $row->replace_contact_info_map($contact_info_map);
-        if ($Me->allow_administer($row) && !$row->has_author($Me)
-            && count($contacts)) {
-            $endmsg = (isset($rest["infoMsg"]) ? ", " . $rest["infoMsg"] : ".");
-            $Conf->infoMsg("Sent email to paper #{$row->paperId}’s " . pluralx($contacts, "reviewer") . ", " . commajoin($contacts) . $endmsg);
-        }
-    }
-
-    static function send_manager($template, $row, $rest = array()) {
-        global $Conf;
-        $rest["combination_type"] = 2;
-        if ($row && $row->managerContactId
-            && ($c = $Conf->user_by_id($row->managerContactId)))
-            self::send_to($c, $template, $row, $rest);
-        else
-            self::send_to($Conf->site_contact(), $template, $row, $rest);
-    }
-
 }
 
 // load mail templates, including local ones if any

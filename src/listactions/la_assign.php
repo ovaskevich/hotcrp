@@ -1,7 +1,6 @@
 <?php
 // listactions/la_assign.php -- HotCRP helper classes for list actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Assign_ListAction extends ListAction {
     function allow(Contact $user) {
@@ -41,8 +40,8 @@ if (afn === "lead" || afn === "shepherd") {
                           ["class" => "want-focus js-submit-action-info-assign"])
             . '<span class="fx"> &nbsp;<span class="js-assign-for">for</span> &nbsp;'
             . Ht::select("markpc", [], 0, ["class" => "need-pcselector", "data-pcselector-selected" => $pl->qreq->markpc])
-            . "</span> &nbsp;" . Ht::submit("fn", "Go", ["value" => "assign"]),
-            ["linelink-class" => "foldc", "linelink-data-fold" => 1]];
+            . "</span> &nbsp;" . Ht::submit("fn", "Go", ["value" => "assign", "class" => "btn uix js-submit-mark"]),
+            ["linelink-class" => "has-fold foldc"]];
     }
     function run(Contact $user, $qreq, $ssel) {
         $mt = $qreq->assignfn;

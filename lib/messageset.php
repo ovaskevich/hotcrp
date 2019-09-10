@@ -1,7 +1,6 @@
 <?php
 // messageset.php -- HotCRP sets of messages by fields
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class MessageSet {
     public $ignore_msgs = false;
@@ -20,9 +19,12 @@ class MessageSet {
     function __construct() {
         $this->clear();
     }
-    function clear() {
+    function clear_messages() {
         $this->errf = $this->msgs = [];
         $this->has_warning = $this->has_error = 0;
+    }
+    function clear() {
+        $this->clear_messages();
     }
 
     function translate_field($src, $dst) {
@@ -97,6 +99,12 @@ class MessageSet {
     function has_messages() {
         return !empty($this->msgs);
     }
+    function problem_status() {
+        if ($this->has_error > 0)
+            return self::ERROR;
+        else
+            return $this->has_warning > 0 ? self::WARNING : self::INFO;
+    }
     function has_error_at($field) {
         $this->canonfield && ($field = $this->canonical_field($field));
         return get($this->errf, $field, 0) > 1;
@@ -104,6 +112,19 @@ class MessageSet {
     function has_problem_at($field) {
         $this->canonfield && ($field = $this->canonical_field($field));
         return get($this->errf, $field, 0) > 0;
+    }
+    function problem_status_at($field) {
+        $this->canonfield && ($field = $this->canonical_field($field));
+        return get($this->errf, $field, 0);
+    }
+    function control_class($field, $rest = "") {
+        $x = $field ? get($this->errf, $field, 0) : 0;
+        if ($x >= self::ERROR)
+            return $rest === "" ? "has-error" : $rest . " has-error";
+        else if ($x === self::WARNING)
+            return $rest === "" ? "has-warning" : $rest . " has-warning";
+        else
+            return $rest;
     }
 
     static private function filter_msgs($ms, $include_fields) {

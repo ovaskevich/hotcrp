@@ -1,7 +1,6 @@
 <?php
 // search/st_paperstatus.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class PaperStatus_SearchTerm extends SearchTerm {
     private $match;
@@ -18,8 +17,12 @@ class PaperStatus_SearchTerm extends SearchTerm {
         }
         if ($fval[0] === "outcome")
             return new Decision_SearchTerm($fval[1]);
-        else
+        else {
+            if ($srch->limit_submitted()
+                && ($fval[0] !== "timeSubmitted" || $fval[1] !== ">0"))
+                $srch->warn("“" . htmlspecialchars("{$sword->keyword}:{$sword->qword}") . "” won’t match because this collection that only contains submitted papers.");
             return new PaperStatus_SearchTerm($fval);
+        }
     }
     function trivial_rights(Contact $user, PaperSearch $srch) {
         return true;

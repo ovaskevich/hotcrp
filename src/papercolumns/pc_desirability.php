@@ -1,29 +1,30 @@
 <?php
 // pc_desirability.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Desirability_PaperColumn extends PaperColumn {
-    function __construct($cj) {
-        parent::__construct($cj);
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
-        if (!$pl->user->privChair)
+        if (!$pl->user->is_manager())
             return false;
         if ($visible)
-            $pl->qopts["desirability"] = 1;
+            $pl->qopts["allReviewerPreference"] = true;
         return true;
     }
     function compare(PaperInfo $a, PaperInfo $b, ListSorter $sorter) {
-        return $b->desirability < $a->desirability ? -1 : ($b->desirability > $a->desirability ? 1 : 0);
+        $ad = $a->desirability();
+        $bd = $b->desirability();
+        return $bd < $ad ? -1 : ($bd > $ad ? 1 : 0);
     }
     function header(PaperList $pl, $is_text) {
         return "Desirability";
     }
     function content(PaperList $pl, PaperInfo $row) {
-        return htmlspecialchars($this->text($pl, $row));
+        return str_replace("-", "−" /* U+2122 */, (string) $row->desirability());
     }
     function text(PaperList $pl, PaperInfo $row) {
-        return get($row, "desirability") + 0;
+        return $row->desirability();
     }
 }

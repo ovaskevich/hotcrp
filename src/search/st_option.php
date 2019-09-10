@@ -1,7 +1,6 @@
 <?php
 // search/st_option.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class OptionMatcher {
     public $option;
@@ -47,7 +46,7 @@ class OptionMatcher {
     }
     function exec(PaperInfo $prow, Contact $user) {
         $ov = null;
-        if ($user->can_view_paper_option($prow, $this->option, true))
+        if ($user->can_view_paper_option($prow, $this->option))
             $ov = $prow->option($this->option->id);
         if (!$this->kind) {
             if (!$ov)
@@ -88,7 +87,7 @@ class Option_SearchTerm extends SearchTerm {
         $f = $conf->find_all_fields($keyword);
         if (count($f) == 1 && $f[0] instanceof PaperOption)
             return (object) [
-                "name" => $keyword, "parser" => "Option_SearchTerm::parse",
+                "name" => $keyword, "parse_callback" => "Option_SearchTerm::parse",
                 "has" => "yes"
             ];
         else
@@ -133,49 +132,33 @@ class Option_SearchTerm extends SearchTerm {
         // Conf::msg_debugt(var_export($omatches, true));
         if (!empty($omatches)) {
             foreach ($omatches as $o) {
-                // selectors handle “yes”, “”, and “no” specially
                 if ($o->has_selector()) {
-                    $xval = array();
-                    if ($oval === "") {
-                        foreach ($o->selector as $k => $v)
-                            if (strcasecmp($v, "yes") == 0)
-                                $xval[$k] = $v;
-                        if (count($xval) == 0)
-                            $xval = $o->selector;
-                    } else
-                        $xval = Text::simple_search($oval, $o->selector);
-                    if (empty($xval))
-                        $warn[] = "“" . htmlspecialchars($oval) . "” doesn’t match any " . htmlspecialchars($oname) . " values.";
-                    else if (count($xval) == 1) {
-                        reset($xval);
-                        $qo[] = new OptionMatcher($o, $ocompar, key($xval));
-                    } else if ($ocompar !== "=" && $ocompar !== "!=")
-                        $warn[] = "Submission option “" . htmlspecialchars("$oname:$oval") . "” matches multiple values, can’t use " . htmlspecialchars($ocompar) . ".";
+                    $x = $o->parse_selector_search($oname, $ocompar, $oval);
+                    if (is_string($x))
+                        $warn[] = $x;
                     else
-                        $qo[] = new OptionMatcher($o, $ocompar, array_keys($xval));
-                    continue;
-                }
-
-                if ($oval === "" || $oval === "yes")
-                    $qo[] = new OptionMatcher($o, "!=", null);
-                else if ($oval === "no")
-                    $qo[] = new OptionMatcher($o, "=", null);
-                else if ($o->type === "numeric") {
-                    if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m))
-                        $qo[] = new OptionMatcher($o, $ocompar, $m[1]);
-                    else
-                        $warn[] = "Submission option “" . htmlspecialchars($o->title) . "” takes integer values.";
-                } else if ($o->type === "text") {
-                    $qo[] = new OptionMatcher($o, "~=", $oval, "text");
-                } else if ($o->has_attachments()) {
-                    if ($oval === "any")
+                        $qo[] = $x;
+                } else {
+                    if ($oval === "" || $oval === "yes")
                         $qo[] = new OptionMatcher($o, "!=", null);
-                    else if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m))
-                        $qo[] = new OptionMatcher($o, $ocompar, $m[1], "attachment-count");
-                    else
-                        $qo[] = new OptionMatcher($o, "~=", $oval, "attachment-name");
-                } else
-                    continue;
+                    else if ($oval === "no")
+                        $qo[] = new OptionMatcher($o, "=", null);
+                    else if ($o->type === "numeric") {
+                        if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m))
+                            $qo[] = new OptionMatcher($o, $ocompar, $m[1]);
+                        else
+                            $warn[] = "Submission field “" . htmlspecialchars($o->title) . "” takes integer values.";
+                    } else if ($o->type === "text") {
+                        $qo[] = new OptionMatcher($o, "~=", $oval, "text");
+                    } else if ($o->has_attachments()) {
+                        if ($oval === "any")
+                            $qo[] = new OptionMatcher($o, "!=", null);
+                        else if (preg_match('/\A\s*([-+]?\d+)\s*\z/', $oval, $m))
+                            $qo[] = new OptionMatcher($o, $ocompar, $m[1], "attachment-count");
+                        else
+                            $qo[] = new OptionMatcher($o, "~=", $oval, "attachment-name");
+                    }
+                }
             }
         } else if (($ocompar === "=" || $ocompar === "!=") && $oval === "")
             foreach ($conf->paper_opts->option_list() as $o)
@@ -185,7 +168,7 @@ class Option_SearchTerm extends SearchTerm {
                 }
 
         if (empty($qo) && empty($warn))
-            $warn[] = "“" . htmlspecialchars($word) . "” doesn’t match a submission option.";
+            $warn[] = "“" . htmlspecialchars($word) . "” doesn’t match a submission field.";
         return (object) array("os" => $qo, "warn" => $warn, "negate" => strcasecmp($oname, "none") === 0, "value_word" => $oval);
     }
 
@@ -201,5 +184,11 @@ class Option_SearchTerm extends SearchTerm {
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
         return $this->om->exec($row, $srch->user);
+    }
+    function compile_edit_condition(PaperInfo $row, PaperSearch $srch) {
+        if ($this->om->kind)
+            return null;
+        else
+            return (object) ["type" => "option", "id" => $this->om->option->id, "compar" => $this->om->compar, "value" => $this->om->value];
     }
 }

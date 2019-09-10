@@ -1,23 +1,21 @@
 <?php
 // checkupdates.php -- HotCRP update checker helper
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
-if (isset($_REQUEST["text"]) && $_REQUEST["text"])
-    header("Content-Type: text/plain");
-else
-    header("Content-Type: application/json");
+header("Content-Type: " . ($Qreq->text ? "text/plain" : "application/json"));
 
-if ($Me->privChair && check_post() && isset($_REQUEST["ignore"])) {
+if ($Me->privChair && $Qreq->post_ok() && isset($Qreq->ignore)) {
     $when = time() + 86400 * 2;
-    $Conf->qe_raw("insert into Settings (name, value) values ('ignoreupdate_" . sqlq($_REQUEST["ignore"]) . "', $when) on duplicate key update value=$when");
+    $Conf->qe("insert into Settings (name, value) values (?, ?) on duplicate key update value=?", "ignoreupdate_" . $Qreq->ignore, $when, $when);
 }
 
 $messages = array();
-if ($Me->privChair && isset($_REQUEST["data"])
-    && ($data = json_decode($_REQUEST["data"], true))
-    && isset($data["updates"]) && is_array($data["updates"])) {
+if ($Me->privChair
+    && isset($Qreq->data)
+    && ($data = json_decode($Qreq->data, true))
+    && isset($data["updates"])
+    && is_array($data["updates"])) {
     foreach ($data["updates"] as $update) {
         $ok = true;
         if (isset($update["opt"]) && is_array($update["opt"]))
@@ -47,7 +45,7 @@ if ($Me->privChair && isset($_REQUEST["data"])
         if ($errid && $Conf->setting("ignoreupdate_$errid", 0) > time())
             $ok = false;
         if ($ok) {
-            $m = "<div class='xmerror'";
+            $m = "<div class='msg msg-error'";
             if ($errid)
                 $m .= " id='softwareupdate_$errid'";
             $m .= " style='font-size:smaller'><div class='dod'><strong>WARNING: Upgrade your HotCRP installation.</strong>";

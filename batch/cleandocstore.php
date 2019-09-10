@@ -1,19 +1,20 @@
 <?php
 
-$arg = getopt("hn:c:Vm:d", array("help", "name:", "count:", "verbose", "match:", "dry-run"));
-if (isset($arg["c"]) && !isset($arg["count"]))
-    $arg["count"] = $arg["c"];
-if (isset($arg["V"]) && !isset($arg["verbose"]))
-    $arg["verbose"] = $arg["V"];
-if (isset($arg["m"]) && !isset($arg["match"]))
-    $arg["match"] = $arg["m"];
-if (isset($arg["d"]) && !isset($arg["dry-run"]))
-    $arg["dry-run"] = $arg["d"];
+$arg = getopt("hn:c:Vm:du:q", ["help", "name:", "count:", "verbose", "match:", "dry-run", "max-usage:", "quiet", "silent"]);
+foreach (["c" => "count", "V" => "verbose", "m" => "match", "d" => "dry-run",
+          "u" => "max-usage", "q" => "quiet"] as $s => $l) {
+    if (isset($arg[$s]) && !isset($arg[$l]))
+        $arg[$l] = $arg[$s];
+}
+if (isset($arg["silent"]))
+    $arg["quiet"] = false;
 if (isset($arg["h"]) || isset($arg["help"])) {
-    fwrite(STDOUT, "Usage: php batch/cleandocstore.php [-c COUNT] [-V] [-m MATCH] [--dry-run]\n");
+    fwrite(STDOUT, "Usage: php batch/cleandocstore.php [-c COUNT] [-V] [-m MATCH]\n"
+                 . "           [-n|--dry-run] [-u USAGELIMIT]\n");
     exit(0);
-} else if (isset($arg["count"]) && !ctype_digit($arg["count"])) {
-    fwrite(STDERR, "Usage: php batch/cleandocstore.php [-c COUNT] [-V] [-m MATCH] [--dry-run]\n");
+}
+if (isset($arg["count"]) && !ctype_digit($arg["count"])) {
+    fwrite(STDERR, "batch/cleandocstore.php: `-c` expects integer\n");
     exit(1);
 }
 
@@ -87,15 +88,39 @@ class Cleaner {
     }
 }
 
-if (!($dp = $Conf->docstore())) {
-   fwrite(STDERR, "php batch/cleandocstore.php: Conference doesn't use docstore\n");
+$dp = $Conf->docstore();
+if (!$dp) {
+   fwrite(STDERR, "batch/cleandocstore.php: Conference doesn't use docstore\n");
    exit(1);
 }
+preg_match('{\A((?:/[^/%]*(?=/|\z))+)}', $dp, $m);
+$usage_directory = $m[1];
+
 $count = isset($arg["count"]) ? intval($arg["count"]) : 10;
 $verbose = isset($arg["verbose"]);
 $dry_run = isset($arg["dry-run"]);
+$usage_threshold = null;
 if (isset($arg["match"]))
     Cleaner::set_match($arg["match"]);
+
+if (isset($arg["max-usage"])) {
+    if (!is_numeric($arg["max-usage"])
+        || (float) $arg["max-usage"] < 0
+        || (float) $arg["max-usage"] > 1) {
+        fwrite(STDERR, "batch/cleandocstore.php: `-u` expects fraction between 0 and 1\n");
+        exit(1);
+    }
+    $ts = disk_total_space($usage_directory);
+    $fs = disk_free_space($usage_directory);
+    if ($ts === false || $fs === false) {
+        fwrite(STDERR, "$usage_directory: cannot evaluate free space\n");
+        exit(1);
+    }
+    $want_fs = $ts * (1 - (float) $arg["max-usage"]);
+    $usage_threshold = $want_fs - $fs;
+    if (!isset($arg["count"]))
+        $count = 5000;
+}
 
 class Fparts {
     public $components = [];
@@ -195,7 +220,7 @@ class Fparts {
                         return false;
                     $build .= $xext;
                     $text = substr($text, strlen($xext));
-                } else if (preg_match('{\A(\.(?:avi|bin|bz2|csv|docx?|gif|gz|html|jpg|json|md|mp4|pdf|png|pptx?|ps|rtf|smil|svgz?|tar|tex|tiff|txt|webm|xlsx?|xz|zip))}', $text, $m)) {
+                } else if (preg_match('{\A(\.(?:avi|bib|bin|bz2|csv|docx?|gif|gz|html|jpg|json|md|mp4|pdf|png|pptx?|ps|rtf|smil|svgz?|tar|tex|tiff|txt|webm|xlsx?|xz|zip))}', $text, $m)) {
                     $xext = $m[1];
                     $build .= $m[1];
                     $text = substr($text, strlen($m[1]));
@@ -316,7 +341,7 @@ class Fmatch {
     public $fname = "";
     public $algohash;
     public $extension;
-    public $atime;
+    private $_atime;
 
     function is_complete() {
         return $this->algohash !== null;
@@ -352,9 +377,9 @@ class Fmatch {
         $this->idxes = $this->bdirs = [];
     }
     function atime() {
-        if ($this->atime === null)
-            $this->atime = fileatime($this->fname);
-        return $this->atime;
+        if ($this->_atime === null)
+            $this->_atime = fileatime($this->fname);
+        return $this->_atime;
     }
 }
 
@@ -383,10 +408,9 @@ function random_index($di) {
 }
 
 
-$hotcrpdoc = new HotCRPDocument($Conf, DTYPE_SUBMISSION);
-$ndone = $nsuccess = 0;
+$ndone = $nsuccess = $bytesremoved = 0;
 
-while ($count > 0) {
+while ($count > 0 && ($usage_threshold === null || $bytesremoved < $usage_threshold)) {
     $x = [];
     for ($i = 0; $x ? count($x) < 5 && $i < 10 : $i < 10000; ++$i) {
         $fm = $fparts->random_match();
@@ -413,13 +437,15 @@ while ($count > 0) {
                              "mimetype" => Mimetype::type($fm->extension)]);
     $hashalg = $doc->hash_algorithm();
     $ok = false;
+    $size = 0;
     if ($hashalg === false)
         fwrite(STDERR, "{$fm->fname}: unknown hash\n");
     else if (($chash = hash_file($hashalg, $fm->fname, true)) === false)
         fwrite(STDERR, "{$fm->fname}: is unreadable\n");
     else if ($chash !== $doc->binary_hash_data())
         fwrite(STDERR, "{$fm->fname}: incorrect hash\n");
-    else if ($hotcrpdoc->s3_check($doc)) {
+    else if ($doc->check_s3()) {
+        $size = filesize($fm->fname);
         if ($dry_run) {
             if ($verbose)
                 fwrite(STDOUT, "{$fm->fname}: would remove\n");
@@ -434,7 +460,14 @@ while ($count > 0) {
         fwrite(STDERR, "{$fm->fname}: not on S3\n");
     --$count;
     ++$ndone;
-    $nsuccess += $ok ? 1 : 0;
+    if ($ok) {
+        ++$nsuccess;
+        $bytesremoved += $size;
+    }
 }
 
+if ($verbose && $usage_threshold !== null && $bytesremoved >= $usage_threshold)
+    fwrite(STDOUT, $usage_directory . ": free space above threshold\n");
+if (!isset($arg["quiet"]))
+    fwrite(STDOUT, $usage_directory . ": " . ($dry_run ? "would remove " : "removed ") . plural($nsuccess, "file") . ", " . plural($bytesremoved, "byte") . "\n");
 exit($nsuccess && $nsuccess == $ndone ? 0 : 1);

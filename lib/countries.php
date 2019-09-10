@@ -208,25 +208,28 @@ class Countries {
         "us" => "united states of america",
         "usa" => "united states of america");
 
-    public static function selector($name, $country) {
-        $t = "<select name=\"$name\">\n";
-        $t .= "<option";
-        if (!$country)
-            $t .= " selected='selected'";
-        $t .= " value=''>(Select one)</option>\n";
+    static function selector($name, $country, $extra = []) {
+        $sel_country = "";
+        $opts = ["<option" . ($country ? '' : ' selected') . ' value="">(select one)</option>'];
         if (($x = get(self::$synonyms, strtolower($country))))
             $country = $x;
         foreach (self::$list as $c) {
-            $t .= "<option";
             if ($country && !strcasecmp($country, $c)) {
-                $t .= " selected='selected'";
+                $sel_country = $c;
                 $country = null;
             }
-            $t .= ">" . $c . "</option>\n";
+            $opts[] = '<option' . ($sel_country === $c ? ' selected' : '') . ">$c</option>";
         }
-        if ($country)
-            $t .= "<option selected='selected'>" . htmlspecialchars($country) . "</option>\n";
-        return $t . "</select>";
-    }
+        if ($country) {
+            $sel_country = $country;
+            $opts[] = '<option selected>' . htmlspecialchars($country) . '</option>';
+        }
 
+        if (!isset($extra["autocomplete"]))
+            $extra["autocomplete"] = "country-name";
+        if (!isset($extra["data-default-value"]))
+            $extra["data-default-value"] = $sel_country;
+        return "<select name=\"${name}\"" . Ht::extra($extra) . ">\n"
+            . join("\n", $opts) . "</select>";
+    }
 }

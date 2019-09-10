@@ -1,11 +1,10 @@
 <?php
 // pc_pagecount.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class PageCount_PaperColumn extends PaperColumn {
-    function __construct($cj) {
-        parent::__construct($cj);
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
         return $pl->user->can_view_some_pdf();
@@ -14,8 +13,9 @@ class PageCount_PaperColumn extends PaperColumn {
         if (!$user->can_view_pdf($row))
             return null;
         $dtype = DTYPE_SUBMISSION;
-        if ($row->finalPaperStorageId > 0 && $row->outcome > 0
-            && $user->can_view_decision($row, null))
+        if ($row->finalPaperStorageId > 0
+            && $row->outcome > 0
+            && $user->can_view_decision($row))
             $dtype = DTYPE_FINAL;
         $doc = $row->document($dtype);
         return $doc ? $doc->npages() : null;

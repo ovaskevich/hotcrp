@@ -1,16 +1,13 @@
 <?php
 // log.php -- HotCRP action log
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 if (!$Me->is_manager())
     $Me->escape();
 
-$Conf->header("Log", "actionlog", actionBar());
-unset($_GET["forceShow"], $_POST["forceShow"], $_REQUEST["forceShow"]);
-global $Qreq;
-$Qreq = make_qreq();
+$Conf->header("Log", "actionlog");
+unset($Qreq->forceShow, $_GET["forceShow"], $_POST["forceShow"]);
 $Eclass = [];
 $nlinks = 6;
 
@@ -40,10 +37,11 @@ $wheres = array();
 
 $include_pids = null;
 if ($Qreq->p !== "") {
-    $Search = new PaperSearch($Me, array("t" => "all", "q" => $Qreq->p, "allow_deleted" => true));
-    if (count($Search->warnings))
-        $Conf->warnMsg(join("<br />\n", $Search->warnings));
+    $Search = new PaperSearch($Me, ["t" => "all", "q" => $Qreq->p]);
+    $Search->set_allow_deleted(true);
     $include_pids = $Search->paper_ids();
+    if (!empty($Search->warnings))
+        $Conf->warnMsg(join("<br />\n", $Search->warnings));
     if (!empty($include_pids)) {
         $where = array();
         foreach ($include_pids as $p) {
@@ -54,7 +52,7 @@ if ($Qreq->p !== "") {
         $wheres[] = "(" . join(" or ", $where) . ")";
         $include_pids = array_flip($include_pids);
     } else {
-        if (!count($Search->warnings))
+        if (empty($Search->warnings))
             $Conf->warnMsg("No papers match that search.");
         $wheres[] = "false";
     }
@@ -62,8 +60,8 @@ if ($Qreq->p !== "") {
 
 if ($Qreq->acct !== "") {
     $ids = array();
-    $accts = $Qreq->acct;
-    while (($word = PaperSearch::shift_word($accts, $Conf))) {
+    $accts = new SearchSplitter($Qreq->acct);
+    while (($word = $accts->shift()) !== "") {
         $flags = ContactSearch::F_TAG | ContactSearch::F_USER | ContactSearch::F_ALLOW_DELETED;
         if (substr($word, 0, 1) === "\"") {
             $flags |= ContactSearch::F_QUOTED;
@@ -85,7 +83,7 @@ if ($Qreq->acct !== "") {
     if (count($where))
         $wheres[] = "(" . join(" or ", $where) . ")";
     else {
-        $Conf->infoMsg("No accounts match “" . htmlspecialchars($Qreq->acct) . "”.");
+        $Conf->infoMsg("No users match “" . htmlspecialchars($Qreq->acct) . "”.");
         $wheres[] = "false";
     }
 }
@@ -93,10 +91,14 @@ if ($Qreq->acct !== "") {
 if ($Qreq->q !== "") {
     $where = array();
     $str = $Qreq->q;
-    while (($str = ltrim($str)) != "") {
-        preg_match('/^("[^"]+"?|[^"\s]+)/s', $str, $m);
-        $str = substr($str, strlen($m[0]));
-        $where[] = "action like " . Dbl::utf8ci("'%" . sqlq_for_like($m[0]) . "%'");
+    while (($str = ltrim($str)) !== "") {
+        if ($str[0] === '"')
+            preg_match('/\A"([^"]*)"?/', $str, $m);
+        else
+            preg_match('/\A([^"\s]+)/', $str, $m);
+        $str = (string) substr($str, strlen($m[0]));
+        if ($m[1] !== "")
+            $where[] = "action like " . Dbl::utf8ci("'%" . sqlq_for_like($m[1]) . "%'");
     }
     $wheres[] = "(" . join(" or ", $where) . ")";
 }
@@ -117,23 +119,22 @@ class LogRowGenerator {
     private $wheres;
     private $page_size;
     private $delta = 0;
-    private $lower_offset_bound = 0;
-    private $upper_offset_bound = INF;
+    private $lower_offset_bound;
+    private $upper_offset_bound;
     private $rows_offset;
     private $rows_max_offset;
     private $rows;
     private $filter;
     private $page_to_offset;
     private $log_url_base;
+    private $explode_mail = false;
+    private $mail_stash;
 
     function __construct(Conf $conf, $wheres, $page_size) {
         $this->conf = $conf;
         $this->wheres = $wheres;
         $this->page_size = $page_size;
-    }
-
-    function has_filter() {
-        return !!$this->filter;
+        $this->set_filter(null);
     }
 
     function set_filter($filter) {
@@ -142,6 +143,14 @@ class LogRowGenerator {
         $this->lower_offset_bound = 0;
         $this->upper_offset_bound = INF;
         $this->page_to_offset = [];
+    }
+
+    function set_explode_mail($explode_mail) {
+        $this->explode_mail = $explode_mail;
+    }
+
+    function has_filter() {
+        return !!$this->filter;
     }
 
     function page_delta() {
@@ -168,7 +177,7 @@ class LogRowGenerator {
         }
         $offset = ($pageno - 1) * $this->page_size;
         $db_offset = $offset;
-        if ($this->filter && $db_offset !== 0) {
+        if (($this->filter || !$this->explode_mail) && $db_offset !== 0) {
             if (!isset($this->page_to_offset[$pageno])) {
                 $xlimit = min(4 * $this->page_size + $limit, 2000);
                 $xpageno = max($pageno - floor($xlimit / $this->page_size), 1);
@@ -196,11 +205,35 @@ class LogRowGenerator {
             $first_db_offset = $db_offset;
             while ($result && ($row = $result->fetch_object())) {
                 ++$db_offset;
+                if (!$this->explode_mail
+                    && $this->mail_stash
+                    && $this->mail_stash->action === $row->action) {
+                    if ($row->destContactId)
+                        $this->mail_stash->destContactIdArray[] = $row->destContactId;
+                    if ($row->paperId)
+                        $this->mail_stash->paperIdArray[] = $row->paperId;
+                    continue;
+                }
                 if (!$this->filter || call_user_func($this->filter, $row)) {
                     $this->rows[] = $row;
                     ++$n;
-                    if ($this->filter && $n % $this->page_size === 0)
+                    if ($n % $this->page_size === 0)
                         $this->page_to_offset[$pageno + ($n / $this->page_size)] = $db_offset;
+                    if (!$this->explode_mail) {
+                        if (substr($row->action, 0, 11) === "Sent mail #") {
+                            $this->mail_stash = $row;
+                            $row->destContactIdArray = $row->paperIdArray = [];
+                            if ($row->destContactId) {
+                                $row->destContactIdArray[] = $row->destContactId;
+                                $row->destContactId = null;
+                            }
+                            if ($row->paperId) {
+                                $row->paperIdArray[] = $row->paperId;
+                                $row->paperId = null;
+                            }
+                        } else
+                            $this->mail_stash = null;
+                    }
                 }
             }
             Dbl::free($result);
@@ -271,11 +304,11 @@ function searchbar(LogRowGenerator $lrg, $page, $count) {
     else if ($first_timestamp)
         $dplaceholder = $Conf->unparse_time_short($first_timestamp);
 
-    echo Ht::form_div(hoturl("log"), array("method" => "get"));
+    echo Ht::form(hoturl("log"), array("method" => "get"));
     if ($Qreq->forceShow)
         echo Ht::hidden("forceShow", 1);
     echo "<table id=\"searchform\"><tr>
-  <td class='lxcaption", get($Eclass, "q", ""), "'>With <b>any</b> of the words</td>
+  <td class='lxcaption", get($Eclass, "q", ""), "'>Concerning action(s)</td>
   <td class='lentry", get($Eclass, "q", ""), "'>", Ht::entry("q", $Qreq->q, ["size" => 40]),
         "<span class=\"sep\"></span></td>
   <td rowspan='3'>", Ht::submit("search", "Search"), "</td>
@@ -283,7 +316,7 @@ function searchbar(LogRowGenerator $lrg, $page, $count) {
   <td class='lxcaption", get($Eclass, "p", ""), "'>Concerning paper(s)</td>
   <td class='lentry", get($Eclass, "p", ""), "'>", Ht::entry("p", $Qreq->p, ["size" => 40]), "</td>
 </tr><tr>
-  <td class='lxcaption", get($Eclass, "acct", ""), "'>Concerning account(s)</td>
+  <td class='lxcaption", get($Eclass, "acct", ""), "'>Concerning user(s)</td>
   <td class='lentry", get($Eclass, "acct", ""), "'>", Ht::entry("acct", $Qreq->acct, ["size" => 40]), "</td>
 </tr><tr>
   <td class='lxcaption", get($Eclass, "n", ""), "'>Show</td>
@@ -292,7 +325,7 @@ function searchbar(LogRowGenerator $lrg, $page, $count) {
   <td class='lxcaption", get($Eclass, "date"), "'>Starting at</td>
   <td class='lentry", get($Eclass, "date"), "'>", Ht::entry("date", $date, ["size" => 40, "placeholder" => $dplaceholder]), "</td>
 </tr>
-</table></div></form>";
+</table></form>";
 
     if ($page > 1 || $lrg->has_page(2)) {
         $urls = ["q=" . urlencode($Qreq->q)];
@@ -305,7 +338,7 @@ function searchbar(LogRowGenerator $lrg, $page, $count) {
             echo $lrg->page_link_html(1, "<strong>Newest</strong>"), " &nbsp;|&nbsp;&nbsp;";
         echo "</div></td><td><div class='lognavxr'>";
         if ($page > 1)
-            echo $lrg->page_link_html($page - 1, "<strong>" . Ht::img("_.gif", "<-", array("class" => "prev")) . " Newer</strong>");
+            echo $lrg->page_link_html($page - 1, "<strong>" . Icons::ui_linkarrow(3) . "Newer</strong>");
         echo "</div></td><td><div class='lognavdr'>";
         if ($page - $nlinks > 1)
             echo "&nbsp;...";
@@ -318,7 +351,7 @@ function searchbar(LogRowGenerator $lrg, $page, $count) {
             echo "...&nbsp;";
         echo "</div></td><td><div class='lognavx'>";
         if ($lrg->has_page($page + 1))
-            echo $lrg->page_link_html($page + 1, "<strong>Older " . Ht::img("_.gif", "->", array("class" => "next")) . "</strong>");
+            echo $lrg->page_link_html($page + 1, "<strong>Older" . Icons::ui_linkarrow(1) . "</strong>");
         echo "</div></td><td><div class='lognavd'>";
         if ($lrg->has_page($page + $nlinks + 1))
             echo "&nbsp;&nbsp;|&nbsp; ", $lrg->page_link_html("earliest", "<strong>Oldest</strong>");
@@ -331,8 +364,7 @@ $lrg = new LogRowGenerator($Conf, $wheres, $count);
 
 $exclude_pids = $Me->hidden_papers ? : [];
 if ($Me->privChair && $Conf->has_any_manager()) {
-    $result = $Conf->paper_result($Me, ["myConflicts" => true]);
-    foreach (PaperInfo::fetch_all($result, $Me) as $prow)
+    foreach ($Me->paper_set(["myConflicts" => true]) as $prow)
         if (!$Me->allow_administer($prow))
             $exclude_pids[$prow->paperId] = true;
 }
@@ -385,9 +417,8 @@ class LogRowFilter {
 }
 
 if (!$Me->privChair) {
-    $result = $Conf->paper_result($Me, $Conf->check_any_admin_tracks($Me) ? [] : ["myManaged" => true]);
     $good_pids = [];
-    foreach (PaperInfo::fetch_all($result, $Me) as $prow)
+    foreach ($Me->paper_set($Conf->check_any_admin_tracks($Me) ? [] : ["myManaged" => true]) as $prow)
         if ($Me->allow_administer($prow))
             $good_pids[$prow->paperId] = true;
     $lrg->set_filter(new LogRowFilter($Me, $good_pids, true, $include_pids));
@@ -448,24 +479,41 @@ if (!empty($unknown_cids)) {
 }
 
 // render rows
-function render_user(Contact $user = null) {
-    global $Me;
-    if (!$user)
-        return "";
-    else if (!$user->email && $user->disabled === "deleted")
-        return '<del>[deleted user ' . $user->contactId . ']</del>';
-    else {
-        $t = $Me->reviewer_html_for($user);
-        if ($user->disabled === "deleted")
-            $t = "<del>" . $t . " &lt;" . htmlspecialchars($user->email) . "&gt;</del>";
+function render_users($users) {
+    global $Conf, $Me, $count;
+    $all_pc = true;
+    $ts = [];
+    usort($users, "Contact::compare");
+    foreach ($users as $user) {
+        if ($all_pc && (!isset($user->roles) || !($user->roles & Contact::ROLE_PCLIKE)))
+            $all_pc = false;
+        if (!$user->email && $user->disabled === "deleted")
+            return '<del>[deleted user ' . $user->contactId . ']</del>';
         else {
-            $t = '<a href="' . hoturl("profile", "u=" . urlencode($user->email)) . '">' . $t . '</a>';
-            if (!isset($user->roles) || !($user->roles & Contact::ROLE_PCLIKE))
-                $t .= ' &lt;' . htmlspecialchars($user->email) . '&gt;';
-            if (isset($user->roles) && ($rolet = $user->role_html()))
-                $t .= " $rolet";
+            $t = $Me->reviewer_html_for($user);
+            if ($user->disabled === "deleted")
+                $t = "<del>" . $t . " &lt;" . htmlspecialchars($user->email) . "&gt;</del>";
+            else {
+                $t = '<a href="' . hoturl("log", "q=&amp;acct=" . urlencode($user->email)) . '&amp;n=' . $count . '">' . $t . '</a>';
+                if (!isset($user->roles) || !($user->roles & Contact::ROLE_PCLIKE))
+                    $t .= ' &lt;' . htmlspecialchars($user->email) . '&gt;';
+                if (isset($user->roles) && ($rolet = $user->role_html()))
+                    $t .= " $rolet";
+            }
+            $ts[] = $t;
         }
-        return $t;
+    }
+    if (count($ts) <= 3) {
+        return join(", ", $ts);
+    } else {
+        $fmt = $all_pc ? "%d PC users" : "%d users";
+        return '<div class="has-fold foldc"><a href="" class="ui js-foldup">'
+            . expander(null, 0)
+            . '</a>'
+            . '<span class="fn"><a href="" class="ui js-foldup qq">'
+            . sprintf($Conf->_($fmt, count($ts)), count($ts))
+            . '</a></span><span class="fx">' . join(", ", $ts)
+            . '</span></div>';
     }
 }
 
@@ -474,19 +522,31 @@ $has_dest_user = false;
 foreach ($visible_rows as $row) {
     $act = $row->action;
 
-    $t = ['<td class="pl pl_time">' . $Conf->unparse_time_short($row->timestamp) . '</td>'];
+    $t = ['<td class="pl pl_logtime">' . $Conf->unparse_time_short($row->timestamp) . '</td>'];
 
-    $user = $row->contactId ? get($users, $row->contactId) : null;
-    $dest_user = $row->destContactId ? get($users, $row->destContactId) : null;
-    if (!$user && $dest_user)
-        $user = $dest_user;
+    $xusers = $xdest_users = [];
+    if ($row->contactId
+        && ($u = get($users, $row->contactId)))
+        $xusers[] = $u;
+    if ($row->destContactId
+        && ($u = get($users, $row->destContactId)))
+        $xdest_users[] = $u;
+    if (isset($row->destContactIdArray)) {
+        foreach ($row->destContactIdArray as $cid) {
+            if (($u = get($users, $cid)))
+                $xdest_users[] = $u;
+        }
+    }
+    if (empty($xusers) && !empty($xdest_users))
+        $xusers[] = $xdest_users[0];
 
-    $t[] = '<td class="pl pl_name">' . render_user($user) . '</td>';
-    if ($dest_user && $user !== $dest_user) {
-        $t[] = '<td class="pl pl_name">' . render_user($dest_user) . '</td>';
+    if ($xdest_users && $xusers != $xdest_users) {
+        $t[] = '<td class="pl pl_logname">' . render_users($xusers) . '</td>'
+            . '<td class="pl pl_logname">' . render_users($xdest_users) . '</td>';
         $has_dest_user = true;
-    } else
-        $t[] = '<td></td>';
+    } else {
+        $t[] = '<td class="pl pl_logname" colspan="2">' . render_users($xusers) . '</td>';
+    }
 
     // XXX users that aren't in contactId slot
     // if (preg_match(',\A(.*)<([^>]*@[^>]*)>\s*(.*)\z,', $act, $m)) {
@@ -517,11 +577,20 @@ foreach ($visible_rows as $row) {
             $act = $m[4];
         }
     } else if ($row->paperId > 0
-               && (substr($act, 0, 8) === "Updated " || substr($act, 0, 10) === "Submitted " || substr($act, 0, 11) === "Registered ")
+               && (substr($act, 0, 8) === "Updated "
+                   || substr($act, 0, 10) === "Submitted "
+                   || substr($act, 0, 11) === "Registered ")
                && preg_match('/\A(\S+(?: final)?)(.*)\z/', $act, $m)
                && preg_match('/\A(.* )(final|submission)((?:,| |\z).*)\z/', $m[2], $mm)) {
         $at = $m[1] . $mm[1] . "<a href=\"" . hoturl("doc", "p={$row->paperId}&amp;dt={$mm[2]}&amp;at={$row->timestamp}") . "\">{$mm[2]}</a>";
         $act = $mm[3];
+    }
+    if (isset($row->paperIdArray)) {
+        $pids = array_unique($row->paperIdArray);
+        if (count($pids) == 1)
+            $row->paperId = $pids[0];
+        else
+            $row->action .= " (papers " . join(", ", $pids) . ")";
     }
     if (preg_match('/\A(.* |)\(papers ([\d, ]+)\)?\z/', $act, $m)) {
         $at .= htmlspecialchars($m[1])
@@ -533,12 +602,12 @@ foreach ($visible_rows as $row) {
         $at .= htmlspecialchars($act);
     if ($row->paperId)
         $at .= " (<a href=\"" . hoturl("paper", "p=" . urlencode($row->paperId)) . "\">paper " . htmlspecialchars($row->paperId) . "</a>)";
-    $t[] = '<td class="pl pl_act">' . $at . '</td>';
+    $t[] = '<td class="pl pl_logaction">' . $at . '</td>';
     $trs[] = '    <tr class="k' . (count($trs) % 2) . '">' . join("", $t) . "</tr>\n";
 }
 
 if (!$Me->privChair || !empty($exclude_pids)) {
-    echo '<div class="xmsgs-atbody">';
+    echo '<div class="msgs-wide">';
     if (!$Me->privChair)
         $Conf->msg("xinfo", "Only showing your actions and entries for papers you administer.");
     else if (!empty($exclude_pids)
@@ -562,13 +631,12 @@ if (!$Me->privChair || !empty($exclude_pids)) {
 
 searchbar($lrg, $page, $count);
 if (!empty($trs)) {
-    echo '<table class="pltable pltable_full">
-  <thead><tr class="pl_headrow"><th class="pll plh pl_time">Time</th><th class="pll plh pl_name">User</th>';
-    if ($has_dest_user)
-        echo '<th class="pll plh pl_name">Affected user</th>';
-    else
-        echo '<th class="pll plh"></th>';
-    echo '<th class="pll plh pl_act">Action</th></tr></thead>',
+    echo "<table class=\"pltable pltable_full pltable_log\">\n",
+        '  <thead><tr class="pl_headrow">',
+        '<th class="pll plh pl_logtime">Time</th>',
+        '<th class="pll plh pl_logname">User</th>',
+        '<th class="pll plh pl_logname">Affected user</th>',
+        '<th class="pll plh pl_logaction">Action</th></tr></thead>',
         "\n  <tbody class=\"pltable\">\n",
         join("", $trs),
         "  </tbody>\n</table>\n";

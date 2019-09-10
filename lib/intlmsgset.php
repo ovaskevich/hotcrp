@@ -1,7 +1,6 @@
 <?php
 // intlmsg.php -- HotCRP helper functions for message i18n
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class IntlMsg {
     public $context;
@@ -20,12 +19,28 @@ class IntlMsg {
         if (!$this->require)
             return 0;
         $nreq = 0;
-        foreach ($this->require as $req)
+        foreach ($this->require as $req) {
             if (preg_match('/\A\s*\$(\w+)\s*([=!<>]=?|≠|≤|≥)\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*\z/', $req, $m)) {
                 $arg = $this->arg($ms, $args, $m[1]);
-                if ((string) $arg === "" || !CountMatcher::compare((float) $arg, $m[2], (float) $m[3]))
+                if ((string) $arg === ""
+                    || !CountMatcher::compare((float) $arg, $m[2], (float) $m[3]))
                     return false;
                 ++$nreq;
+            } else if (preg_match('/\A\s*\$(\w+)\s*([=!]=?|≠|!?\^=)\s*(\S+)\s*\z/', $req, $m)) {
+                $arg = $this->arg($ms, $args, $m[1]);
+                if ((string) $arg === "")
+                    return false;
+                if ($m[2] === "^=" || $m[2] === "!^=") {
+                    $have = str_starts_with($arg, $m[3]);
+                    $weight = 0.9;
+                } else {
+                    $have = $arg === $m[3];
+                    $weight = 1;
+                }
+                $want = ($m[2] === "=" || $m[2] === "==" || $m[2] === "^=");
+                if ($have !== $want)
+                    return false;
+                $nreq += $weight;
             } else if (preg_match('/\A\s*(|!)\s*\$(\w+)\s*\z/', $req, $m)) {
                 $arg = $this->arg($ms, $args, $m[2]);
                 $bool_arg = (string) $arg !== "" && $arg !== 0;
@@ -33,6 +48,7 @@ class IntlMsg {
                     return false;
                 ++$nreq;
             }
+        }
         return $nreq;
     }
 }
@@ -40,42 +56,68 @@ class IntlMsg {
 class IntlMsgSet {
     private $ims = [];
     private $defs = [];
+    private $_ctx;
+    private $_default_priority;
+
+    function set_default_priority($p) {
+        $this->_default_priority = (float) $p;
+    }
+    function clear_default_priority() {
+        $this->_default_priority = null;
+    }
 
     function add($m, $ctx = null) {
         if (is_string($m))
-            return $this->addj(func_get_args(), null, null);
-        else
-            return $this->addj($m, null, $ctx);
+            $x = $this->addj(func_get_args());
+        else if (!$ctx)
+            $x = $this->addj($m);
+        else {
+            $octx = $this->_ctx;
+            $this->_ctx = $ctx;
+            $x = $this->addj($m);
+            $this->_ctx = $octx;
+        }
+        return $x;
     }
 
-    function addj($m, $defaults = null, $ctx = null) {
+    function addj($m) {
         if (is_associative_array($m))
             $m = (object) $m;
         if (is_object($m) && isset($m->members) && is_array($m->members)) {
+            $octx = $this->_ctx;
             if (isset($m->context) && is_string($m->context))
-                $ctx = ((string) $ctx === "" ? "" : $ctx . "/") . $m->context;
+                $this->_ctx = ((string) $this->_ctx === "" ? "" : $this->_ctx . "/") . $m->context;
             foreach ($m->members as $mm)
-                $this->addj($mm, $ctx);
+                $this->addj($mm);
+            $this->_ctx = $octx;
             return true;
         }
         $im = new IntlMsg;
-        if ($defaults && isset($defaults["priority"]))
-            $im->priority = (float) $defaults["priority"];
+        if ($this->_default_priority !== null)
+            $im->priority = $this->_default_priority;
         if (is_array($m)) {
-            $i = 0;
             $n = count($m);
-            if ($n >= 3 && is_string($m[2]))
-                $im->context = $m[$i++];
-            if ($n < 2 || !is_string($m[$i]) || !is_string($m[$i+1]))
+            $p = false;
+            while ($n > 0 && !is_string($m[$n - 1])) {
+                if ((is_int($m[$n - 1]) || is_float($m[$n - 1])) && $p === false)
+                    $p = $im->priority = (float) $m[$n - 1];
+                else if (is_array($m[$n - 1]) && $im->require === null)
+                    $im->require = $m[$n - 1];
+                else
+                    return false;
+                --$n;
+            }
+            if ($n < 2 || $n > 3 || !is_string($m[0]) || !is_string($m[1])
+                || ($n === 3 && !is_string($m[2])))
                 return false;
-            $itext = $m[$i++];
-            $im->otext = $m[$i++];
-            if ($i < $n && (is_int($m[$i]) || is_float($m[$i])))
-                $im->priority = $m[$i++];
-            if ($i < $n && is_array($m[$i]))
-                $im->require = $m[$i++];
-            if ($i != $n)
-                return false;
+            if ($n === 3) {
+                $im->context = $m[0];
+                $itext = $m[1];
+                $im->otext = $m[2];
+            } else {
+                $itext = $m[0];
+                $im->otext = $m[1];
+            }
         } else if (is_object($m)) {
             if (isset($m->context) && is_string($m->context))
                 $im->context = $m->context;
@@ -92,13 +134,13 @@ class IntlMsgSet {
             else
                 return false;
             if (isset($m->priority) && (is_float($m->priority) || is_int($m->priority)))
-                $im->priority = $m->priority;
+                $im->priority = (float) $m->priority;
             if (isset($m->require) && is_array($m->require))
                 $im->require = $m->require;
         } else
             return false;
-        if ($ctx)
-            $im->context = $ctx . ($im->context ? "/" . $im->context : "");
+        if ($this->_ctx)
+            $im->context = $this->_ctx . ($im->context ? "/" . $im->context : "");
         $im->next = get($this->ims, $itext);
         $this->ims[$itext] = $im;
         return true;
@@ -114,18 +156,33 @@ class IntlMsgSet {
 
     private function find($context, $itext, $args) {
         $match = null;
-        $matchnreq = 0;
+        $matchnreq = $matchctxlen = 0;
         for ($im = get($this->ims, $itext); $im; $im = $im->next) {
-            if ($context !== null && $im->context !== null && $im->context !== $context)
+            $ctxlen = $nreq = 0;
+            if ($context !== null && $im->context !== null) {
+                if ($context === $im->context)
+                    $ctxlen = 10000;
+                else {
+                    $ctxlen = (int) min(strlen($context), strlen($im->context));
+                    if (strncmp($context, $im->context, $ctxlen) !== 0
+                        || ($ctxlen < strlen($context) && $context[$ctxlen] !== "/")
+                        || ($ctxlen < strlen($im->context) && $im->context[$ctxlen] !== "/"))
+                        continue;
+                }
+            } else if ($context === null && $im->context !== null)
                 continue;
-            $nreq = $im->require ? $im->check_require($this, $args) : 0;
-            if ($nreq !== false
-                && (!$match
-                    || ($im->context === $context && $match->context !== $context)
-                    || ($im->priority > $match->priority)
-                    || ($im->priority == $match->priority && $nreq > $matchnreq))) {
+            if ($im->require
+                && ($nreq = $im->check_require($this, $args)) === false)
+                continue;
+            if (!$match
+                || $im->priority > $match->priority
+                || ($im->priority == $match->priority
+                    && ($ctxlen > $matchctxlen
+                        || ($ctxlen == $matchctxlen
+                            && $nreq > $matchnreq)))) {
                 $match = $im;
                 $matchnreq = $nreq;
+                $matchctxlen = $ctxlen;
             }
         }
         return $match;

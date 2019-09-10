@@ -1,7 +1,6 @@
 <?php
 // src/settings/s_reviewform.php -- HotCRP review form definition page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ReviewForm_SettingParser extends SettingParser {
     private $nrfj;
@@ -205,7 +204,6 @@ class ReviewForm_SettingParser extends SettingParser {
         // clear fields from json storage
         $clearf = Dbl::make_multi_qe_stager($conf->dblink);
         $result = $conf->qe("select * from PaperReview where sfields is not null or tfields is not null");
-        $q = $qv = [];
         while (($rrow = ReviewInfo::fetch($result, $conf))) {
             $cleared = false;
             foreach ($clear_sfields as $f)
@@ -213,23 +211,18 @@ class ReviewForm_SettingParser extends SettingParser {
                     unset($rrow->{$f->id}, $rrow->{$f->short_id});
                     $cleared = true;
                 }
-            if ($cleared) {
-                $q[] = "update PaperReview set sfields=? where paperId=? and reviewId=?";
-                array_push($qv, $rrow->unparse_sfields(), $rrow->paperId, $rrow->reviewId);
-            }
+            if ($cleared)
+                $clearf("update PaperReview set sfields=? where paperId=? and reviewId=?", [$rrow->unparse_sfields(), $rrow->paperId, $rrow->reviewId]);
             $cleared = false;
             foreach ($clear_tfields as $f)
                 if (isset($rrow->{$f->id})) {
                     unset($rrow->{$f->id}, $rrow->{$f->short_id});
                     $cleared = true;
                 }
-            if ($cleared) {
-                $q[] = "update PaperReview set tfields=? where paperId=? and reviewId=?";
-                array_push($qv, $rrow->unparse_tfields(), $rrow->paperId, $rrow->reviewId);
-            }
-            $clearf($q, $qv);
+            if ($cleared)
+                $clearf("update PaperReview set tfields=? where paperId=? and reviewId=?", [$rrow->unparse_tfields(), $rrow->paperId, $rrow->reviewId]);
         }
-        $clearf($q, $qv, true);
+        $clearf(null);
     }
 
     private function clear_nonexisting_options($fields, Conf $conf) {
@@ -246,27 +239,24 @@ class ReviewForm_SettingParser extends SettingParser {
             if ($f->json_storage)
                 $clear_sfields[] = $f;
         }
-        if (!$clear_sfields)
-            return array_keys($updates);
 
-        // clear options from json storage
-        $clearf = Dbl::make_multi_qe_stager($conf->dblink);
-        $result = $conf->qe("select * from PaperReview where sfields is not null");
-        $q = $qv = [];
-        while (($rrow = ReviewInfo::fetch($result, $conf))) {
-            $cleared = false;
-            foreach ($clear_sfields as $f)
-                if (isset($rrow->{$f->id}) && $rrow->{$f->id} > count($f->options)) {
-                    unset($rrow->{$f->id}, $rrow->{$f->short_id});
-                    $cleared = $updates[$f->name] = true;
-                }
-            if ($cleared) {
-                $q[] = "update PaperReview set sfields=? where paperId=? and reviewId=?";
-                array_push($qv, $rrow->unparse_sfields(), $rrow->paperId, $rrow->reviewId);
+        if ($clear_sfields) {
+            // clear options from json storage
+            $clearf = Dbl::make_multi_qe_stager($conf->dblink);
+            $result = $conf->qe("select * from PaperReview where sfields is not null");
+            while (($rrow = ReviewInfo::fetch($result, $conf))) {
+                $cleared = false;
+                foreach ($clear_sfields as $f)
+                    if (isset($rrow->{$f->id}) && $rrow->{$f->id} > count($f->options)) {
+                        unset($rrow->{$f->id}, $rrow->{$f->short_id});
+                        $cleared = $updates[$f->name] = true;
+                    }
+                if ($cleared)
+                    $clearf("update PaperReview set sfields=? where paperId=? and reviewId=?", [$rrow->unparse_sfields(), $rrow->paperId, $rrow->reviewId]);
             }
-            $clearf($q, $qv);
+            $clearf(null);
         }
-        $clearf($q, $qv, true);
+
         return array_keys($updates);
     }
 
@@ -310,12 +300,14 @@ class ReviewForm_SettingParser extends SettingParser {
             $sv->conf->qe("update PaperReview set reviewWordCount=null");
         // assign review ordinals if necessary
         if ($assign_ordinal) {
+            $rrows = [];
             $result = $sv->conf->qe("select * from PaperReview where reviewOrdinal=0 and reviewSubmitted>0");
-            $rrows = edb_orows($result);
+            while (($rrow = ReviewInfo::fetch($result, $sv->conf)))
+                $rrows[] = $rrow;
+            Dbl::free($result);
             $locked = false;
-            $q = $qv = [];
             foreach ($rrows as $rrow)
-                if ($nform->author_nonempty($rrow)) {
+                if ($nform->nonempty_view_score($rrow) >= VIEWSCORE_AUTHORDEC) {
                     if (!$locked) {
                         $sv->conf->qe("lock tables PaperReview write");
                         $locked = true;
@@ -345,11 +337,11 @@ static function render(SettingValues $sv) {
                     $req["$fx$fid"] = $sv->req["$fx$fid"];
         }
 
-    Ht::stash_html('<div id="review_form_caption_description" style="display:none">'
+    Ht::stash_html('<div id="review_form_caption_description" class="hidden">'
       . '<p>Enter an HTML description for the review form.
 Include any guidance you’d like to provide for reviewers.
 Note that complex HTML will not appear on offline review forms.</p></div>'
-      . '<div id="review_form_caption_options" style="display:none">'
+      . '<div id="review_form_caption_options" class="hidden">'
       . '<p>Enter one option per line, numbered starting from 1 (higher numbers
 are better). For example:</p>
 <pre class="entryexample dark">1. Reject
@@ -358,7 +350,7 @@ are better). For example:</p>
 4. Accept</pre>
 <p>Or use consecutive capital letters (lower letters are better).</p>
 <p>Normally scores are mandatory: a review with a missing score cannot be
-submitted. Add a line “<code>0. No entry</code>” to make the score optional.</p></div>');
+submitted. Add a “<code>No entry</code>” line to make the score optional.</p></div>');
 
     $rfj = [];
     foreach ($rf->fmap as $f)

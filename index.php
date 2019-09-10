@@ -1,7 +1,6 @@
 <?php
 // index.php -- HotCRP home page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("lib/navigation.php");
 
@@ -17,8 +16,8 @@ if (Navigation::page() !== "index") {
         include("cacheable.php");
         exit;
     } else {
-        require_once("lib/ht.php");
-        Navigation::redirect_site("index");
+        header("HTTP/1.0 404 Not Found");
+        exit;
     }
 }
 

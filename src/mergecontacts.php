@@ -1,7 +1,6 @@
 <?php
 // mergecontacts.php -- HotCRP helper class for merging users
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class MergeContacts extends MessageSet {
     private $conf;
@@ -38,11 +37,9 @@ class MergeContacts extends MessageSet {
         $cj = (object) ["email" => $this->newu->email];
 
         foreach (["firstName", "lastName", "affiliation", "country",
-                  "collaborators"] as $k)
+                  "collaborators", "phone"] as $k)
             if ($this->replace_contact_string($k))
                 $cj->$k = $this->oldu->$k;
-        if ($this->replace_contact_string("voicePhoneNumber"))
-            $cj->phone = $this->oldu->voicePhoneNumber;
 
         if (($old_data = $this->oldu->data())) {
             $cj->data = (object) [];
@@ -87,21 +84,6 @@ class MergeContacts extends MessageSet {
             $this->conf->qe("insert into PaperConflict (paperId, contactId, conflictType) values ?v on duplicate key update conflictType=greatest(conflictType, values(conflictType))", $qv);
         $this->conf->qe("delete from PaperConflict where contactId=?", $this->oldu->contactId);
 
-        // merge user data via Contact::save_json
-        $cj = $this->basic_user_json();
-
-        if (($this->oldu->roles | $this->newu->roles) != $this->newu->roles)
-            $cj->roles = UserStatus::unparse_roles_json($this->oldu->roles | $this->newu->roles);
-
-        $cj->tags = [];
-        foreach (TagInfo::split_unpack($this->newu->contactTags) as $ti)
-            $cj->tags[] = $ti[0] . "#" . ($ti[1] ? : 0);
-        foreach (TagInfo::split_unpack($this->oldu->contactTags) as $ti)
-            if ($this->newu->tag_value($ti[0]) === false)
-                $cj->tags[] = $ti[0] . "#" . ($ti[1] ? : 0);
-
-        $this->newu->save_json($cj, null, false);
-
         // merge more things
         $this->merge1("ActionLog", "contactId");
         $this->merge1_ignore("TopicInterest", "contactId");
@@ -117,14 +99,31 @@ class MergeContacts extends MessageSet {
         $this->merge1_ignore("PaperWatch", "contactId");
         $this->merge1_ignore("ReviewRating", "contactId");
 
+        $this->conf->qe_raw("unlock tables");
+        Contact::update_rights();
+
+        // merge user data via Contact::save_json
+        $cj = $this->basic_user_json();
+
+        if (($this->oldu->roles | $this->newu->roles) != $this->newu->roles)
+            $cj->roles = UserStatus::unparse_roles_json($this->oldu->roles | $this->newu->roles);
+
+        $cj->tags = [];
+        foreach (TagInfo::split_unpack($this->newu->contactTags) as $ti)
+            $cj->tags[] = $ti[0] . "#" . ($ti[1] ? : 0);
+        foreach (TagInfo::split_unpack($this->oldu->contactTags) as $ti)
+            if ($this->newu->tag_value($ti[0]) === false)
+                $cj->tags[] = $ti[0] . "#" . ($ti[1] ? : 0);
+
+        $us = new UserStatus($this->conf->site_contact(), ["send_email" => false]);
+        $us->save($cj, $this->newu);
+
         // Remove the old contact record
         if (!$this->has_error()) {
             $this->conf->q("insert into DeletedContactInfo set contactId=?, firstName=?, lastName=?, unaccentedName=?, email=?", $this->oldu->contactId, $this->oldu->firstName, $this->oldu->lastName, $this->oldu->unaccentedName, $this->oldu->email);
             if (!$this->conf->q("delete from ContactInfo where contactId=?", $this->oldu->contactId))
                 $this->add_error($this->conf->db_error_html(true));
         }
-
-        $this->conf->qe_raw("unlock tables");
     }
 
     function run() {
@@ -133,11 +132,15 @@ class MergeContacts extends MessageSet {
             // both users in database
             $this->merge();
         else {
-            $user_status = new UserStatus(["send_email" => false]);
-            if ($this->oldu->contactId) // new user in contactdb, old user in database
-                $user_status->save($user_status->user_to_json($this->newu), $this->oldu);
-            else                        // old user in contactdb, new user in database
+            $user_status = new UserStatus($this->oldu, ["send_email" => false]);
+            if ($this->oldu->contactId) {
+                // new user in contactdb, old user in database
+                $user_status->user = $this->newu;
+                $user_status->save($user_status->user_json(), $this->oldu);
+            } else {
+                // old user in contactdb, new user in database
                 $user_status->save($this->basic_user_json(), $this->newu);
+            }
             foreach ($user_status->errors() as $e)
                 $this->add_error($e);
         }

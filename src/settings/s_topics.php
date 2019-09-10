@@ -1,60 +1,54 @@
 <?php
 // src/settings/s_topics.php -- HotCRP settings > submission form page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Topics_SettingRenderer {
     static function render(SettingValues $sv) {
         // Topics
         // load topic interests
-        $result = $sv->conf->q_raw("select topicId, if(interest>0,1,0), count(*) from TopicInterest where interest!=0 group by topicId, interest>0");
-        $interests = array();
-        $ninterests = 0;
+        $result = $sv->conf->q_raw("select topicId, interest from TopicInterest where interest!=0");
+        $interests = [];
         while (($row = edb_row($result))) {
             if (!isset($interests[$row[0]]))
-                $interests[$row[0]] = array();
-            $interests[$row[0]][$row[1]] = $row[2];
-            $ninterests += ($row[2] ? 1 : 0);
+                $interests[$row[0]] = [0, 0];
+            $interests[$row[0]][$row[1] > 0] += 1;
         }
+        Dbl::free($result);
 
         echo "<h3 class=\"settings g\">Topics</h3>\n";
-        echo "<p class=\"settingtext\">Enter topics one per line.  Authors select the topics that apply to their papers; PC members use this information to find papers they'll want to review.  To delete a topic, delete its name.</p>\n";
-        echo Ht::hidden("has_topics", 1),
-            "<table id='newtoptable' class='", ($ninterests ? "foldo" : "foldc"), "'>";
-        echo "<tr><th colspan='2'></th><th class='fx'><small>Low</small></th><th class='fx'><small>High</small></th></tr>";
-        $td1 = '<td class="lcaption">Current</td>';
-        foreach ($sv->conf->topic_map() as $tid => $tname) {
-            if ($sv->use_req() && isset($sv->req["top$tid"]))
-                $tname = $sv->req["top$tid"];
-            echo '<tr>', $td1, '<td class="lentry">',
-                Ht::entry("top$tid", $tname, array("size" => 40, "style" => "width:20em", "class" => $sv->has_problem_at("top$tid") ? "setting_error" : null)),
-                '</td>';
+        echo "<p class=\"settingtext\">Authors select the topics that apply to their submissions. PC members can indicate topics they’re interested in or search using the “topic:” keyword.";
+        if ($sv->conf->topic_map())
+            echo " To delete an existing topic, remove its name.";
+        echo "</p>\n", Ht::hidden("has_topics", 1);
 
-            $tinterests = defval($interests, $tid, array());
-            echo '<td class="fx rpentry">', (get($tinterests, 0) ? '<span class="topic-2">' . $tinterests[0] . "</span>" : ""), "</td>",
-                '<td class="fx rpentry">', (get($tinterests, 1) ? '<span class="topic2">' . $tinterests[1] . "</span>" : ""), "</td>";
 
-            if ($td1 !== "<td></td>") {
-                // example search
-                echo "<td class='llentry' style='vertical-align:top' rowspan='40'><div class='f-i'>",
-                    "<div class='f-c'>Example search</div>";
-                $oabbrev = strtolower($tname);
-                if (strstr($oabbrev, " ") !== false)
-                    $oabbrev = "\"$oabbrev\"";
-                echo "“<a href=\"", hoturl("search", "q=topic:" . urlencode($oabbrev)), "\">",
-                    "topic:", htmlspecialchars($oabbrev), "</a>”",
-                    "<div class='hint'>Topic abbreviations are also allowed.</div>";
-                if ($ninterests)
-                    echo "<a class='ui hint fn js-foldup' href=\"#\">Show PC interest counts</a>",
-                        "<a class='ui hint fx js-foldup' href=\"#\">Hide PC interest counts</a>";
-                echo "</div></td>";
+        if ($sv->conf->topic_map()) {
+            echo '<div class="mg has-copy-topics"><table><thead><tr><th style="text-align:left">';
+            if (!empty($interests))
+                echo '<span class="floatright n"># PC interests: </span>';
+            echo '<strong>Current topics</strong></th>';
+            if (!empty($interests))
+                echo '<th class="ccaption">Low</th><th class="ccaption">High</th>';
+            echo '</tr></thead><tbody>';
+            foreach ($sv->conf->topic_map() as $tid => $tname) {
+                if ($sv->use_req() && isset($sv->req["top$tid"]))
+                    $tname = $sv->req["top$tid"];
+                echo '<tr><td class="lentry">',
+                    Ht::entry("top$tid", $tname, ["size" => 80, "class" => "need-autogrow wide" . ($sv->has_problem_at("top$tid") ? " has-error" : "")]),
+                    '</td>';
+                if (!empty($interests)) {
+                    $tinterests = get($interests, $tid, array());
+                    echo '<td class="fx rpentry">', (get($tinterests, 0) ? '<span class="topic-2">' . $tinterests[0] . "</span>" : ""), "</td>",
+                        '<td class="fx rpentry">', (get($tinterests, 1) ? '<span class="topic2">' . $tinterests[1] . "</span>" : ""), "</td>";
+                }
             }
-            echo "</tr>\n";
-            $td1 = "<td></td>";
+            echo '</tbody></table>',
+                Ht::link("Copy current topics to clipboard", "", ["class" => "ui js-settings-copy-topics"]),
+                "</div>\n";
         }
-        echo '<tr><td class="lcaption top">New<br><span class="hint">Enter one topic per line.</span></td><td class="lentry top">',
-            Ht::textarea("topnew", $sv->use_req() ? get($sv->req, "topnew") : "", array("cols" => 40, "rows" => 2, "style" => "width:20em", "class" => ($sv->has_problem_at("topnew") ? "setting_error " : "") . "need-autogrow")),
-            '</td></tr></table>';
+
+        echo '<div class="mg"><strong>New topics</strong> (enter one per line)<br>',
+            Ht::textarea("topnew", $sv->use_req() ? get($sv->req, "topnew") : "", array("cols" => 80, "rows" => 2, "class" => ($sv->has_problem_at("topnew") ? "has-error " : "") . "need-autogrow")), "</div>";
     }
 }
 

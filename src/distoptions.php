@@ -66,7 +66,7 @@ $Opt["dbName"] = "FIXME";
 //   sendmailParam   Extra parameters to be passed to your mailer. The default
 //                   is derived from $Opt["emailSender"]. If your system's
 //                   mailer is not sendmail, you may need to change the
-//                   default value; see src/mailer.php.
+//                   default value; see lib/mailer.php.
 //   internalMailer  Set to true to use HotCRP's replacement for PHP's weirdo
 //                   mail() function, false to use PHP's mail() function.
 //                   Defaults to false on Windows, true elsewhere. A
@@ -196,8 +196,6 @@ $Opt["passwordHmacKey"] = null;
 //                   alphabetically after B (i.e., C or D).
 //   noFooterVersion Set to true to avoid a version comment in footer HTML.
 //   strictJavascript  If true, send Javascript with "use strict".
-//   disableCsv      Set to true if downloaded information files should be
-//                   tab-separated rather than CSV.
 //   hideManager     If set, PC members are not shown paper managers.
 //   disableCapabilities If set, emails to authors will not have a
 //                   token enabling them to view their papers without logging in.

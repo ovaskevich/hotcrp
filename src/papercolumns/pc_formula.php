@@ -1,7 +1,6 @@
 <?php
 // pc_formula.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Formula_PaperColumn extends PaperColumn {
     public $formula;
@@ -11,8 +10,8 @@ class Formula_PaperColumn extends PaperColumn {
     private $results;
     private $override_results;
     private $real_format;
-    function __construct($cj) {
-        parent::__construct($cj);
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
         $this->formula = $cj->formula;
     }
     function completion_name() {
@@ -25,9 +24,8 @@ class Formula_PaperColumn extends PaperColumn {
         return $this->formula->name ? : $this->formula->expression;
     }
     function prepare(PaperList $pl, $visible) {
-        if (!$pl->scoresOk
-            || !$this->formula->check($pl->user)
-            || !$pl->user->can_view_formula($this->formula, $pl->search->limitName == "a"))
+        if (!$this->formula->check($pl->user)
+            || !$pl->user->can_view_formula($this->formula, $pl->search->limit_author()))
             return false;
         $this->formula_function = $this->formula->compile_function();
         if ($visible)
@@ -70,21 +68,29 @@ class Formula_PaperColumn extends PaperColumn {
         $this->results = $this->override_results = [];
         $this->real_format = null;
         $isreal = $this->formula->result_format_is_real();
+        $override_rows = null;
         foreach ($rows as $row) {
             $v = $formulaf($row, null, $pl->user);
             $this->results[$row->paperId] = $v;
             if ($isreal && !$this->real_format && is_float($v)
                 && round($v * 100) % 100 != 0)
                 $this->real_format = "%.2f";
-            if ($row->conflictType > 0 && $pl->user->allow_administer($row)) {
-                $vv = $formulaf($row, null, $pl->user, true);
-                if ($vv !== $v) {
+            if ($row->has_conflict($pl->user)
+                && $pl->user->allow_administer($row))
+                $override_rows[] = $row;
+        }
+        if ($override_rows) {
+            $overrides = $pl->user->add_overrides(Contact::OVERRIDE_CONFLICT);
+            foreach ($override_rows as $row) {
+                $vv = $formulaf($row, null, $pl->user);
+                if ($vv !== $this->results[$row->paperId]) {
                     $this->override_results[$row->paperId] = $vv;
                     if ($isreal && !$this->real_format && is_float($vv)
                         && round($vv * 100) % 100 != 0)
                         $this->real_format = "%.2f";
                 }
             }
+            $pl->user->set_overrides($overrides);
         }
         assert(!!$this->statistics);
     }
@@ -92,18 +98,19 @@ class Formula_PaperColumn extends PaperColumn {
         return $this->formula->unparse_html($x, $this->real_format);
     }
     function content(PaperList $pl, PaperInfo $row) {
-        $v = $this->results[$row->paperId];
+        $v = $vv = $this->results[$row->paperId];
         $t = $this->unparse($v);
         if (isset($this->override_results[$row->paperId])) {
             $vv = $this->override_results[$row->paperId];
             $tt = $this->unparse($vv);
             if (!$this->override_statistics)
                 $this->override_statistics = clone $this->statistics;
-            $this->override_statistics->add($vv);
             if ($t !== $tt)
                 $t = '<span class="fn5">' . $t . '</span><span class="fx5">' . $tt . '</span>';
         }
         $this->statistics->add($v);
+        if ($this->override_statistics)
+            $this->override_statistics->add($vv);
         return $t;
     }
     function text(PaperList $pl, PaperInfo $row) {
@@ -137,17 +144,17 @@ class Formula_PaperColumn extends PaperColumn {
 }
 
 class Formula_PaperColumnFactory {
-    static function make($xfj, Formula $f) {
+    static function make(Formula $f, $xfj) {
         $cj = (array) $xfj;
         $cj["name"] = "formula:" . ($f->formulaId ? $f->name : $f->expression);
         $cj["formula"] = $f;
-        return new Formula_PaperColumn((object) $cj);
+        return new Formula_PaperColumn($f->conf, (object) $cj);
     }
     static function expand($name, Conf $conf, $xfj, $m) {
         $vsbound = $conf->xt_user->permissive_view_score_bound();
         if ($name === "formulas") {
             return array_map(function ($f) use ($xfj) {
-                return Formula_PaperColumnFactory::make($xfj, $f);
+                return Formula_PaperColumnFactory::make($f, $xfj);
             }, array_filter($conf->named_formulas(),
                 function ($f) use ($conf, $vsbound) {
                     return $f->view_score($conf->xt_user) > $vsbound;
@@ -177,7 +184,7 @@ class Formula_PaperColumnFactory {
 
         if ($ff && $ff->check($conf->xt_user)) {
             if ($ff->view_score($conf->xt_user) > $vsbound)
-                return [Formula_PaperColumnFactory::make($xfj, $ff)];
+                return [Formula_PaperColumnFactory::make($ff, $xfj)];
         } else if ($ff && $want_error)
             $conf->xt_factory_error($ff->error_html());
         return null;

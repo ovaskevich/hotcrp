@@ -1,16 +1,18 @@
 <?php
 // graph.php -- HotCRP review preference graph drawing page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 require_once("src/papersearch.php");
 
-$Qreq = make_qreq();
 $Graph = $Qreq->g;
 if (!$Graph
     && preg_match(',\A/(\w+)(/|\z),', Navigation::path(), $m))
     $Graph = $Qreq->g = $m[1];
+if (!isset($Qreq->x) && !isset($Qreq->y) && isset($Qreq->fx) && isset($Qreq->fy)) {
+    $Qreq->x = $Qreq->fx;
+    $Qreq->y = $Qreq->fy;
+}
 
 // collect allowed graphs
 $Graphs = array();
@@ -26,10 +28,10 @@ $GraphSynonym = array("reviewerlameness" => "procrastination");
 if ($Graph && isset($GraphSynonym[$Graph]))
     $Graph = $GraphSynonym[$Graph];
 if (!$Graph || !isset($Graphs[$Graph]))
-    redirectSelf(array("g" => key($Graphs)));
+    SelfHref::redirect($Qreq, ["g" => key($Graphs)]);
 
 // Header and body
-$Conf->header("Graphs", "graphbody", actionBar());
+$Conf->header("Graphs", "graphbody");
 echo Ht::unstash();
 echo $Conf->make_script_file("scripts/d3-hotcrp.min.js", true);
 echo $Conf->make_script_file("scripts/graph.js");
@@ -51,8 +53,8 @@ if ($Graph == "procrastination") {
 function formulas_qrow($i, $q, $s, $errf) {
     if ($q === "all")
         $q = "";
-    $klass = ($errf ? "setting_error " : "") . "hotcrp_searchbox";
-    $t = '<tr><td class="lentry">' . Ht::entry("q$i", $q, array("size" => 40, "placeholder" => "(All)", "class" => $klass));
+    $klass = ($errf ? "has-error " : "") . "papersearch";
+    $t = '<tr><td class="lentry">' . Ht::entry("q$i", $q, array("size" => 40, "placeholder" => "(All)", "class" => $klass, "id" => "q$i"));
     $t .= " <span style=\"padding-left:1em\">Style:</span> &nbsp;" . Ht::select("s$i", array("by-tag" => "by tag", "plain" => "plain", "redtag" => "red", "orangetag" => "orange", "yellowtag" => "yellow", "greentag" => "green", "bluetag" => "blue", "purpletag" => "purple", "graytag" => "gray"), $s !== "" ? $s : "by-tag");
     $t .= ' <span class="nb btnbox aumovebox" style="margin-left:1em"><a href="#" class="ui btn qx row-order-ui moveup" tabindex="-1">'
         . Icons::ui_triangle(0)
@@ -64,7 +66,7 @@ function formulas_qrow($i, $q, $s, $errf) {
 
 if ($Graph == "formula") {
     // derive a sample graph
-    if (!isset($Qreq->fx) || !isset($Qreq->fy)) {
+    if (!isset($Qreq->x) || !isset($Qreq->y)) {
         $all_review_fields = $Conf->all_review_fields();
         $field1 = get($all_review_fields, "overAllMerit");
         $field2 = null;
@@ -73,19 +75,21 @@ if ($Graph == "formula") {
                 $field1 = $f;
             else if ($f->has_options && !$field2 && $field1 != $f)
                 $field2 = $f;
-        unset($Qreq->fx, $Qreq->fy);
+        unset($Qreq->x, $Qreq->y);
         if ($field1)
-            $Qreq->fy = "avg(" . $field1->search_keyword() . ")";
+            $Qreq->y = "avg(" . $field1->search_keyword() . ")";
         if ($field1 && $field2)
-            $Qreq->fx = "avg(" . $field2->search_keyword() . ")";
+            $Qreq->x = "avg(" . $field2->search_keyword() . ")";
         else
-            $Qreq->fx = "pid";
+            $Qreq->x = "pid";
     }
 
     $fg = null;
-    if ($Qreq->fx && $Qreq->fy) {
-        $fg = new FormulaGraph($Me, $Qreq->fx, $Qreq->fy);
-        if (count($fg->error_html))
+    if ($Qreq->x && $Qreq->y) {
+        $fg = new FormulaGraph($Me, $Qreq->x, $Qreq->y);
+        if ($Qreq->xorder)
+            $fg->set_xorder($Qreq->xorder);
+        if (!empty($fg->error_html))
             Conf::msg_error(join("<br/>", $fg->error_html));
     }
 
@@ -141,22 +145,22 @@ if ($Graph == "formula") {
     } else
         echo "<h2>Formulas</h2>\n";
 
-    echo Ht::form_div(hoturl("graph", "g=formula"), array("method" => "get"));
+    echo Ht::form(hoturl("graph", "g=formula"), array("method" => "get"));
     echo '<table>';
     // X axis
-    echo '<tr><td class="lcaption"><label for="fx">X axis</label></td>',
-        '<td class="lentry">', Ht::entry("fx", (string) $Qreq->fx, array("id" => "fx", "size" => 32, "class" => $fg && get($fg->errf, "fx") ? "setting_error" : "")),
+    echo '<tr><td class="lcaption"><label for="x_entry">X axis</label></td>',
+        '<td class="lentry">', Ht::entry("x", (string) $Qreq->x, array("id" => "x_entry", "size" => 32, "class" => $fg && get($fg->errf, "fx") ? "setting_error" : "")),
         '<span class="hint" style="padding-left:2em"><a href="', hoturl("help", "t=formulas"), '">Formula</a> or “search”</span>',
         '</td></tr>';
     // Y axis
-    echo '<tr><td class="lcaption"><label for="fy">Y axis</label></td>',
-        '<td class="lentry" style="padding-bottom:0.8em">', Ht::entry("fy", (string) $Qreq->fy, array("id" => "fy", "size" => 32, "class" => $fg && get($fg->errf, "fy") ? "setting_error" : "")),
+    echo '<tr><td class="lcaption"><label for="y_entry">Y axis</label></td>',
+        '<td class="lentry" style="padding-bottom:0.8em">', Ht::entry("y", (string) $Qreq->y, array("id" => "y_entry", "size" => 32, "class" => $fg && get($fg->errf, "fy") ? "setting_error" : "")),
         '<span class="hint" style="padding-left:2em"><a href="', hoturl("help", "t=formulas"), '">Formula</a> or “cdf”, “count”, “fraction”, “box <em>formula</em>”, “bar <em>formula</em>”</span>',
         '</td></tr>';
     // Series
-    echo '<tr><td class="lcaption"><label for="q">Search</label></td>',
+    echo '<tr><td class="lcaption"><label for="q1">Search</label></td>',
         '<td class="lentry">',
-        '<table><tbody id="qcontainer" class="js-row-order" data-row-template="',
+        '<table class="js-row-order"><tbody id="qcontainer" data-row-template="',
         htmlspecialchars(formulas_qrow('$', "", "by-tag", false)), '">';
     for ($i = 0; $i < count($styles); ++$i)
         echo formulas_qrow($i + 1, $queries[$i], $styles[$i], $fg && get($fg->errf, "q$i"));
@@ -166,7 +170,7 @@ if ($Graph == "formula") {
     echo '</table>';
     echo '<div class="g"></div>';
     echo Ht::submit(null, "Graph");
-    echo '</div></form>';
+    echo '</form>';
 }
 
 

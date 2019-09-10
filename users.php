@@ -1,15 +1,15 @@
 <?php
 // users.php -- HotCRP people listing/editing page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 require_once("src/contactlist.php");
+
 $getaction = "";
-if (isset($_REQUEST["get"]))
-    $getaction = $_REQUEST["get"];
-else if (isset($_REQUEST["getgo"]) && isset($_REQUEST["getaction"]))
-    $getaction = $_REQUEST["getaction"];
+if (isset($Qreq->get))
+    $getaction = $Qreq->get;
+else if (isset($Qreq->getgo) && isset($Qreq->getaction))
+    $getaction = $Qreq->getaction;
 
 
 // list type
@@ -44,21 +44,21 @@ if ($Me->privChair) {
 }
 if (empty($tOpt))
     $Me->escape();
-if (isset($_REQUEST["t"]) && !isset($tOpt[$_REQUEST["t"]])) {
-    if (str_starts_with($_REQUEST["t"], "pc:")
-        && isset($tOpt["#" . substr($_REQUEST["t"], 3)]))
-        $_REQUEST["t"] = "#" . substr($_REQUEST["t"], 3);
-    else if (isset($tOpt["#" . $_REQUEST["t"]]))
-        $_REQUEST["t"] = "#" . $_REQUEST["t"];
-    else if ($_REQUEST["t"] == "#pc")
-        $_REQUEST["t"] = "pc";
+if (isset($Qreq->t) && !isset($tOpt[$Qreq->t])) {
+    if (str_starts_with($Qreq->t, "pc:")
+        && isset($tOpt["#" . substr($Qreq->t, 3)]))
+        $Qreq->t = "#" . substr($Qreq->t, 3);
+    else if (isset($tOpt["#" . $Qreq->t]))
+        $Qreq->t = "#" . $Qreq->t;
+    else if ($Qreq->t == "#pc")
+        $Qreq->t = "pc";
     else {
         Conf::msg_error("Unknown user collection.");
-        unset($_REQUEST["t"]);
+        unset($Qreq->t);
     }
 }
-if (!isset($_REQUEST["t"]))
-    $_REQUEST["t"] = key($tOpt);
+if (!isset($Qreq->t))
+    $Qreq->t = key($tOpt);
 
 
 // paper selection and download actions
@@ -66,33 +66,35 @@ function paperselPredicate($papersel) {
     return "ContactInfo.contactId" . sql_in_numeric_set($papersel);
 }
 
-if (isset($_REQUEST["pap"]) && is_string($_REQUEST["pap"]))
-    $_REQUEST["pap"] = preg_split('/\s+/', $_REQUEST["pap"]);
-if ((isset($_REQUEST["pap"]) && is_array($_REQUEST["pap"]))
-    || ($getaction && !isset($_REQUEST["pap"]))) {
+$Qreq->allow_a("pap");
+if (isset($Qreq->pap) && is_string($Qreq->pap))
+    $Qreq->pap = preg_split('/\s+/', $Qreq->pap);
+if ((isset($Qreq->pap) && is_array($Qreq->pap))
+    || ($getaction && !isset($Qreq->pap))) {
     $allowed_papers = array();
     $pl = new ContactList($Me, true);
     // Ensure that we only select contacts we're allowed to see.
-    if (($rows = $pl->rows($_REQUEST["t"]))) {
+    if (($rows = $pl->rows($Qreq->t))) {
         foreach ($rows as $row)
             $allowed_papers[$row->contactId] = true;
     }
     $papersel = array();
-    if (isset($_REQUEST["pap"])) {
-        foreach ($_REQUEST["pap"] as $p)
+    if (isset($Qreq->pap)) {
+        foreach ($Qreq->pap as $p)
             if (($p = cvtint($p)) > 0 && isset($allowed_papers[$p]))
                 $papersel[] = $p;
     } else
         $papersel = array_keys($allowed_papers);
-    if (count($papersel) == 0)
+    if (empty($papersel))
         unset($papersel);
 }
 
 if ($getaction == "nameemail" && isset($papersel) && $Me->isPC) {
     $result = $Conf->qe_raw("select firstName first, lastName last, email, affiliation from ContactInfo where " . paperselPredicate($papersel) . " order by lastName, firstName, email");
     $people = edb_orows($result);
-    downloadCSV($people, array("first", "last", "email", "affiliation"), "users",
-                array("selection" => true));
+    csv_exit($Conf->make_csvg("users")
+             ->select(["first", "last", "email", "affiliation"])
+             ->add($people));
 }
 
 function urlencode_matches($m) {
@@ -115,7 +117,7 @@ if ($getaction == "pcinfo" && isset($papersel) && $Me->privChair) {
     $has = (object) [];
     foreach ($users as $user) {
         $row = (object) ["first" => $user->firstName, "last" => $user->lastName,
-            "email" => $user->email, "phone" => $user->voicePhoneNumber,
+            "email" => $user->email, "phone" => $user->phone,
             "disabled" => !!$user->disabled, "affiliation" => $user->affiliation,
             "collaborators" => rtrim($user->collaborators)];
         if ($user->preferredEmail && $user->preferredEmail !== $user->email)
@@ -127,13 +129,14 @@ if ($getaction == "pcinfo" && isset($papersel) && $Me->privChair) {
             $row->$k = $i;
         }
         $f = array();
-        if ($user->defaultWatch & (WATCHTYPE_COMMENT << WATCHSHIFT_ON))
+        if ($user->defaultWatch & Contact::WATCH_REVIEW)
             $f[] = "reviews";
-        if (($user->defaultWatch & (WATCHTYPE_COMMENT << WATCHSHIFT_ALLON))
+        if (($user->defaultWatch & Contact::WATCH_REVIEW_ALL)
             && ($user->roles & Contact::ROLE_PCLIKE))
             $f[] = "allreviews";
-        if (($user->defaultWatch & (WATCHTYPE_FINAL_SUBMIT << WATCHSHIFT_ALLON))
-            && ($user->roles & (Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)))
+        if ($user->defaultWatch & Contact::WATCH_REVIEW_MANAGED)
+            $f[] = "managedreviews";
+        if ($user->defaultWatch & Contact::WATCH_FINAL_SUBMIT_ALL)
             $f[] = "allfinal";
         $row->follow = join(",", $f);
         if ($user->roles & (Contact::ROLE_PC | Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) {
@@ -171,7 +174,7 @@ if ($getaction == "pcinfo" && isset($papersel) && $Me->privChair) {
             $selection[] = $k;
         }
     }
-    downloadCSV($people, $header, "pcinfo", array("selection" => $selection));
+    csv_exit($Conf->make_csvg("pcinfo")->select($selection, $header)->add($people));
 }
 
 
@@ -180,29 +183,33 @@ function modify_confirm($j, $ok_message, $ok_message_optional) {
     global $Conf;
     if (get($j, "ok") && get($j, "warnings"))
         $Conf->warnMsg("<div>" . join("</div><div style='margin-top:0.5em'>", $j->warnings) . "</div>");
-    if (get($j, "ok") && $ok_message && (!$ok_message_optional || !get($j, "warnings")))
+    if (get($j, "ok") && $ok_message
+        && (!$ok_message_optional || !get($j, "warnings"))
+        && (!isset($j->users) || !empty($j->users)))
         $Conf->confirmMsg($ok_message);
 }
 
-if ($Me->privChair && @$_REQUEST["modifygo"] && check_post() && isset($papersel)) {
-    if (@$_REQUEST["modifytype"] == "disableaccount")
-        modify_confirm(UserActions::disable($papersel, $Me), "Accounts disabled.", true);
-    else if (@$_REQUEST["modifytype"] == "enableaccount")
-        modify_confirm(UserActions::enable($papersel, $Me), "Accounts enabled.", true);
-    else if (@$_REQUEST["modifytype"] == "resetpassword")
-        modify_confirm(UserActions::reset_password($papersel, $Me), "Passwords reset. <a href=\"" . hoturl_post("users", "t=" . urlencode($_REQUEST["t"]) . "&amp;modifygo=1&amp;modifytype=sendaccount&amp;pap=" . join("+", $papersel)) . "\">Send account information to those accounts</a>", false);
-    else if (@$_REQUEST["modifytype"] == "sendaccount")
-        modify_confirm(UserActions::send_account_info($papersel, $Me), "Account information sent.", false);
-    redirectSelf(array("modifygo" => null, "modifytype" => null));
+if ($Me->privChair && $Qreq->modifygo && $Qreq->post_ok() && isset($papersel)) {
+    if ($Qreq->modifytype == "disableaccount")
+        modify_confirm(UserActions::disable($Me, $papersel), "Accounts disabled.", true);
+    else if ($Qreq->modifytype == "enableaccount")
+        modify_confirm(UserActions::enable($Me, $papersel), "Accounts enabled.", true);
+    else if ($Qreq->modifytype == "resetpassword"
+             && $Me->can_change_password(null))
+        modify_confirm(UserActions::reset_password($Me, $papersel), "Passwords reset. <a href=\"" . hoturl_post("users", "t=" . urlencode($Qreq->t) . "&amp;modifygo=1&amp;modifytype=sendaccount&amp;pap=" . join("+", $papersel)) . "\">Send account information to those accounts</a>", false);
+    else if ($Qreq->modifytype == "sendaccount")
+        modify_confirm(UserActions::send_account_info($Me, $papersel), "Account information sent.", false);
+    unset($Qreq->modifygo, $Qreq->modifytype);
+    SelfHref::redirect($Qreq);
 }
 
-function do_tags() {
+function do_tags($qreq) {
     global $Conf, $Me, $papersel;
     // check tags
     $tagger = new Tagger($Me);
     $t1 = array();
     $errors = array();
-    foreach (preg_split('/[\s,]+/', (string) @$_REQUEST["tag"]) as $t)
+    foreach (preg_split('/[\s,]+/', (string) $qreq->tag) as $t) {
         if ($t === "")
             /* nada */;
         else if (!($t = $tagger->check($t, Tagger::NOPRIVATE)))
@@ -211,6 +218,7 @@ function do_tags() {
             $errors[] = "The “pc” user tag is set automatically for all PC members.";
         else
             $t1[] = $t;
+    }
     if (count($errors))
         return Conf::msg_error(join("<br>", $errors));
     else if (!count($t1))
@@ -220,7 +228,7 @@ function do_tags() {
     Dbl::qe("lock tables ContactInfo write");
     Conf::$no_invalidate_caches = true;
     $users = array();
-    if ($_REQUEST["tagtype"] === "s") {
+    if ($qreq->tagtype === "s") {
         // erase existing tags
         $likes = array();
         $removes = array();
@@ -233,61 +241,61 @@ function do_tags() {
             $users[(int) $cid] = (object) array("id" => (int) $cid, "add_tags" => [], "remove_tags" => $removes);
     }
     // account for request
-    $key = $_REQUEST["tagtype"] === "d" ? "remove_tags" : "add_tags";
+    $key = $qreq->tagtype === "d" ? "remove_tags" : "add_tags";
     foreach ($papersel as $cid) {
         if (!isset($users[(int) $cid]))
             $users[(int) $cid] = (object) array("id" => (int) $cid, "add_tags" => [], "remove_tags" => []);
         $users[(int) $cid]->$key = array_merge($users[(int) $cid]->$key, $t1);
     }
     // apply modifications
+    $us = new UserStatus($Me, ["send_email" => false]);
     foreach ($users as $cid => $cj) {
-        $us = new UserStatus(array("send_email" => false));
-        if (!$us->save($cj))
-            $errors = array_merge($errors, $us->errors());
+        $us->save($cj);
     }
     Dbl::qe("unlock tables");
     Conf::$no_invalidate_caches = false;
     $Conf->invalidate_caches(["pc" => true]);
     // report
-    if (!count($errors)) {
+    if (!$us->has_error()) {
         $Conf->confirmMsg("Tags saved.");
-        redirectSelf(array("tagact" => null, "tag" => null));
+        unset($qreq->tagact, $qreq->tag);
+        SelfHref::redirect($qreq);
     } else
-        Conf::msg_error(join("<br>", $errors));
+        Conf::msg_error($us->errors());
 }
 
-if ($Me->privChair && @$_REQUEST["tagact"] && check_post() && isset($papersel)
-    && preg_match('/\A[ads]\z/', (string) @$_REQUEST["tagtype"]))
-    do_tags();
+if ($Me->privChair && $Qreq->tagact && $Qreq->post_ok() && isset($papersel)
+    && preg_match('/\A[ads]\z/', (string) $Qreq->tagtype))
+    do_tags($Qreq);
 
 
 // set scores to view
-if (isset($_REQUEST["redisplay"])) {
+if (isset($Qreq->redisplay)) {
     $Conf->save_session("uldisplay", "");
     foreach (ContactList::$folds as $key)
-        displayOptionsSet("uldisplay", $key, defval($_REQUEST, "show$key", 0));
+        displayOptionsSet("uldisplay", $key, $Qreq->get("show$key", 0));
     foreach ($Conf->all_review_fields() as $f)
         if ($f->has_options)
-            displayOptionsSet("uldisplay", $f->id, defval($_REQUEST, "show{$f->id}", 0));
+            displayOptionsSet("uldisplay", $f->id, $Qreq->get("show{$f->id}", 0));
 }
-if (isset($_REQUEST["scoresort"]))
-    $_REQUEST["scoresort"] = ListSorter::canonical_short_score_sort($_REQUEST["scoresort"]);
-if (isset($_REQUEST["scoresort"]))
-    $Conf->save_session("scoresort", $_REQUEST["scoresort"]);
+if (isset($Qreq->scoresort))
+    $Qreq->scoresort = ListSorter::canonical_short_score_sort($Qreq->scoresort);
+if (isset($Qreq->scoresort))
+    $Conf->save_session("scoresort", $Qreq->scoresort);
 
 
-if ($_REQUEST["t"] == "pc")
+if ($Qreq->t === "pc")
     $title = "Program committee";
-else if (str_starts_with($_REQUEST["t"], "#"))
-    $title = "#" . substr($_REQUEST["t"], 1) . " program committee";
+else if (str_starts_with($Qreq->t, "#"))
+    $title = "#" . substr($Qreq->t, 1) . " program committee";
 else
     $title = "Users";
-$Conf->header($title, "accounts", actionBar());
+$Conf->header($title, "accounts", ["action_bar" => actionBar("account")]);
 
 
-$pl = new ContactList($Me, true);
-$pl_text = $pl->table_html($_REQUEST["t"], hoturl("users", ["t" => $_REQUEST["t"]]),
-                     $tOpt[$_REQUEST["t"]], 'uldisplay.');
+$pl = new ContactList($Me, true, $Qreq);
+$pl_text = $pl->table_html($Qreq->t, hoturl("users", ["t" => $Qreq->t]),
+                     $tOpt[$Qreq->t], 'uldisplay.');
 
 
 // form
@@ -296,19 +304,19 @@ if (count($tOpt) > 1) {
     echo "<table id='contactsform' class='tablinks1'>
 <tr><td><div class='tlx'><div class='tld1'>";
 
-    echo Ht::form_div(hoturl("users"), array("method" => "get"));
-    if (isset($_REQUEST["sort"]))
-        echo Ht::hidden("sort", $_REQUEST["sort"]);
-    echo Ht::select("t", $tOpt, $_REQUEST["t"], ["class" => "want-focus"]),
-        " &nbsp;", Ht::submit("Go"), "</div></form>";
+    echo Ht::form(hoturl("users"), ["method" => "get"]);
+    if (isset($Qreq->sort))
+        echo Ht::hidden("sort", $Qreq->sort);
+    echo Ht::select("t", $tOpt, $Qreq->t, ["class" => "want-focus"]),
+        " &nbsp;", Ht::submit("Go"), "</form>";
 
     echo "</div><div class='tld2'>";
 
     // Display options
-    echo Ht::form_div(hoturl("users"), array("method" => "get"));
+    echo Ht::form(hoturl("users"), ["method" => "get"]);
     foreach (array("t", "sort") as $x)
-        if (isset($_REQUEST[$x]))
-            echo Ht::hidden($x, $_REQUEST[$x]);
+        if (isset($Qreq[$x]))
+            echo Ht::hidden($x, $Qreq[$x]);
 
     echo "<table><tr><td><strong>Show:</strong> &nbsp;</td>
   <td class='pad'>";
@@ -318,13 +326,13 @@ if (count($tOpt) > 1) {
         if (get($pl->have_folds, $fold) !== null) {
             $k = array_search($fold, ContactList::$folds) + 1;
             echo Ht::checkbox("show$fold", 1, $pl->have_folds[$fold],
-                              ["data-fold-target" => "foldul#$k", "class" => "js-foldup"]),
+                              ["data-fold-target" => "foldul#$k", "class" => "uich js-foldup"]),
                 "&nbsp;", Ht::label($text), "<br />\n";
         }
     echo "</td>";
     if (isset($pl->scoreMax)) {
         echo "<td class='pad'>";
-        $revViewScore = $Me->aggregated_view_score_bound();
+        $revViewScore = $Me->permissive_view_score_bound();
         foreach ($Conf->all_review_fields() as $f)
             if ($f->view_score > $revViewScore && $f->has_options) {
                 $checked = strpos(displayOptionsSet("uldisplay"), $f->id) !== false;
@@ -344,7 +352,7 @@ if (count($tOpt) > 1) {
                        ListSorter::canonical_long_score_sort($Conf->session("scoresort", "A"))),
             "</td></tr>";
     }
-    echo "</table></div></form>";
+    echo "</table></form>";
 
     echo "</div></div></td></tr>\n";
 
@@ -357,19 +365,19 @@ if (count($tOpt) > 1) {
 }
 
 
-if ($Me->privChair && $_REQUEST["t"] == "pc")
-    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new&amp;role=pc") . "' class='btn'>Add PC member</a></p><p>Select a PC member’s name to edit their profile or remove them from the PC.</p>");
-else if ($Me->privChair && $_REQUEST["t"] == "all")
-    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new") . "' class='btn'>Create account</a></p><p>Select a user to edit their profile.  Select " . Ht::img("viewas.png", "[Act as]") . " to view the site as that user would see it.</p>");
+if ($Me->privChair && $Qreq->t == "pc")
+    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new&amp;role=pc") . "' class='btn'>Create accounts</a></p><p>Select a PC member’s name to edit their profile or remove them from the PC.</p>");
+else if ($Me->privChair && $Qreq->t == "all")
+    $Conf->infoMsg("<p><a href='" . hoturl("profile", "u=new") . "' class='btn'>Create accounts</a></p><p>Select a user to edit their profile.  Select " . Ht::img("viewas.png", "[Act as]") . " to view the site as that user would see it.</p>");
 
 
-if (isset($pl->any->sel)) {
-    echo Ht::form(hoturl_post("users", ["t" => $_REQUEST["t"]])), "<div>";
-    if (isset($_REQUEST["sort"]))
-        echo Ht::hidden("sort", $_REQUEST["sort"]);
+if ($pl->any->sel) {
+    echo Ht::form(hoturl_post("users", ["t" => $Qreq->t])), "<div>";
+    if (isset($Qreq->sort))
+        echo Ht::hidden("sort", $Qreq->sort);
 }
 echo $pl_text;
-if (isset($pl->any->sel))
+if ($pl->any->sel)
     echo "</div></form>";
 
 

@@ -1,7 +1,6 @@
 <?php
 // a_preference.php -- HotCRP assignment helper classes
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Preference_AssignmentParser extends AssignmentParser {
     function __construct() {
@@ -88,10 +87,13 @@ class Preference_AssignmentParser extends AssignmentParser {
             return "Missing preference.";
         $ppref = self::parse($pref);
         if ($ppref === null) {
-            if (preg_match('/([+-]?)\s*(\d+)\s*([xyz]?)/i', $pref, $m))
-                return $state->conf->_("“%s” isn’t a valid preference. Did you mean “%s”?", htmlspecialchars($pref), $m[1] . $m[2] . strtoupper($m[3]));
-            else
-                return $state->conf->_("“%s” isn’t a valid preference.", htmlspecialchars($pref));
+            if (preg_match('/([+-]?)\s*(\d+)\s*([xyz]?)/i', $pref, $m)) {
+                $msg = $state->conf->_("“%s” isn’t a valid preference. Did you mean “%s”?", htmlspecialchars($pref), $m[1] . $m[2] . strtoupper($m[3]));
+            } else {
+                $msg = $state->conf->_("“%s” isn’t a valid preference.", htmlspecialchars($pref));
+            }
+            $state->user_error($msg);
+            return false;
         }
 
         foreach (array("expertise", "revexp") as $k)
@@ -106,6 +108,7 @@ class Preference_AssignmentParser extends AssignmentParser {
         $state->remove(array("type" => "pref", "pid" => $prow->paperId, "cid" => $contact->contactId));
         if ($ppref[0] || $ppref[1] !== null)
             $state->add(array("type" => "pref", "pid" => $prow->paperId, "cid" => $contact->contactId, "_pref" => $ppref[0], "_exp" => self::make_exp($ppref[1])));
+        return true;
     }
 }
 
@@ -148,11 +151,11 @@ class Preference_Assigner extends Assigner {
     }
     function execute(AssignmentSet $aset) {
         if (($p = $this->preference_data(false)))
-            $aset->conf->qe("insert into PaperReviewPreference
+            $aset->stage_qe("insert into PaperReviewPreference
                 set paperId=?, contactId=?, preference=?, expertise=?
                 on duplicate key update preference=values(preference), expertise=values(expertise)",
                     $this->pid, $this->cid, $p[0], $p[1]);
         else
-            $aset->conf->qe("delete from PaperReviewPreference where paperId=? and contactId=?", $this->pid, $this->cid);
+            $aset->stage_qe("delete from PaperReviewPreference where paperId=? and contactId=?", $this->pid, $this->cid);
     }
 }

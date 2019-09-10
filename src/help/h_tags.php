@@ -1,7 +1,6 @@
 <?php
 // src/help/h_tags.php -- HotCRP help functions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Tags_HelpTopic {
     private $conf;
@@ -155,7 +154,7 @@ gray.</p>\n";
     function render_examples() {
         echo $this->hth->subhead("Examples");
         echo "<p>Here are some example ways to use tags.</p>\n";
-        $this->hth->echo_topic("tagexamples");
+        $this->hth->render_group("tagexamples");
     }
 
     function render_example_r1reject() {

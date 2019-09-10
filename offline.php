@@ -1,7 +1,6 @@
 <?php
 // offline.php -- HotCRP offline review management page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 if (!$Me->email)
@@ -10,38 +9,37 @@ $rf = $Conf->review_form();
 
 
 // general error messages
-if (defval($_REQUEST, "post") && !count($_POST))
+if ($Qreq->post && $Qreq->post_empty())
     $Conf->post_missing_msg();
 
 
 // download blank review form action
-if (isset($_REQUEST["downloadForm"])) {
+if (isset($Qreq->downloadForm)) {
     $text = $rf->textFormHeader("blank") . $rf->textForm(null, null, $Me, null) . "\n";
     downloadText($text, "review");
 }
 
 
 // upload review form action
-if (isset($_REQUEST["uploadForm"])
-    && file_uploaded($_FILES["uploadedFile"])
-    && check_post()) {
-    $tf = ReviewValues::make_text($rf, file_get_contents($_FILES["uploadedFile"]["tmp_name"]),
-                         $_FILES["uploadedFile"]["name"]);
-    while ($tf->parse_text(req("override")))
+if (isset($Qreq->uploadForm)
+    && $Qreq->has_file("uploadedFile")
+    && $Qreq->post_ok()) {
+    $tf = ReviewValues::make_text($rf, $Qreq->file_contents("uploadedFile"),
+                        $Qreq->file_filename("uploadedFile"));
+    while ($tf->parse_text($Qreq->override))
         $tf->check_and_save($Me, null, null);
     $tf->report();
     // Uploading forms may have completed the reviewer's task; recheck roles.
     Contact::update_rights();
-} else if (isset($_REQUEST["uploadForm"]))
+} else if (isset($Qreq->uploadForm))
     Conf::msg_error("Choose a file first.");
 
 
 // upload tag indexes action
 function saveTagIndexes($tag, $filename, &$settings, &$titles, &$linenos, &$errors) {
-    global $Conf, $Me, $Error;
+    global $Conf, $Me;
 
-    $result = $Me->paper_result(["paperId" => array_keys($settings)]);
-    while (($row = PaperInfo::fetch($result, $Me)))
+    foreach ($Me->paper_set(array_keys($settings)) as $row) {
         if ($settings[$row->paperId] !== null
             && !$Me->can_change_tag($row, $tag, null, 1)) {
             $errors[$linenos[$row->paperId]] = "You cannot rank paper #$row->paperId.";
@@ -49,10 +47,11 @@ function saveTagIndexes($tag, $filename, &$settings, &$titles, &$linenos, &$erro
         } else if ($titles[$row->paperId] !== ""
                    && strcmp($row->title, $titles[$row->paperId]) != 0
                    && strcasecmp($row->title, simplify_whitespace($titles[$row->paperId])) != 0)
-            $errors[$linenos[$row->paperId]] = "Warning: Title doesn’t match";
+            $errors[$linenos[$row->paperId]] = "Warning: Title doesn’t match.";
+    }
 
     if (!$tag)
-        defappend($Error["tags"], "No tag defined");
+        $errors["0tag"] = "Tag missing.";
     else if (count($settings)) {
         $x = array("paper,tag,lineno");
         foreach ($settings as $pid => $value)
@@ -77,23 +76,23 @@ function check_tag_index_line(&$line) {
         return false;
 }
 
-function setTagIndexes() {
-    global $Conf, $Me, $Error;
+function setTagIndexes($qreq) {
+    global $Conf, $Me;
     $filename = null;
-    if (isset($_REQUEST["upload"]) && file_uploaded($_FILES["file"])) {
-        if (($text = file_get_contents($_FILES["file"]["tmp_name"])) === false) {
+    if (isset($qreq->upload) && $qreq->has_file("file")) {
+        if (($text = $qreq->file_contents("file")) === false) {
             Conf::msg_error("Internal error: cannot read file.");
             return;
         }
-        $filename = @$_FILES["file"]["name"];
-    } else if (!($text = defval($_REQUEST, "data"))) {
+        $filename = $qreq->file_filename("file");
+    } else if (!($text = $qreq->data)) {
         Conf::msg_error("Choose a file first.");
         return;
     }
 
     $RealMe = $Me;
     $tagger = new Tagger;
-    if (($tag = defval($_REQUEST, "tag")))
+    if (($tag = $qreq->tag))
         $tag = $tagger->check($tag, Tagger::NOVALUE);
     $curIndex = 0;
     $lineno = 1;
@@ -133,23 +132,24 @@ function setTagIndexes() {
 
     if (count($errors)) {
         ksort($errors);
-        if ($filename)
-            foreach ($errors as $lineno => &$error)
+        foreach ($errors as $lineno => &$error) {
+            if ($filename && $lineno)
                 $error = '<span class="lineno">' . htmlspecialchars($filename) . ':' . $lineno . ':</span> ' . $error;
-        $Error["tags"] = '<div class="parseerr"><p>' . join("</p>\n<p>", $errors) . '</p></div>';
-    }
-    if (isset($Error["tags"]))
-        Conf::msg_error($Error["tags"]);
-    else if (isset($_REQUEST["setvote"]))
+            else if ($filename)
+                $error = '<span class="lineno">' . htmlspecialchars($filename) . ':</span> ' . $error;
+        }
+        Conf::msg_error('<div class="parseerr"><p>' . join("</p>\n<p>", $errors) . '</p></div>');
+    } else if (isset($qreq->setvote)) {
         $Conf->confirmMsg("Votes saved.");
-    else {
+    } else {
         $dtag = $tagger->unparse($tag);
-        $Conf->confirmMsg("Ranking saved.  To view it, <a href='" . hoturl("search", "q=order:" . urlencode($dtag)) . "'>search for “order:{$dtag}”</a>.");
+        $Conf->confirmMsg("Ranking saved.  To view it, <a href='" . hoturl("search", "q=" . urlencode("editsort:#{$dtag}")) . "'>search for “editsort:#{$dtag}”</a>.");
     }
 }
-if ((isset($_REQUEST["setvote"]) || isset($_REQUEST["setrank"]))
-    && $Me->is_reviewer() && check_post())
-    setTagIndexes();
+if ((isset($Qreq->setvote) || isset($Qreq->setrank))
+    && $Me->is_reviewer()
+    && $Qreq->post_ok())
+    setTagIndexes($Qreq);
 
 
 $pastDeadline = !$Conf->time_review(null, $Me->isPC, true);
@@ -159,7 +159,7 @@ if (!$Conf->time_review_open() && !$Me->privChair) {
     go(hoturl("index"));
 }
 
-$Conf->header("Offline reviewing", "offline", actionBar());
+$Conf->header("Offline reviewing", "offline");
 
 if ($Me->is_reviewer()) {
     if (!$Conf->time_review_open())
@@ -191,14 +191,14 @@ echo "</td>\n";
 if ($Me->is_reviewer()) {
     $disabled = ($pastDeadline && !$Me->privChair ? " disabled='disabled'" : "");
     echo "<td><h3>Upload filled-out forms</h3>\n",
-        Ht::form_div(hoturl_post("offline", "uploadForm=1")),
+        Ht::form(hoturl_post("offline", "uploadForm=1")),
         Ht::hidden("postnonempty", 1),
         "<input type='file' name='uploadedFile' accept='text/plain' size='30' $disabled/>&nbsp; ",
         Ht::submit("Go", array("disabled" => !!$disabled));
     if ($pastDeadline && $Me->privChair)
         echo "<br />", Ht::checkbox("override"), "&nbsp;", Ht::label("Override&nbsp;deadlines");
     echo "<br /><span class='hint'><strong>Tip:</strong> You may upload a file containing several forms.</span>";
-    echo "</div></form></td>\n";
+    echo "</form></td>\n";
 }
 echo "</tr>\n";
 
@@ -215,7 +215,7 @@ if ($Conf->setting("tag_rank") && $Me->is_reviewer()) {
 
     $disabled = ($pastDeadline && !$Me->privChair ? " disabled='disabled'" : "");
     echo "<td><h3>Upload ranking file</h3>\n",
-        Ht::form_div(hoturl_post("offline", "setrank=1&amp;tag=%7E$ranktag")),
+        Ht::form(hoturl_post("offline", "setrank=1&amp;tag=%7E$ranktag")),
         Ht::hidden("upload", 1),
         "<input type='file' name='file' accept='text/plain' size='30' $disabled/>&nbsp; ",
         Ht::submit("Go", array("disabled" => !!$disabled));
@@ -223,7 +223,7 @@ if ($Conf->setting("tag_rank") && $Me->is_reviewer()) {
         echo "<br />", Ht::checkbox("override"), "&nbsp;", Ht::label("Override&nbsp;deadlines");
     echo "<br /><span class='hint'><strong>Tip:</strong> Use “<a href='", hoturl("search", "q=" . urlencode("editsort:#~$ranktag")), "'>editsort:#~$ranktag</a>” to drag and drop your ranking.</span>";
     echo "<br /><span class='hint'><strong>Tip:</strong> “<a href='", hoturl("search", "q=order:%7E$ranktag"), "'>order:~$ranktag</a>” searches by your ranking.</span>";
-    echo "</div></form></td>\n";
+    echo "</form></td>\n";
     echo "</tr>\n";
 }
 

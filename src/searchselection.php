@@ -1,7 +1,6 @@
 <?php
 // searchselection.php -- HotCRP helper class for paper selections
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class SearchSelection {
     private $sel = array();
@@ -18,12 +17,11 @@ class SearchSelection {
 
     static function make($qreq, Contact $user = null, $key = null) {
         $ps = null;
-        if ($key !== null && isset($qreq[$key]))
-            $ps = $qreq[$key];
-        else if ($key === null && isset($qreq["p"]))
-            $ps = $qreq["p"];
-        else if ($key === null && isset($qreq["pap"]))
-            $ps = $qreq["pap"];
+        if ($key !== null) {
+            $ps = $qreq->get_a($key);
+        } else {
+            $ps = $qreq->get_a(isset($qreq["p"]) ? "p" : "pap");
+        }
         if ($user && $ps === "all") {
             $ps = (new PaperSearch($user, $qreq))->sorted_paper_ids();
         } else if ($ps === "all")
@@ -34,8 +32,7 @@ class SearchSelection {
     }
 
     static function clear_request(Qrequest $qreq) {
-        unset($_REQUEST["p"], $_REQUEST["pap"], $_GET["p"], $_GET["pap"],
-              $_POST["p"], $_POST["pap"], $qreq->p, $qreq->pap);
+        unset($qreq->p, $qreq->pap, $_GET["p"], $_GET["pap"], $_POST["p"], $_POST["pap"]);
     }
 
     function is_empty() {

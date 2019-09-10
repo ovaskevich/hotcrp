@@ -1,11 +1,10 @@
 <?php
 // a_decision.php -- HotCRP assignment helper classes
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Decision_AssignmentParser extends UserlessAssignmentParser {
     private $remove;
-    function __construct($aj) {
+    function __construct(Conf $conf, $aj) {
         parent::__construct("decision");
         $this->remove = $aj->remove;
     }
@@ -38,6 +37,7 @@ class Decision_AssignmentParser extends UserlessAssignmentParser {
         $state->remove(["type" => "decision", "pid" => $prow->paperId]);
         if (!$this->remove && $dec)
             $state->add(["type" => "decision", "pid" => $prow->paperId, "_decision" => +$dec]);
+        return true;
     }
 }
 
@@ -59,7 +59,6 @@ class Decision_Assigner extends Assigner {
         return "<span class=\"pstat $class\">" . htmlspecialchars($dname) . "</span>";
     }
     function unparse_display(AssignmentSet $aset) {
-        $aset->show_column($this->description);
         $t = [];
         if ($this->item->existed())
             $t[] = '<del>' . self::decision_html($aset->conf, $this->item->get(true, "_decision")) . '</del>';
@@ -74,18 +73,21 @@ class Decision_Assigner extends Assigner {
             $x["decision"] = $aset->conf->decision_name($this->item["_decision"]);
         return $x;
     }
+    function account(AssignmentSet $aset, AssignmentCountSet $deltarev) {
+        $aset->show_column($this->description);
+    }
     function add_locks(AssignmentSet $aset, &$locks) {
         $locks["Paper"] = "write";
     }
     function execute(AssignmentSet $aset) {
         global $Now;
         $dec = $this->item->deleted() ? 0 : $this->item["_decision"];
-        $aset->conf->qe("update Paper set outcome=? where paperId=?", $dec, $this->pid);
+        $aset->stage_qe("update Paper set outcome=? where paperId=?", $dec, $this->pid);
         if ($dec > 0) {
             // accepted papers are always submitted
             $prow = $aset->prow($this->pid);
             if ($prow->timeSubmitted <= 0 && $prow->timeWithdrawn <= 0) {
-                $aset->conf->qe("update Paper set timeSubmitted=$Now where paperId=?", $this->pid);
+                $aset->stage_qe("update Paper set timeSubmitted=? where paperId=?", $Now, $this->pid);
                 $aset->cleanup_callback("papersub", function ($aset, $vals) {
                     $aset->conf->update_papersub_setting(min($vals));
                 }, 1);

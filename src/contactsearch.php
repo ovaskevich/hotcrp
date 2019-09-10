@@ -1,7 +1,6 @@
 <?php
 // papersearch.php -- HotCRP helper class for searching for users
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ContactSearch {
     const F_QUOTED = 1;
@@ -152,8 +151,9 @@ class ContactSearch {
                 $q .= " union select contactId, firstName, lastName, unaccentedName, email, 0 roles from DeletedContactInfo where " . join(" or ", $where);
             $result = $this->conf->qe_raw($q);
             $cs = array();
-            while ($result && ($row = Contact::fetch($result)))
+            while (($row = Contact::fetch($result, $this->conf))) {
                 $cs[$row->contactId] = $row;
+            }
         }
 
         // filter results
@@ -168,12 +168,12 @@ class ContactSearch {
             $ereg = '{\A' . preg_replace('/\\\\\*$/', '(?:[@.].*|)', $ereg) . '\z}i';
         }
 
-        $ids = array();
-        foreach ($cs as $id => $acct)
+        $ids = [];
+        foreach ($cs as $id => $acct) {
             if ($ereg && preg_match($ereg, $acct->email)) {
                 // exact email match trumps all else
                 if (strcasecmp($e, $acct->email) == 0) {
-                    $ids = array($id);
+                    $ids = [$id];
                     break;
                 }
                 $ids[] = $id;
@@ -183,6 +183,13 @@ class ContactSearch {
                 if (Text::match_pregexes($nreg, $n, $acct->unaccentedName))
                     $ids[] = $id;
             }
+        }
+
+        if (count($ids) > 1) {
+            usort($ids, function ($a, $b) use ($cs) {
+                return Contact::compare($cs[$a], $cs[$b]);
+            });
+        }
 
         Dbl::free($result);
         return $ids;

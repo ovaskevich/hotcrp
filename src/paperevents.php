@@ -1,7 +1,6 @@
 <?php
 // paperevents.php -- HotCRP paper events
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class PaperEvent {
     public $prow;
@@ -23,7 +22,6 @@ class PaperEvent {
 class PaperEvents {
     private $conf;
     private $user;
-    private $watch;
     private $all_papers = false;
     private $prows;
 
@@ -35,22 +33,19 @@ class PaperEvents {
     private $crows;
     private $cur_crow;
 
-    function __construct(Contact $user, $watch) {
+    function __construct(Contact $user) {
         $this->conf = $user->conf;
         $this->user = $user;
-        $this->watch = $watch;
 
-        if (($user->privChair
-             || ($user->isPC && $this->conf->setting("pc_seeallrev") > 0))
-            && (!$watch
-                || ($user->defaultWatch & (WATCHTYPE_REVIEW << WATCHSHIFT_ALLON)))) {
+        if (($user->defaultWatch & Contact::WATCH_REVIEW_ALL) != 0
+            || ($user->is_track_manager()
+                && ($user->defaultWatch & Contact::WATCH_REVIEW_MANAGED) != 0)) {
             $this->all_papers = true;
             $this->prows = new PaperInfoSet;
         } else {
             // Papers (perhaps limited to those being watched) whose reviews
             // are viewable.
-            $result = $user->paper_result(["watch" => true, "myWatching" => true]);
-            $this->prows = PaperInfo::fetch_all($result, $user);
+            $this->prows = $user->paper_set(["watch" => true, "myWatching" => true]);
         }
     }
 
@@ -96,9 +91,10 @@ class PaperEvents {
             $rrow = array_pop($this->rrows);
             if (!$rrow)
                 return null;
-            $prow = $this->prows->get($rrow->paperId);
-            if (!$this->user->act_author_view($prow)
-                && (!$this->watch || $prow->watching(WATCHTYPE_REVIEW, $this->user))
+            if (($prow = $this->prows->get($rrow->paperId))
+                && $this->user->can_view_paper($prow)
+                && !$this->user->act_author_view($prow)
+                && $this->user->following_reviews($prow, $prow->watch)
                 && $this->user->can_view_review($prow, $rrow)) {
                 $rrow->eventTime = (int) $rrow->eventTime;
                 return $rrow;
@@ -131,10 +127,11 @@ class PaperEvents {
             $crow = array_pop($this->crows);
             if (!$crow)
                 return null;
-            $prow = $this->prows->get($crow->paperId);
-            if (!$this->user->act_author_view($prow)
-                && (!$this->watch || $prow->watching(WATCHTYPE_REVIEW, $this->user))
-                && $this->user->can_view_comment($prow, $crow, null)) {
+            if (($prow = $this->prows->get($crow->paperId))
+                && $this->user->can_view_paper($prow)
+                && !$this->user->act_author_view($prow)
+                && $this->user->following_reviews($prow, $prow->watch)
+                && $this->user->can_view_comment($prow, $crow)) {
                 $crow->eventTime = (int) $crow->eventTime;
                 return $crow;
             }
@@ -149,9 +146,8 @@ class PaperEvents {
         foreach ($this->crows as $crow)
             if (!$this->prows->get($crow->paperId))
                 $need[$crow->paperId] = true;
-        $result = $this->user->paper_result(["paperId" => array_keys($need), "watch" => true]);
-        while (($prow = PaperInfo::fetch($result, $this->user)))
-            $this->prows->add($prow);
+        if (!empty($need))
+            $this->prows->take_all($this->user->paper_set(array_keys($need), ["watch" => true]));
     }
 
     static function _activity_compar($a, $b) {

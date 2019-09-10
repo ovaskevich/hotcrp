@@ -1,16 +1,14 @@
 <?php
 // help.php -- HotCRP help page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
 $help_topics = new GroupedExtensions($Me, [
-    '{"name":"topics","title":"Help topics","position":-1000000,"priority":1000000,"function":"show_help_topics"}',
+    '{"name":"topics","title":"Help topics","position":-1000000,"priority":1000000,"callback":"show_help_topics"}',
     "etc/helptopics.json"
 ], $Conf->opt("helpTopics"));
 
-$Qreq = make_qreq();
 if (!$Qreq->t && preg_match(',\A/(\w+)\z,i', Navigation::path()))
     $Qreq->t = substr(Navigation::path(), 1);
 $topic = $Qreq->t ? : "topics";
@@ -18,11 +16,11 @@ $want_topic = $help_topics->canonical_group($topic);
 if (!$want_topic)
     $want_topic = "topics";
 if ($want_topic !== $topic)
-    redirectSelf(["t" => $want_topic]);
+    SelfHref::redirect($Qreq, ["t" => $want_topic]);
 $topicj = $help_topics->get($topic);
 
 $Conf->header_head($topic === "topics" ? "Help" : "Help - {$topicj->title}");
-$Conf->header_body("Help", "help", actionBar());
+$Conf->header_body("Help", "help");
 
 class HtHead extends Ht {
     public $conf;
@@ -31,7 +29,7 @@ class HtHead extends Ht {
     private $_rowidx;
     private $_help_topics;
     private $_renderers = [];
-    function __construct(Contact $user, $help_topics) {
+    function __construct($help_topics, Contact $user) {
         $this->conf = $user->conf;
         $this->user = $user;
         $this->_help_topics = $help_topics;
@@ -124,7 +122,7 @@ class HtHead extends Ht {
     function search_form($q, $size = 20) {
         if (is_string($q))
             $q = ["q" => $q];
-        $t = Ht::form_div(hoturl("search"), ["method" => "get", "divclass" => "nw"])
+        $t = Ht::form(hoturl("search"), ["method" => "get", "class" => "nw"])
             . Ht::entry("q", $q["q"], ["size" => $size])
             . " &nbsp;"
             . Ht::submit("go", "Search");
@@ -132,7 +130,7 @@ class HtHead extends Ht {
             if ($k !== "q")
                 $t .= Ht::hidden($k, $v);
         }
-        return $t . "</div></form>";
+        return $t . "</form>";
     }
     function search_trow($q, $entry) {
         return $this->trow($this->search_form($q, 36), $entry);
@@ -154,23 +152,19 @@ class HtHead extends Ht {
                 return $this->search_link($t->tag, "#{$t->tag}");
             }, $vt)) . ")";
     }
-    function echo_topic($topic) {
+    function render_group($topic) {
         foreach ($this->_help_topics->members($topic) as $gj) {
             Conf::xt_resolve_require($gj);
-            if (isset($gj->function))
-                call_user_func($gj->function, $this, $gj);
-            else if (isset($gj->renderer))
-                call_user_func($gj->renderer, $this, $gj);
-            else if (isset($gj->method)) {
-                $method = $gj->method;
-                if (($colons = strpos($method, "::"))) {
-                    $klass = substr($method, 0, $colons);
-                    $method = substr($method, $colons + 2);
-                } else
-                    $klass = $gj->factory_class;
-                if (!isset($renderers[$klass]))
-                    $renderers[$klass] = new $klass($this, $gj);
-                call_user_func([$renderers[$klass], $method], $gj);
+            if (isset($gj->callback)) {
+                $cb = $gj->callback;
+                if ($cb[0] === "*") {
+                    $colons = strpos($cb, ":");
+                    $klass = substr($cb, 1, $colons - 1);
+                    if (!isset($this->_renderers[$klass]))
+                        $this->_renderers[$klass] = new $klass($this, $gj);
+                    $cb = [$this->_renderers[$klass], substr($cb, $colons + 2)];
+                }
+                call_user_func($cb, $this, $gj);
             }
         }
     }
@@ -179,7 +173,7 @@ class HtHead extends Ht {
     }
 }
 
-$hth = new HtHead($Me, $help_topics);
+$hth = new HtHead($help_topics, $Me);
 
 
 function show_help_topics($hth) {
@@ -220,17 +214,16 @@ foreach ($help_topics->groups() as $gj) {
     if ($gj->name === $topic)
         echo '<div class="leftmenu-item-on">', $gj->title, '</div>';
     else if (isset($gj->title))
-        echo '<div class="leftmenu-item">',
+        echo '<div class="leftmenu-item ui js-click-child">',
             '<a href="', hoturl("help", "t=$gj->name"), '">', $gj->title, '</a></div>';
     if ($gj->name === "topics")
         echo '<div class="c g"></div>';
 }
 echo "</div></div>\n",
     '<div class="leftmenu-content-container"><div id="helpcontent" class="leftmenu-content">';
-Ht::stash_script("jQuery(\".leftmenu-item\").click(divclick)");
 
 echo '<h2 class="helppage">', $topicj->title, '</h2>';
-$hth->echo_topic($topic);
+$hth->render_group($topic);
 echo "</div></div>\n";
 
 

@@ -1,7 +1,6 @@
 <?php
 // navigation.php -- HotCRP navigation helper functions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class NavigationState {
     public $protocol;           // "http://" or "https://"
@@ -268,7 +267,8 @@ class Navigation {
 <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />
 <meta http-equiv=\"Content-Script-Type\" content=\"text/javascript\" />
 <title>Redirection</title>
-<script>location=", json_encode($url), ";</script>
+<script>location=", json_encode($url), ";</script></head>
+<body>
 <p>You should be redirected <a href=\"", htmlspecialchars($url), "\">to here</a>.</p>
 </body></html>\n";
         exit();

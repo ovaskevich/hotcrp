@@ -1,12 +1,11 @@
 <?php
 // a_conflict.php -- HotCRP assignment helper classes
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Conflict_AssignmentParser extends AssignmentParser {
     private $remove;
     private $iscontact;
-    function __construct($aj) {
+    function __construct(Conf $conf, $aj) {
         parent::__construct("conflict");
         $this->remove = $aj->remove;
         $this->iscontact = $aj->iscontact;
@@ -27,7 +26,7 @@ class Conflict_AssignmentParser extends AssignmentParser {
         else if (!$this->iscontact
                  && !$state->user->can_administer($prow)
                  && ($whyNot = $state->user->perm_update_paper($prow)))
-            return whyNotText($whyNot, "edit");
+            return whyNotText($whyNot);
         else
             return true;
     }
@@ -75,6 +74,7 @@ class Conflict_AssignmentParser extends AssignmentParser {
             $ct = $admin ? CONFLICT_CHAIRMARK : CONFLICT_AUTHORMARK;
         if ($ct > 0)
             $state->add(["type" => "conflict", "pid" => $prow->paperId, "cid" => $contact->contactId, "_ctype" => $ct]);
+        return true;
     }
 }
 
@@ -109,7 +109,6 @@ class Conflict_Assigner extends Assigner {
             return "";
     }
     function unparse_display(AssignmentSet $aset) {
-        $aset->show_column("pcconf");
         $t = $aset->user->reviewer_html_for($this->contact);
         if ($this->item->deleted())
             $t = '<del>' . $t . ' ' . $this->icon(true) . '</del>';
@@ -125,13 +124,16 @@ class Conflict_Assigner extends Assigner {
             "email" => $this->contact->email, "name" => $this->contact->name_text()
         ];
     }
+    function account(AssignmentSet $aset, AssignmentCountSet $deltarev) {
+        $aset->show_column("pcconflicts");
+    }
     function add_locks(AssignmentSet $aset, &$locks) {
         $locks["PaperConflict"] = "write";
     }
     function execute(AssignmentSet $aset) {
         if ($this->ctype)
-            $aset->conf->qe("insert into PaperConflict (paperId, contactId, conflictType) values ($this->pid,$this->cid,$this->ctype) on duplicate key update conflictType=values(conflictType)");
+            $aset->stage_qe("insert into PaperConflict set paperId=?, contactId=?, conflictType=? on duplicate key update conflictType=values(conflictType)", $this->pid, $this->cid, $this->ctype);
         else
-            $aset->conf->qe("delete from PaperConflict where paperId=$this->pid and contactId=$this->cid");
+            $aset->stage_qe("delete from PaperConflict where paperId=? and contactId=?", $this->pid, $this->cid);
     }
 }

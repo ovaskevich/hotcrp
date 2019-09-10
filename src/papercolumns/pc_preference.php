@@ -1,7 +1,6 @@
 <?php
 // pc_preference.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Preference_PaperColumn extends PaperColumn {
     private $editable;
@@ -10,18 +9,15 @@ class Preference_PaperColumn extends PaperColumn {
     private $not_me;
     private $show_conflict;
     private $prefix;
-    function __construct($cj, Conf $conf = null) {
-        parent::__construct($cj);
-        $this->override = PaperColumn::OVERRIDE_FOLD;
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
+        $this->override = PaperColumn::OVERRIDE_FOLD_IFEMPTY;
         $this->editable = !!get($cj, "edit");
-        if ($conf && isset($cj->user))
+        if (isset($cj->user))
             $this->contact = $conf->pc_member_by_email($cj->user);
     }
-    function make_editable(PaperList $pl) {
-        if (!($fj = (array) $pl->conf->basic_paper_column("editpref", $pl->user)))
-            return $this;
-        $fj["name"] = $this->name;
-        return new Preference_PaperColumn((object) $fj, $pl->conf);
+    function mark_editable() {
+        $this->editable = true;
     }
     function prepare(PaperList $pl, $visible) {
         $this->viewer_contact = $pl->user;
@@ -29,13 +25,10 @@ class Preference_PaperColumn extends PaperColumn {
         $this->contact = $this->contact ? : $reviewer;
         $this->not_me = $this->contact->contactId !== $pl->user->contactId;
         if (!$pl->user->isPC
-            || (($this->not_me || !$this->name /* user factory */)
-                && !$pl->user->is_manager()))
+            || ($this->not_me && !$pl->user->is_manager()))
             return false;
         if ($visible)
             $pl->qopts["topics"] = 1;
-        if ($this->editable && $visible > 0 && ($tid = $pl->table_id()))
-            $pl->add_header_script("add_revpref_ajax(" . json_encode_browser("#$tid") . ")", "revpref_ajax_$tid");
         $this->prefix =  "";
         if ($this->row)
             $this->prefix = $pl->user->reviewer_html_for($this->contact);
@@ -76,12 +69,12 @@ class Preference_PaperColumn extends PaperColumn {
                 $this->show_conflict = false;
     }
     function header(PaperList $pl, $is_text) {
-        if (!$this->not_me || $this->row)
+        if ($this->contact === $pl->user || $this->row)
             return "Preference";
         else if ($is_text)
             return $pl->user->name_text_for($this->contact) . " preference";
         else
-            return $pl->user->name_html_for($this->contact) . "<br />preference";
+            return $pl->user->name_html_for($this->contact) . "<br>preference";
     }
     function content_empty(PaperList $pl, PaperInfo $row) {
         return $this->not_me && !$pl->user->can_administer($row);
@@ -103,16 +96,14 @@ class Preference_PaperColumn extends PaperColumn {
             $iname = "revpref" . $row->paperId;
             if ($this->not_me)
                 $iname .= "u" . $this->contact->contactId;
-            return '<input name="' . $iname . '" class="revpref" value="' . ($ptext !== "0" ? $ptext : "") . '" type="text" size="4" tabindex="2" placeholder="0" />' . ($this->show_conflict && $has_cflt ? "&nbsp;" . review_type_icon(-1) : "");
+            return '<input name="' . $iname . '" class="uikd uich revpref" value="' . ($ptext !== "0" ? $ptext : "") . '" type="text" size="4" tabindex="2" placeholder="0" />' . ($this->show_conflict && $has_cflt ? "&nbsp;" . review_type_icon(-1) : "");
         } else
             return $ptext;
     }
     function text(PaperList $pl, PaperInfo $row) {
         return unparse_preference($this->preference_values($row));
     }
-}
 
-class Preference_PaperColumnFactory {
     static function expand($name, Conf $conf, $xfj, $m) {
         if (!($fj = (array) $conf->basic_paper_column("pref", $conf->xt_user)))
             return null;

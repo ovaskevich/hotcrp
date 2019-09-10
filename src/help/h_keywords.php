@@ -1,7 +1,6 @@
 <?php
 // src/help/h_keywords.php -- HotCRP help functions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Keywords_HelpTopic {
     static function render($hth) {
@@ -50,22 +49,22 @@ class Keywords_HelpTopic {
         foreach ($hth->conf->paper_opts->option_list() as $o)
             $oex = array_merge($oex, $o->example_searches());
         if (!empty($oex)) {
-            echo $hth->tgroup("Options");
+            echo $hth->tgroup("Submission fields");
             foreach ($oex as $extype => $oex) {
                 if ($extype === "has") {
-                    $desc = "paper has “" . htmlspecialchars($oex[1]->title) . "” submission option";
+                    $desc = "paper has “" . htmlspecialchars($oex[1]->title) . "” submission field";
                     $oabbr = array();
                     foreach ($hth->conf->paper_opts->option_list() as $ox)
                         if ($ox !== $oex[1])
                             $oabbr[] = "“has:" . htmlspecialchars($ox->search_keyword()) . "”";
                     if (count($oabbr))
-                        $desc .= '<div class="hint">Other option ' . pluralx(count($oabbr), "search") . ': ' . commajoin($oabbr) . '</div>';
+                        $desc .= '<div class="hint">Other field ' . pluralx(count($oabbr), "search") . ': ' . commajoin($oabbr) . '</div>';
                 } else if ($extype === "yes")
                     $desc = "same meaning; abbreviations also accepted";
                 else if ($extype === "numeric")
-                    $desc = "paper’s “" . htmlspecialchars($oex[1]->title) . "” option has value &gt; 100";
+                    $desc = "paper’s “" . htmlspecialchars($oex[1]->title) . "” field has value &gt; 100";
                 else if ($extype === "selector")
-                    $desc = "paper’s “" . htmlspecialchars($oex[1]->title) . "” option has value “" . htmlspecialchars($oex[1]->selector[1]) . "”";
+                    $desc = "paper’s “" . htmlspecialchars($oex[1]->title) . "” field has value “" . htmlspecialchars($oex[1]->example_selector_option()) . "”";
                 else if ($extype === "attachment-count")
                     $desc = "paper has more than 2 “" . htmlspecialchars($oex[1]->title) . "” attachments";
                 else if ($extype === "attachment-filename")
@@ -125,10 +124,10 @@ class Keywords_HelpTopic {
         echo $hth->search_trow("cmt:>=3", "at least <em>three</em> visible reviewer comments");
         echo $hth->search_trow("has:aucmt", "at least one reviewer comment visible to authors");
         echo $hth->search_trow("cmt:sylvia", "“sylvia” (in name/email) wrote at least one visible comment; can combine with counts, use reviewer tags");
-        $rnames = $hth->conf->resp_round_list();
-        if (count($rnames) > 1) {
+        $rrds = $hth->conf->resp_rounds();
+        if (count($rrds) > 1) {
             echo $hth->search_trow("has:response", "has an author’s response");
-            echo $hth->search_trow("has:{$rnames[1]}response", "has $rnames[1] response");
+            echo $hth->search_trow("has:{$rrds[1]->name}response", "has {$rrds[1]->name} response");
         } else
             echo $hth->search_trow("has:response", "has author’s response");
         echo $hth->search_trow("anycmt:>1", "at least two visible comments, possibly <em>including</em> author’s response");
@@ -187,21 +186,30 @@ class Keywords_HelpTopic {
                 $rt = $range[0] . ($r->option_letter ? "" : "-") . $range[1];
                 echo $hth->search_trow("{$r->search_keyword()}:$rt", "completed reviews’ $r->name_html scores <em>fill</em> the {$range[0]}&ndash;{$range[1]} range<br /><small>(all scores between {$range[0]} and {$range[1]}, with at least one {$range[0]} and at least one {$range[1]})</small>");
             }
-            if (!$r->option_letter)
-                list($greater, $less, $hint) = array("greater", "less", "");
-            else {
-                $hint = "<br /><small>(better scores are closer to A than Z)</small>";
-                if ($hth->conf->opt("smartScoreCompare"))
-                    list($greater, $less) = array("better", "worse");
-                else
-                    list($greater, $less) = array("worse", "better");
+            $hint = "";
+            if (!$r->option_letter) {
+                $gt_typical = "greater than {$r->typical_score()}";
+                $le_typical = "less than or equal to {$r->typical_score()}";
+            } else {
+                $s1 = $r->parse_value($r->typical_score(), true);
+                if ($hth->conf->opt("smartScoreCompare")) {
+                    $s1le = range($s1, 1);
+                    $s1gt = range(count($r->options), $s1 + 1);
+                    $hint = "<br><small>(scores “better than” {$r->typical_score()} are earlier in the alphabet)</small>";
+                } else {
+                    $s1le = range(count($r->options), $s1);
+                    $s1gt = range($s1 - 1, 1);
+                }
+                $gt_typical = commajoin(array_map([$r, "unparse_value"], $s1gt), " or ");
+                $le_typical = commajoin(array_map([$r, "unparse_value"], $s1le), " or ");
             }
-            echo $hth->search_trow("{$r->search_keyword()}:>{$r->typical_score()}", "at least one completed review has $r->name_html score $greater than {$r->typical_score()}" . $hint);
-            echo $hth->search_trow("{$r->search_keyword()}:2<={$r->typical_score()}", "at least two completed reviews have $r->name_html score $less than or equal to {$r->typical_score()}");
+            echo $hth->search_trow("{$r->search_keyword()}:>{$r->typical_score()}", "at least one completed review has $r->name_html score $gt_typical" . $hint);
+            echo $hth->search_trow("{$r->search_keyword()}:2<={$r->typical_score()}", "at least two completed reviews have $r->name_html score $le_typical");
+            echo $hth->search_trow("{$r->search_keyword()}:=2<={$r->typical_score()}", "<em>exactly</em> two completed reviews have $r->name_html score $le_typical");
             if ($roundname)
-                echo $hth->search_trow("{$r->search_keyword()}:$roundname>{$r->typical_score()}", "at least one completed review in round " . htmlspecialchars($roundname) . " has $r->name_html score $greater than {$r->typical_score()}");
-            echo $hth->search_trow("{$r->search_keyword()}:ext>{$r->typical_score()}", "at least one completed external review has $r->name_html score $greater than {$r->typical_score()}");
-            echo $hth->search_trow("{$r->search_keyword()}:pc:2>{$r->typical_score()}", "at least two completed PC reviews have $r->name_html score $greater than {$r->typical_score()}");
+                echo $hth->search_trow("{$r->search_keyword()}:$roundname>{$r->typical_score()}", "at least one completed review in round " . htmlspecialchars($roundname) . " has $r->name_html score $gt_typical");
+            echo $hth->search_trow("{$r->search_keyword()}:ext>{$r->typical_score()}", "at least one completed external review has $r->name_html score $gt_typical");
+            echo $hth->search_trow("{$r->search_keyword()}:pc:2>{$r->typical_score()}", "at least two completed PC reviews have $r->name_html score $gt_typical");
             echo $hth->search_trow("{$r->search_keyword()}:sylvia={$r->typical_score()}", "“sylvia” (reviewer name/email) gave $r->name_html score {$r->typical_score()}");
             $t = "";
         }
@@ -224,7 +232,7 @@ class Keywords_HelpTopic {
         }
 
         echo $hth->tgroup("Display");
-        echo $hth->search_trow("show:tags show:conflicts", "show tags and PC conflicts in the results");
+        echo $hth->search_trow("show:tags show:pcconflicts", "show tags and PC conflicts in the results");
         echo $hth->search_trow("hide:title", "hide title in the results");
         if (count($farr[0])) {
             $r = $farr[0][0];

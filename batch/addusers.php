@@ -33,7 +33,7 @@ if ($content === false) {
     fwrite(STDERR, "$file: Read error\n");
     exit(1);
 } else if (!preg_match(',\A\s*[\[\{],i', $content)) {
-    $csv = new CsvParser($content);
+    $csv = new CsvParser(cleannl(convert_to_utf8($content)));
     $csv->set_comment_chars("#%");
     $line = $csv->next();
     if ($line && array_search("email", $line) !== false)
@@ -57,7 +57,7 @@ if (!is_array($content))
     $content = array($content);
 $status = 0;
 foreach ($content as $email => $cj) {
-    $us = new UserStatus(array("send_email" => !isset($arg["no-email"])));
+    $us = new UserStatus($Conf->site_contact(), ["send_email" => !isset($arg["no-email"])]);
     if (!isset($cj->id) && !isset($arg["m"]))
         $cj->id = "new";
     if (!isset($cj->email) && validate_email($email))

@@ -1,7 +1,6 @@
 <?php
 // listactions/la_get_sub.php -- HotCRP helper classes for list actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Get_ListAction extends ListAction {
     static function render(PaperList $pl) {
@@ -31,8 +30,8 @@ class Get_ListAction extends ListAction {
         }
         if (!empty($sel_opt)) {
             return Ht::select("getfn", $sel_opt, $pl->qreq->getfn,
-                              ["tabindex" => 6, "class" => "want-focus js-submit-action-info-get", "style" => "max-width:10em"])
-                . "&nbsp; " . Ht::submit("fn", "Go", ["value" => "get", "tabindex" => 6, "data-default-submit-all" => 1]);
+                              ["class" => "want-focus js-submit-action-info-get", "style" => "max-width:10em"])
+                . "&nbsp; " . Ht::submit("fn", "Go", ["value" => "get", "data-default-submit-all" => 1, "class" => "btn uix js-submit-mark"]);
         } else
             return null;
     }
@@ -48,69 +47,16 @@ class Get_ListAction extends ListAction {
     }
 }
 
-class GetDocument_ListAction extends ListAction {
-    private $dt;
-    function __construct($fj) {
-        $this->dt = $fj->dtype;
-    }
-    static function make_list_action(PaperOption $opt) {
-        $fj = (object) [
-            "name" => "get/" . $opt->dtype_name(),
-            "dtype" => $opt->id,
-            "selector" => "Documents/" . ($opt->id <= 0 ? pluralize($opt->title) : $opt->title),
-            "position" => $opt->position + ($opt->final ? 0 : 100),
-            "display_if_list_has" => $opt->field_key(),
-            "factory_class" => "GetDocument_ListAction"
-        ];
-        return $fj;
-    }
-    static function expand($name, Conf $conf, $fj) {
-        if (($o = $conf->paper_opts->find(substr($name, 4)))
-            && $o->is_document())
-            return [self::make_list_action($o)];
-        else
-            return null;
-    }
-    static function error_document(PaperOption $opt, PaperInfo $row, $error_html = "") {
-        if (!$error_html)
-            $error_html = $row->conf->_("Submission #%d has no %s.", $row->paperId, $opt->message_title);
-        $x = new DocumentInfo(["documentType" => $opt->id, "paperId" => $row->paperId, "error" => true, "error_html" => $error_html], $row->conf);
-        if (($mimetypes = $opt->mimetypes()) && count($mimetypes) == 1)
-            $x->mimetype = $mimetypes[0]->mimetype;
-        return $x;
-    }
-    function run(Contact $user, $qreq, $ssel) {
-        $result = $user->paper_result(["paperId" => $ssel->selection()]);
-        $downloads = $errors = [];
-        $opt = $user->conf->paper_opts->get($this->dt);
-        foreach (PaperInfo::fetch_all($result, $user) as $row)
-            if (($whyNot = $user->perm_view_paper_option($row, $opt, true)))
-                $errors[] = self::error_document($opt, $row, whyNotText($whyNot, "view"));
-            else if (($doc = $row->document($opt->id)))
-                $downloads[] = $doc;
-            else
-                $errors[] = self::error_document($opt, $row);
-        if (count($downloads)) {
-            session_write_close(); // it can take a while to generate the download
-            $downloads = array_merge($downloads, $errors);
-            if ($user->conf->download_documents($downloads, true))
-                exit;
-        } else if (count($errors))
-            Conf::msg_error("Nothing to download.<br />" . join("<br />", array_map(function ($ed) { return $ed->error_html; }, $errors)));
-        // XXX how to return errors?
-    }
-}
-
 class GetCheckFormat_ListAction extends ListAction {
     function run(Contact $user, $qreq, $ssel) {
-        $result = $user->paper_result(["paperId" => $ssel->selection()]);
         $papers = [];
-        foreach (PaperInfo::fetch_all($result, $user) as $prow)
+        foreach ($user->paper_set($ssel) as $prow)
             if ($user->can_view_pdf($prow))
                 $papers[$prow->paperId] = $prow;
-        $csvg = downloadCSV(false, ["paper", "title", "pages", "format"], "formatcheck");
+        $csvg = $user->conf->make_csvg("formatcheck")->select(["paper", "title", "pages", "format"]);
+        $csvg->download_headers();
         echo $csvg->headerline;
-        $cf = new CheckFormat;
+        $cf = new CheckFormat($user->conf);
         foreach ($ssel->reorder($papers) as $prow) {
             $pages = "?";
             if ($prow->mimetype == "application/pdf") {
@@ -156,7 +102,7 @@ class GetAbstract_ListAction extends ListAction {
         $text = "";
         foreach ($prow->options() as $ov) {
             if ($ov->option->display() === $display
-                && $user->can_view_paper_option($prow, $ov->option, null)
+                && $user->can_view_paper_option($prow, $ov->option)
                 && ($otxt = $ov->option->unparse_page_text($prow, $ov)))
                 $text .= self::render_option($ov->option, $otxt);
         }
@@ -199,11 +145,10 @@ class GetAbstract_ListAction extends ListAction {
         return $text . "\n";
     }
     function run(Contact $user, $qreq, $ssel) {
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "topics" => 1]);
         $texts = array();
-        foreach (PaperInfo::fetch_all($result, $user) as $prow) {
+        foreach ($user->paper_set($ssel, ["topics" => 1]) as $prow) {
             if (($whyNot = $user->perm_view_paper($prow)))
-                Conf::msg_error(whyNotText($whyNot, "view"));
+                Conf::msg_error(whyNotText($whyNot));
             else {
                 defappend($texts[$prow->paperId], $this->render($prow, $user));
                 $rfSuffix = (count($texts) == 1 ? $prow->paperId : "s");
@@ -229,10 +174,9 @@ class GetAuthors_ListAction extends ListAction {
     }
     function run(Contact $user, $qreq, $ssel) {
         $contact_map = self::contact_map($user->conf, $ssel);
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "allConflictType" => 1]);
         $texts = array();
         $want_contacttype = false;
-        foreach (PaperInfo::fetch_all($result, $user) as $prow) {
+        foreach ($user->paper_set($ssel, ["allConflictType" => 1]) as $prow) {
             if (!$user->allow_view_authors($prow))
                 continue;
             $admin = $user->allow_administer($prow);
@@ -260,7 +204,8 @@ class GetAuthors_ListAction extends ListAction {
         $header = ["paper", "title", "first", "last", "email", "affiliation"];
         if ($want_contacttype)
             $header[] = "iscontact";
-        return new Csv_SearchResult("authors", $header, $ssel->reorder($texts));
+        return $user->conf->make_csvg("authors")->select($header)
+            ->add($ssel->reorder($texts));
     }
 }
 
@@ -271,15 +216,16 @@ class GetContacts_ListAction extends ListAction {
     }
     function run(Contact $user, $qreq, $ssel) {
         $contact_map = GetAuthors_ListAction::contact_map($user->conf, $ssel);
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "allConflictType" => 1]);
-        foreach (PaperInfo::fetch_all($result, $user) as $prow)
+        foreach ($user->paper_set($ssel, ["allConflictType" => 1]) as $prow)
             if ($user->allow_administer($prow))
                 foreach ($prow->contacts() as $cid => $c) {
                     $a = $contact_map[$cid];
                     $aa = $prow->author_by_email($a->email) ? : $a;
                     arrayappend($texts[$prow->paperId], [$prow->paperId, $prow->title, $aa->firstName, $aa->lastName, $aa->email, $aa->affiliation]);
                 }
-        return new Csv_SearchResult("contacts", ["paper", "title", "first", "last", "email", "affiliation"], $ssel->reorder($texts));
+        return $user->conf->make_csvg("contacts")
+            ->select(["paper", "title", "first", "last", "email", "affiliation"])
+            ->add($ssel->reorder($texts));
     }
 }
 
@@ -292,11 +238,11 @@ class GetPcconflicts_ListAction extends ListAction {
         $allConflictTypes[CONFLICT_CHAIRMARK] = "Chair-confirmed";
         $allConflictTypes[CONFLICT_AUTHOR] = "Author";
         $allConflictTypes[CONFLICT_CONTACTAUTHOR] = "Contact";
-        $result = $user->paper_result(["paperId" => $ssel->selection(), "allConflictType" => 1]);
         $pcm = $user->conf->pc_members();
         $texts = array();
-        foreach (PaperInfo::fetch_all($result, $user) as $prow)
-            if ($user->can_view_conflicts($prow, true)) {
+        $old_overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
+        foreach ($user->paper_set($ssel, ["allConflictType" => 1]) as $prow) {
+            if ($user->can_view_conflicts($prow)) {
                 $m = [];
                 foreach ($prow->conflicts() as $cid => $c)
                     if (isset($pcm[$cid])) {
@@ -308,15 +254,18 @@ class GetPcconflicts_ListAction extends ListAction {
                     $texts[$prow->paperId] = $m;
                 }
             }
-        return new Csv_SearchResult("pcconflicts", ["paper", "title", "first", "last", "email", "conflicttype"], $ssel->reorder($texts));
+        }
+        $user->set_overrides($old_overrides);
+        return $user->conf->make_csvg("pcconflicts")
+            ->select(["paper", "title", "first", "last", "email", "conflicttype"])
+            ->add($ssel->reorder($texts));
     }
 }
 
 class GetTopics_ListAction extends ListAction {
     function run(Contact $user, $qreq, $ssel) {
-        $result = $user->paper_result(array("paperId" => $ssel->selection(), "topics" => 1));
         $texts = array();
-        foreach (PaperInfo::fetch_all($result, $user) as $row)
+        foreach ($user->paper_set($ssel, ["topics" => 1]) as $row)
             if ($user->can_view_paper($row)) {
                 $out = array();
                 foreach ($row->named_topic_map() as $t)
@@ -325,17 +274,20 @@ class GetTopics_ListAction extends ListAction {
                     $out[] = [$row->paperId, $row->title, "<none>"];
                 arrayappend($texts[$row->paperId], $out);
             }
-        return new Csv_SearchResult("topics", ["paper", "title", "topic"], $ssel->reorder($texts));
+        return $user->conf->make_csvg("topics")
+            ->select(["paper", "title", "topic"])
+            ->add($ssel->reorder($texts));
     }
 }
 
 class GetCSV_ListAction extends ListAction {
     function run(Contact $user, $qreq, $ssel) {
-        $search = new PaperSearch($user, $qreq, $qreq->attachment("reviewer_contact"));
+        $search = new PaperSearch($user, $qreq);
+        $search->restrict_match([$ssel, "is_selected"]);
         $pl = new PaperList($search, ["sort" => true, "report" => "pl", "display" => $qreq->display], $qreq);
-        $pl->set_selection($ssel, true);
         $pl->set_view("sel", false);
-        list($header, $data) = $pl->text_csv($search->limitName);
-        return new Csv_SearchResult("data", $header, $data);
+        list($header, $data) = $pl->text_csv($qreq->t);
+        return $user->conf->make_csvg("data", CsvGenerator::FLAG_ITEM_COMMENTS)
+            ->select($header)->add($data);
     }
 }

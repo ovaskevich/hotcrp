@@ -1,7 +1,6 @@
 <?php
 // search/st_revpref.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class RevprefSearchMatcher extends ContactCountMatcher {
     public $preference_match = null;
@@ -53,7 +52,7 @@ class Revpref_SearchTerm extends SearchTerm {
                 $safe_contacts = 1;
             else {
                 $safe_contacts = -1;
-                $contacts = $srch->matching_reviewers($m[1], $sword->quoted, true);
+                $contacts = $srch->matching_users($m[1], $sword->quoted, true);
             }
             $word = str_starts_with($m[2], ":") ? substr($m[2], 1) : $m[2];
             if ($word === "")

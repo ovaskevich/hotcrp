@@ -1,7 +1,6 @@
 <?php
 // formula.php -- HotCRP helper class for paper expressions
-// HotCRP is Copyright (c) 2009-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2009-2018 Eddie Kohler; see LICENSE.
 
 class FormulaCall {
     public $name;
@@ -437,6 +436,7 @@ class AggregateFexpr extends Fexpr {
         // The “R-7” quantile implementation
         if (count($a) === 0 || $p < 0 || $p > 1)
             return null;
+        sort($a, SORT_NUMERIC);
         $ix = (count($a) - 1) * $p + 1;
         $i = (int) $ix;
         $v = $a[$i - 1];
@@ -660,17 +660,33 @@ class Tag_Fexpr extends Sub_Fexpr {
         $this->isvalue = $isvalue;
         $this->format_ = $isvalue ? null : self::FBOOL;
     }
+    static function parse_modifier(FormulaCall $ff, $arg) {
+        if (!$ff->args && $arg[0] !== ".") {
+            $ff->args[] = substr($arg, 1);
+            return true;
+        } else if (count($ff->args) === 1 && $arg[0] === ":") {
+            $ff->args[0] .= $arg;
+            return true;
+        } else
+            return false;
+    }
+    static function make(FormulaCall $ff) {
+        if (count($ff->args) !== 1
+            || !preg_match('/\A' . TAG_REGEX . '\z/', $ff->args[0]))
+            return null;
+        return new Tag_Fexpr($ff->args[0], $ff->kwdef->is_value);
+    }
     function view_score(Contact $user) {
         $tagger = new Tagger($user);
-        $e_tag = $tagger->check($this->tag);
+        $e_tag = $tagger->check($this->tag, Tagger::ALLOWSTAR);
         return $tagger->view_score($e_tag, $user);
     }
     function tag() {
         return $this->tag;
     }
     function compile(FormulaCompiler $state) {
-        $e_tag = $state->tagger->check($this->tag);
-        $t_tagval = $state->_add_tagval($this->tag);
+        $e_tag = $state->tagger->check($this->tag, Tagger::ALLOWSTAR);
+        $t_tagval = $state->_add_tagval($e_tag);
         if ($this->isvalue)
             return $t_tagval;
         else
@@ -728,7 +744,7 @@ class Option_Fexpr extends Sub_Fexpr {
         $ovar = "\$opt" . ($id < 0 ? "m" . -$id : $id);
         if ($state->check_gvar($ovar)) {
             $state->queryOptions["options"] = true;
-            $state->gstmt[] = "if (\$contact->can_view_paper_option(\$prow, $id, \$forceShow)) {";
+            $state->gstmt[] = "if (\$contact->can_view_paper_option(\$prow, $id)) {";
             $state->gstmt[] = "  $ovar = \$prow->option($id);";
             if ($this->option->type == "checkbox")
                 $state->gstmt[] = "  $ovar = !!($ovar && {$ovar}->value);";
@@ -745,7 +761,7 @@ class Decision_Fexpr extends Sub_Fexpr {
         $this->format_ = self::FDECISION;
     }
     function view_score(Contact $user) {
-        if ($user->conf->can_some_author_view_decision())
+        if ($user->can_view_some_decision_as_author())
             return VIEWSCORE_AUTHOR;
         else if ($user->conf->timePCViewDecision(false))
             return VIEWSCORE_PC;
@@ -754,7 +770,7 @@ class Decision_Fexpr extends Sub_Fexpr {
     }
     function compile(FormulaCompiler $state) {
         if ($state->check_gvar('$decision'))
-            $state->gstmt[] = "\$decision = \$contact->can_view_decision(\$prow, \$forceShow) ? (int) \$prow->outcome : 0;";
+            $state->gstmt[] = "\$decision = \$contact->can_view_decision(\$prow) ? (int) \$prow->outcome : 0;";
         return '$decision';
     }
 }
@@ -838,10 +854,10 @@ class Conflict_Fexpr extends Sub_Fexpr {
     function compile(FormulaCompiler $state) {
         // XXX the actual search is different
         $state->datatype |= self::ACONF;
-        if ($state->looptype == self::LMY)
-            $rt = $state->user->isPC ? "!!\$prow->conflictType" : "false";
-        else {
-            $idx = $state->_rrow_cid();
+        $idx = $state->_rrow_cid();
+        if ($state->looptype == self::LMY) {
+            $rt = "\$prow->has_conflict($idx)";
+        } else {
             $rt = "!!get(" . $state->_add_conflicts() . ", " . $idx . ")";
             if ($this->ispc)
                 $rt = "(get(" . $state->_add_pc() . ", " . $idx . ") ? $rt : null)";
@@ -871,7 +887,7 @@ class Reviewer_Fexpr extends Review_Fexpr {
     function compile(FormulaCompiler $state) {
         $state->datatype |= self::ASUBREV;
         $state->queryOptions["reviewSignatures"] = true;
-        return '($prow->can_view_review_identity_of(' . $state->_rrow_cid() . ', $contact, $forceShow) ? ' . $state->_rrow_cid() . ' : null)';
+        return '($prow->can_view_review_identity_of(' . $state->_rrow_cid() . ', $contact) ? ' . $state->_rrow_cid() . ' : null)';
     }
 }
 
@@ -911,7 +927,7 @@ class ReviewerMatch_Fexpr extends Review_Fexpr {
             $tag = $this->arg[0] === "#" ? substr($this->arg, 1) : $this->arg;
             return "($cvt ? ReviewerMatch_Fexpr::check_tagmap(\$contact->conf, " . $state->_rrow_cid() . ", " . json_encode($tag) . ") : null)";
         } else
-            return '($prow->can_view_review_identity_of(' . $state->_rrow_cid() . ', $contact, $forceShow) ? array_search(' . $state->_rrow_cid() . ", [" . join(", ", $this->csearch->ids) . "]) !== false : null)";
+            return '($prow->can_view_review_identity_of(' . $state->_rrow_cid() . ', $contact) ? array_search(' . $state->_rrow_cid() . ", [" . join(", ", $this->csearch->ids) . "]) !== false : null)";
     }
     function matches_at_most_once() {
         return count($this->csearch->ids) <= 1;
@@ -1014,21 +1030,21 @@ class FormulaCompiler {
     function _add_vsreviews() {
         if ($this->check_gvar('$vsreviews')) {
             $this->queryOptions["reviewSignatures"] = true;
-            $this->gstmt[] = "\$vsreviews = \$prow->viewable_submitted_reviews_by_user(\$contact, \$forceShow);";
+            $this->gstmt[] = "\$vsreviews = \$prow->viewable_submitted_reviews_by_user(\$contact);";
         }
         return '$vsreviews';
     }
     function _add_review_prefs() {
         if ($this->check_gvar('$allrevprefs')) {
             $this->queryOptions["allReviewerPreference"] = true;
-            $this->gstmt[] = "\$allrevprefs = \$contact->can_view_review(\$prow, null, \$forceShow) ? \$prow->reviewer_preferences() : [];";
+            $this->gstmt[] = "\$allrevprefs = \$contact->can_view_review(\$prow, null) ? \$prow->reviewer_preferences() : [];";
         }
         return '$allrevprefs';
     }
     function _add_conflicts() {
         if ($this->check_gvar('$conflicts')) {
             $this->queryOptions["allConflictType"] = true;
-            $this->gstmt[] = "\$conflicts = \$contact->can_view_conflicts(\$prow, \$forceShow) ? \$prow->conflicts() : [];";
+            $this->gstmt[] = "\$conflicts = \$contact->can_view_conflicts(\$prow) ? \$prow->conflicts() : [];";
         }
         return '$conflicts';
     }
@@ -1042,20 +1058,27 @@ class FormulaCompiler {
             return "false";
         if ($this->check_gvar('$tags')) {
             $this->queryOptions["tags"] = true;
-            $this->gstmt[] = "\$tags = \$contact->can_view_tags(\$prow, \$forceShow) ? \$prow->all_tags_text() : \"\";";
+            $this->gstmt[] = "\$tags = \$contact->can_view_tags(\$prow) ? \$prow->all_tags_text() : \"\";";
         }
         if (!isset($this->known_tag_indexes[$tag])) {
-            $n = count($this->tagrefs);
-            $this->known_tag_indexes[$tag] = $n;
             $this->tagrefs[] = $tag;
+            $this->known_tag_indexes[$tag] = count($this->tagrefs) - 1;
         }
-        return $this->define_gvar("tagpos_$tag", "stripos(\$tags, \" $tag#\")");
+        if (strpos($tag, "*") === false)
+            $e = "stripos(\$tags, \" $tag#\")";
+        else
+            $e = "preg_matchpos(\"{ " . str_replace("\\*", "[^#\\s]*", preg_quote($tag)) . "#}i\", \$tags)";
+        return $this->define_gvar("tagpos_$tag", $e);
     }
     function _add_tagval($tag) {
         if ($tag === false)
             return "false";
         $t_tagpos = $this->_add_tagpos($tag);
-        return $this->define_gvar("tagval_$tag", "($t_tagpos !== false ? (float) substr(\$tags, $t_tagpos + " . (strlen($tag) + 2) . ") : false)");
+        if (strpos($tag, "*") === false)
+            $delta = "$t_tagpos + " . (strlen($tag) + 2);
+        else
+            $delta = "strpos(\$tags, \"#\", $t_tagpos) + 1";
+        return $this->define_gvar("tagval_$tag", "($t_tagpos !== false ? (float) substr(\$tags, $delta) : false)");
     }
     function known_tag_index($tag) {
         return $tag === false ? -1 : get($this->known_tag_indexes, $tag);
@@ -1215,7 +1238,7 @@ class Formula {
     private $_parse = null;
     private $_format;
     private $_tagrefs;
-    private $_error_html = array();
+    private $_error_html = [];
     private $_recursion;
 
     const BINARY_OPERATOR_REGEX = '/\A(?:[-\+\/%^]|\*\*?|\&\&?|\|\|?|==?|!=|<[<=]?|>[>=]?|≤|≥|≠)/';
@@ -1280,16 +1303,16 @@ class Formula {
         $this->user = $user;
     }
 
-    private function make_error_at($type, $pos1, $pos2) {
+    private function add_error_at($type, $pos1, $pos2, $rest) {
         $elen = strlen($this->expression);
         $h1 = htmlspecialchars(substr($this->expression, 0, $elen + $pos1));
-        $p2 = substr($this->expression, $elen + $pos1, $pos2 - $pos1);
-        $h2 = '<span class="error">☞<u>' . htmlspecialchars($p2) . '</u></span>';
-        $h3 = htmlspecialchars(substr($this->expression, $elen + $pos2));
         if ($pos1 == 0)
-            return "$type in formula “{$h1}” at end";
-        else
-            return "$type in formula “{$h1}{$h2}{$h3}”";
+            $rest = " at end" . $rest;
+        else {
+            $p2 = substr($this->expression, $elen + $pos1, $pos2 - $pos1);
+            $h1 .= '<span class="error">☞<u>' . htmlspecialchars($p2) . '</u></span>' . htmlspecialchars(substr($this->expression, $elen + $pos2));
+        }
+        $this->_error_html[] = "$type in formula “{$h1}”$rest";
     }
 
     private function parse_prefix(Contact $user = null, $allow_suffix) {
@@ -1303,9 +1326,10 @@ class Formula {
         }
         $e = $this->_parse_ternary($t, false);
         if (!$e || ($t !== "" && !$allow_suffix)) {
-            $this->_error_html[] = $this->make_error_at("Parse error", -strlen($t), 0) . ".";
+            if (!$this->_error_html)
+                $this->add_error_at("Parse error", -strlen($t), 0, ".");
         } else if (($err = $e->typecheck($this->conf))) {
-            $this->_error_html[] = $this->make_error_at("Type error", $err->expr->left_landmark, $err->expr->right_landmark) . ': ' . $err->error_html;
+            $this->add_error_at("Type error", $err->expr->left_landmark, $err->expr->right_landmark, ': ' . $err->error_html);
         } else {
             $state = new FormulaCompiler($this->user);
             $e->compile($state);
@@ -1371,9 +1395,26 @@ class Formula {
     }
 
     private function _parse_function_args(FormulaCall $ff, &$t) {
+        $argtype = $ff->kwdef->args;
         $t = ltrim($t);
         // collect arguments
-        if ($t !== "" && $t[0] === "(") {
+        if ($t !== "" && $t[0] === "(" && $argtype === "raw") {
+            $arg = "";
+            $t = substr($t, 1);
+            $depth = 1;
+            while ($t !== "") {
+                preg_match('/\A("[^"]+(?:"|\z)|\(|\)|[^()"]+)(.*)\z/s', $t, $m);
+                $t = $m[2];
+                if ($m[1] === ")") {
+                    if (--$depth === 0)
+                        break;
+                } else if ($m[1] === "(")
+                    ++$depth;
+                $arg .= $m[1];
+            }
+            $ff->args[] = $arg;
+            return true;
+        } else if ($t !== "" && $t[0] === "(") {
             while (1) {
                 $t = substr($t, 1);
                 if (!($e = $this->_parse_ternary($t, false)))
@@ -1387,11 +1428,14 @@ class Formula {
             }
             $t = substr($t, 1);
             return true;
+        } else if ($argtype === "optional" || !empty($ff->args)) {
+            return true;
         } else if (($e = $this->_parse_expr($t, self::$opprec["u+"], false))) {
             $ff->args[] = $e;
             return true;
-        } else
+        } else {
             return false;
+        }
     }
 
     static private function _pop_argument($t) {
@@ -1512,7 +1556,7 @@ class Formula {
             if (!($e = $this->_parse_expr($t, self::$opprec["u$op"], $in_qc)))
                 return null;
             $e = $op == "!" ? new NegateFexpr($e) : new Fexpr($op, $e);
-        } else if (preg_match('/\Anot([\s(].*|)\z/i', $t, $m)) {
+        } else if (preg_match('/\Anot([\s(].*|)\z/si', $t, $m)) {
             $t = $m[1];
             if (!($e = $this->_parse_expr($t, self::$opprec["u!"], $in_qc)))
                 return null;
@@ -1549,40 +1593,35 @@ class Formula {
         } else if (preg_match('/\A(?:is|status):\s*([-a-zA-Z0-9_.#@*]+)(.*)\z/si', $t, $m)) {
             $e = $this->field_search_fexpr(PaperSearch::status_field_matcher($this->conf, $m[1]));
             $t = $m[2];
-        } else if (preg_match('/\A(?:tag(?:\s*:\s*|\s+)|#)(' . TAG_REGEX . ')(.*)\z/is', $t, $m)
-                   || preg_match('/\Atag\s*\(\s*(' . TAG_REGEX . ')\s*\)(.*)\z/is', $t, $m)) {
-            $e = new Tag_Fexpr($m[1], false);
-            $t = $m[2];
-        } else if (preg_match('/\Atag(?:v|-?val|-?value)(?:\s*:\s*|\s+)(' . TAG_REGEX . ')(.*)\z/is', $t, $m)
-                   || preg_match('/\Atag(?:v|-?val|-?value)\s*\(\s*(' . TAG_REGEX . ')\s*\)(.*)\z/is', $t, $m)) {
-            $e = new Tag_Fexpr($m[1], true);
-            $t = $m[2];
         } else if (preg_match('/\A((?:r|re|rev|review)(?:type|round|words|auwords)?|round|reviewer)(?::|(?=#))\s*(.*)\z/is', $t, $m)) {
             $t = ":" . $m[2];
             $e = $this->_reviewer_decoration($this->_reviewer_base($m[1]), $t);
         } else if (preg_match('/\A((?:r|re|rev|review)(?:type|round|words|auwords)|round|reviewer)\b(.*)\z/is', $t, $m)) {
             $e = $this->_reviewer_base($m[1]);
             $t = $m[2];
-        } else if (preg_match('/\A([A-Za-z][A-Za-z_]*)(.*)\z/is', $t, $m)
+        } else if (preg_match('/\A(#|[A-Za-z][A-Za-z_]*)(.*)\z/is', $t, $m)
                    && ($kwdef = $this->conf->formula_function($m[1], $this->user))) {
-            $t = $m[2];
+            $pos1 = -strlen($t);
             $ff = new FormulaCall($kwdef, $m[1]);
-            if (get($kwdef, "modifier_parser")) {
-                while (preg_match('/\A([.#:](?:"[^"]*(?:"|\z)|[-A-Za-z0-9_.#@]+))(.*)/s', $t, $m)
-                       && !preg_match('/\A(?:null|false|true|pid|paperid)\z/i', $m[1])
+            if ($m[1] !== "#")
+                $t = $m[2];
+            if (get($kwdef, "parse_modifier_callback")) {
+                while (preg_match('/\A([.#:](?:"[^"]*(?:"|\z)|[-a-zA-Z0-9!@*_:.\/#~]+))(.*)/s', $t, $m)
                        && (get($kwdef, "args") || !preg_match('/\A\s*\(/s', $m[2]))
-                       && ($marg = call_user_func($kwdef->modifier_parser, $ff, $m[1], $m[2], $this)))
+                       && ($marg = call_user_func($kwdef->parse_modifier_callback, $ff, $m[1], $m[2], $this)))
                     $t = $m[2];
             }
-            if (get($kwdef, "args") && !$this->_parse_function_args($ff, $t))
+            if (get($kwdef, "args") && !$this->_parse_function_args($ff, $t)) {
+                $this->add_error_at("Type error", $pos1, -strlen($t), ": function “" . htmlspecialchars($ff->name) . "” requires arguments.");
                 return null;
-            $e = null;
-            if (isset($kwdef->factory))
-                $e = call_user_func($kwdef->factory, $ff, $this);
-            else if (isset($kwdef->factory_class)) {
-                $cname = $kwdef->factory_class;
-                $e = new $cname($ff, $this);
+            } else if (!isset($kwdef->callback)) {
+                return null;
             }
+            if ($kwdef->callback[0] === "+") {
+                $class = substr($kwdef->callback, 1);
+                $e = new $class($ff, $this);
+            } else
+                $e = call_user_func($kwdef->callback, $ff, $this);
             if (!$e)
                 return null;
         } else if (preg_match('/\A([-A-Za-z0-9_.@]+|\".*?\")(.*)\z/s', $t, $m)
@@ -1673,16 +1712,20 @@ class Formula {
 
 
     private static function compile_body($user, FormulaCompiler $state, $expr,
-                                         $sortable = false) {
+                                         $sortable = 0) {
         $t = "";
         if ($user)
             $t .= "assert(\$contact->contactId == $user->contactId);\n  ";
         $t .= $state->statement_text();
-        if ($expr !== null && !$sortable)
-            $t .= "\n  return $expr;\n";
-        else if ($expr !== null) {
-            $t .= "\n  \$x = $expr;\n"
-                . "  return is_bool(\$x) ? (int) \$x : \$x;\n";
+        if ($expr !== null) {
+            if ($sortable & 3)
+                $t .= "\n  \$x = $expr;";
+            if ($sortable & 1)
+                $t .= "\n  \$x = is_bool(\$x) ? (int) \$x : \$x;";
+            if ($sortable & 2)
+                $t .= "\n  if (is_float(\$x) && !is_finite(\$x)) {\n"
+                    . "    \$x = null;\n  }";
+            $t .= "\n  return " . ($sortable & 3 ? "\$x" : $expr) . ";\n";
         }
         return $t;
     }
@@ -1691,21 +1734,25 @@ class Formula {
         if ($this->check()) {
             $state = new FormulaCompiler($this->user);
             $expr = $this->_parse->compile($state);
-            $t = self::compile_body($this->user, $state, $expr);
+            $t = self::compile_body($this->user, $state, $expr, $sortable);
         } else
             $t = "return 0;";
 
-        $args = '$prow, $rrow_cid, $contact, $forceShow = null';
+        $args = '$prow, $rrow_cid, $contact';
         self::DEBUG && Conf::msg_debugt("function ($args) {\n  // " . simplify_whitespace($this->expression) . "\n  $t}\n");
-        return create_function($args, $t);
+        return eval("return function ($args) {\n  $t};");
     }
 
     function compile_function() {
-        return $this->_compile_function(false);
+        return $this->_compile_function(0);
     }
 
     function compile_sortable_function() {
-        return $this->_compile_function(true);
+        return $this->_compile_function(1);
+    }
+
+    function compile_json_function() {
+        return $this->_compile_function(2);
     }
 
     static function compile_indexes_function(Contact $user, $datatypes) {
@@ -1714,9 +1761,9 @@ class Formula {
         $t = "assert(\$contact->contactId == $user->contactId);\n  "
             . join("\n  ", $state->gstmt)
             . "\n  return array_keys($g);\n";
-        $args = '$prow, $contact, $forceShow = null';
+        $args = '$prow, $contact';
         self::DEBUG && Conf::msg_debugt("function ($args) {\n  $t}\n");
-        return create_function($args, $t);
+        return eval("return function ($args) {\n  $t};");
     }
 
     function compile_combine_functions() {
@@ -1728,18 +1775,18 @@ class Formula {
             $t .= "  return " . $state->fragments[0] . ";\n";
         else
             $t .= "  return [" . join(", ", $state->fragments) . "];\n";
-        $args = '$prow, $rrow_cid, $contact, $forceShow = null';
+        $args = '$prow, $rrow_cid, $contact';
         self::DEBUG && Conf::msg_debugt("function ($args) {\n  // fragments " . simplify_whitespace($this->expression) . "\n  $t}\n");
-        $outf = create_function($args, $t);
+        $outf = eval("return function ($args) {\n  $t};");
 
         // regroup function
         $state->clear();
         $state->combining = 0;
         $expr = $this->_parse ? $this->_parse->compile($state) : "0";
         $t = self::compile_body(null, $state, $expr);
-        $args = '$groups, $forceShow = null';
+        $args = '$groups';
         self::DEBUG && Conf::msg_debugt("function ($args) {\n  // combine " . simplify_whitespace($this->expression) . "\n  $t}\n");
-        $inf = create_function($args, $t);
+        $inf = eval("return function ($args) {\n  $t};");
 
         return [$outf, $inf];
     }

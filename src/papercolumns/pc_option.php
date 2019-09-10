@@ -1,13 +1,12 @@
 <?php
 // pc_option.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Option_PaperColumn extends PaperColumn {
     private $opt;
-    function __construct($cj, Conf $conf) {
-        parent::__construct($cj);
-        $this->override = PaperColumn::OVERRIDE_FOLD;
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
+        $this->override = PaperColumn::OVERRIDE_FOLD_IFEMPTY;
         $this->opt = $conf->paper_opts->get($cj->option_id);
     }
     function prepare(PaperList $pl, $visible) {

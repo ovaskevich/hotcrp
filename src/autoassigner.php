@@ -1,7 +1,6 @@
 <?php
 // autoassigner.php -- HotCRP helper classes for autoassignment
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class AutoassignerCosts implements JsonSerializable {
     public $assignment = 100;
@@ -119,7 +118,8 @@ class Autoassigner {
 
     function run_clear($reviewtype) {
         $papers = array_fill_keys($this->papersel, 1);
-        if ($reviewtype == REVIEW_PRIMARY
+        if ($reviewtype == REVIEW_META
+            || $reviewtype == REVIEW_PRIMARY
             || $reviewtype == REVIEW_SECONDARY
             || $reviewtype == REVIEW_PC) {
             $q = "select paperId, contactId from PaperReview where reviewType=" . $reviewtype;
@@ -165,6 +165,10 @@ class Autoassigner {
         $this->prefs = $this->eass = [];
         foreach ($this->pcm as $cid => $p)
             $this->prefs[$cid] = $this->eass[$cid] = array_fill_keys($this->papersel, 0);
+        foreach ($this->badpairs as $cid1 => $cid2) {
+            if (!isset($this->pcm[$cid1]))
+                $this->eass[$cid1] = array_fill_keys($this->papersel, 0);
+        }
     }
 
     private function preferences_review($reviewtype) {
@@ -202,14 +206,13 @@ class Autoassigner {
         $this->make_pref_groups();
 
         // need to populate review assignments for badpairs not in `pcm`
-        foreach ($this->badpairs as $cid => $x)
-            if (!isset($this->eass[$cid])) {
-                $this->eass[$cid] = array_fill_keys($this->papersel, 0);
-                $result = $this->conf->qe("select paperId from PaperReview where contactId=? and paperId ?a", $cid, $this->papersel);
-                while (($row = edb_row($result)))
-                    $this->eass[$cid][$row[0]] = max($this->eass[$cid][$row[0]], self::ENOASSIGN);
-                Dbl::free($result);
-            }
+        $missing_pcm = array_diff(array_keys($this->badpairs), array_keys($this->pcm));
+        if ($missing_pcm) {
+            $result = $this->conf->qe("select contactId, paperId from PaperReview where paperId?a and contactId?a", $this->papersel, array_values($missing_pcm));
+            while (($row = edb_row($result)))
+                $this->eass[$row[0]][$row[1]] = max($this->eass[$row[0]][$row[1]], self::ENOASSIGN);
+            Dbl::free($result);
+        }
 
         // mark badpairs as noassign
         foreach ($this->badpairs as $cid => $bp)
@@ -230,66 +233,49 @@ class Autoassigner {
         $this->reset_prefs();
 
         $all_fields = $this->conf->all_review_fields();
+        $score = null;
         $scoredir = 1;
-        if ($scoreinfo === "x")
-            $score = "1";
-        else if ((substr($scoreinfo, 0, 1) === "-"
-                  || substr($scoreinfo, 0, 1) === "+")
-                 && isset($all_fields[substr($scoreinfo, 1)])) {
-            $score = "PaperReview." . substr($scoreinfo, 1);
+        if ((substr($scoreinfo, 0, 1) === "-"
+             || substr($scoreinfo, 0, 1) === "+")
+            && isset($all_fields[substr($scoreinfo, 1)])) {
+            $score = substr($scoreinfo, 1);
             $scoredir = substr($scoreinfo, 0, 1) === "-" ? -1 : 1;
-        } else
-            $score = "PaperReview.overAllMerit";
+        }
 
-        $query = "select Paper.paperId, ? contactId,
-            coalesce(PaperConflict.conflictType, 0) as conflictType,
-            coalesce(PaperReview.reviewType, 0) as myReviewType,
-            coalesce(PaperReview.reviewSubmitted, 0) as myReviewSubmitted,
-            coalesce($score, 0) as reviewScore,
-            Paper.outcome,
-            Paper.managerContactId
-        from Paper
-        left join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId=?)
-        left join PaperReview on (PaperReview.paperId=Paper.paperId and PaperReview.contactId=?)
-        where Paper.paperId ?a
-        group by Paper.paperId";
+        $set = $this->conf->paper_set(null, ["paperId" => $this->papersel, "allConflictType" => true, "reviewSignatures" => true, "scores" => $score ? [$score] : []]);
 
-        $nmade = 0;
-        foreach ($this->pcm as $cid => $p) {
-            $result = $this->conf->qe($query, $cid, $cid, $cid, $this->papersel);
-
-            // First, collect score extremes
-            $scoreextreme = array();
-            $rows = array();
-            while (($row = edb_orow($result))) {
-                if ($row->conflictType > 0
-                    || $row->myReviewType == 0
-                    || $row->myReviewSubmitted == 0
-                    || $row->reviewScore == 0)
-                    $this->eass[$row->contactId][$row->paperId] = self::ENOASSIGN;
-                else {
-                    if (!isset($scoreextreme[$row->paperId])
-                        || $scoredir * $row->reviewScore > $scoredir * $scoreextreme[$row->paperId])
-                        $scoreextreme[$row->paperId] = $row->reviewScore;
-                    $rows[] = $row;
+        $scorearr = [];
+        foreach ($set as $prow) {
+            if ($score) {
+                $prow->ensure_review_score($score);
+            }
+            foreach ($this->pcm as $cid => $p) {
+                if ($prow->has_conflict($cid)
+                    || !($rrow = $prow->review_of_user($cid))
+                    || ($scoreinfo !== "xa" && $rrow->reviewSubmitted == 0)
+                    || ($score && !$rrow->$score)) {
+                    $scorearr[$prow->paperId][$cid] = -1;
+                } else {
+                    $s = $score ? $rrow->$score : 1;
+                    if ($scoredir == -1)
+                        $s = 1000 - $s;
+                    $scorearr[$prow->paperId][$cid] = $s;
                 }
             }
-            // Then, collect preferences; ignore score differences farther
-            // than 1 score away from the relevant extreme
-            foreach ($rows as $row) {
-                $scoredifference = $scoredir * ($row->reviewScore - $scoreextreme[$row->paperId]);
-                if ($scoredifference >= -1)
-                    $this->prefs[$row->contactId][$row->paperId] = $scoredifference;
-            }
-            unset($rows);        // don't need the memory any more
-
-            Dbl::free($result);
-            ++$nmade;
-            if ($nmade % 4 == 0)
-                $this->set_progress(sprintf("Loading reviewer preferences (%d%% done)", (int) ($nmade * 100 / count($this->pcm) + 0.5)));
         }
-        $this->make_pref_groups();
 
+        foreach ($scorearr as $pid => $carr) {
+            $extreme = max($carr);
+            foreach ($carr as $cid => $s) {
+                if ($s < 0) {
+                    $this->eass[$cid][$pid] = self::ENOASSIGN;
+                } else {
+                    $this->prefs[$cid][$pid] = max(0, $s - $extreme + 2);
+                }
+            }
+        }
+
+        $this->make_pref_groups();
         $this->profile["preferences"] = microtime(true) - $time;
     }
 
@@ -546,7 +532,9 @@ class Autoassigner {
                         $m->add_node($dst, "b");
                         $m->add_edge($dst, "p$pid", 1, 0);
                     }
-                } else if ($this->review_gadget == self::REVIEW_GADGET_EXPERTISE) {
+                } else if ($this->review_gadget == self::REVIEW_GADGET_EXPERTISE
+                           && isset($this->prefinfo[$cid][$pid])
+                           && is_array($this->prefinfo[$cid][$pid])) {
                     $exp = $this->prefinfo[$cid][$pid][1];
                     if ($exp > 0)
                         $dst = "p{$pid}x";
@@ -652,13 +640,8 @@ class Autoassigner {
     }
 
     private function analyze_reviewtype($reviewtype, $round) {
-        if ($reviewtype == REVIEW_PRIMARY)
-            $action = "primary";
-        else if ($reviewtype == REVIEW_SECONDARY)
-            $action = "secondary";
-        else
-            $action = "pcreview";
-        return array($action, $round ? ",$round" : "");
+        return [ReviewInfo::unparse_assigner_action($reviewtype),
+                $round ? ",$round" : ""];
     }
 
     function run_reviews_per_pc($reviewtype, $round, $nass) {

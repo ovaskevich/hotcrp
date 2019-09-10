@@ -1,12 +1,11 @@
 <?php
 // pc_topics.php -- HotCRP helper classes for paper list content
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Topics_PaperColumn extends PaperColumn {
     private $interest_contact;
-    function __construct($cj) {
-        parent::__construct($cj);
+    function __construct(Conf $conf, $cj) {
+        parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
         if (!$pl->conf->has_topics())
@@ -27,7 +26,24 @@ class Topics_PaperColumn extends PaperColumn {
         return !isset($row->topicIds) || $row->topicIds == "";
     }
     function content(PaperList $pl, PaperInfo $row) {
-        return $row->unparse_topics_html(true, $this->interest_contact);
+        if (!($tmap = $row->named_topic_map()))
+            return "";
+        $out = $interests = [];
+        if ($this->interest_contact)
+            $interests = $this->interest_contact->topic_interest_map();
+        $sep = rtrim($row->conf->topic_separator()) . '</span> ';
+        foreach ($tmap as $tid => $tname) {
+            if (!empty($out))
+                $out[] = $sep;
+            $t = '<span class="topicsp';
+            if (($i = get($interests, $tid)))
+                $t .= ' topic' . $i;
+            if (strlen($tname) <= 50)
+                $t .= ' nw';
+            $out[] = $t . '">' . htmlspecialchars($tname);
+        }
+        $out[] = '</span>';
+        return join("", $out);
     }
     function text(PaperList $pl, PaperInfo $row) {
         return $row->unparse_topics_text();

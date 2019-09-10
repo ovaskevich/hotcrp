@@ -1,9 +1,9 @@
 <?php
 // reviewinfo.php -- HotCRP class representing reviews
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ReviewInfo {
+    public $conf;
     public $paperId;
     public $reviewId;
     public $contactId;
@@ -54,7 +54,46 @@ class ReviewInfo {
     ];
     const MIN_SFIELD = 12;
 
+    const RATING_GOODMASK = 1;
+    const RATING_BADMASK = 126;
+    // See also script.js:unparse_ratings
+    static public $rating_options = [
+        1 => "good review", 2 => "needs work",
+        4 => "too short", 8 => "too vague", 16 => "too narrow",
+        32 => "not constructive", 64 => "not correct"
+    ];
+    static public $rating_bits = [
+        1 => "good", 2 => "bad", 4 => "short", 8 => "vague",
+        16 => "narrow", 32 => "not-constructive", 64 => "wrong"
+    ];
+
+    static private $type_map = [
+        "meta" => REVIEW_META,
+        "primary" => REVIEW_PRIMARY, "pri" => REVIEW_PRIMARY,
+        "secondary" => REVIEW_SECONDARY, "sec" => REVIEW_SECONDARY,
+        "optional" => REVIEW_PC, "opt" => REVIEW_PC, "pc" => REVIEW_PC,
+        "external" => REVIEW_EXTERNAL, "ext" => REVIEW_EXTERNAL
+    ];
+    static private $type_revmap = [
+        REVIEW_EXTERNAL => "review", REVIEW_PC => "pcreview",
+        REVIEW_SECONDARY => "secondary", REVIEW_PRIMARY => "primary",
+        REVIEW_META => "metareview"
+    ];
+
+    static function parse_type($str) {
+        $str = strtolower($str);
+        if ($str === "review" || $str === "" || $str === "all" || $str === "any")
+            return null;
+        if (str_ends_with($str, "review"))
+            $str = substr($str, 0, -6);
+        return get(self::$type_map, $str, false);
+    }
+    static function unparse_assigner_action($type) {
+        return get(self::$type_revmap, $type, "clearreview");
+    }
+
     private function merge(Conf $conf) {
+        $this->conf = $conf;
         foreach (["paperId", "reviewId", "contactId", "reviewType",
                   "reviewRound", "requestedBy", "reviewBlind",
                   "reviewOrdinal", "reviewNeedsSubmit"] as $k) {
@@ -102,10 +141,15 @@ class ReviewInfo {
         return $rrow;
     }
 
+    function round_name() {
+        return $this->reviewRound ? $this->conf->round_name($this->reviewRound) : "";
+    }
+
     function assign_name($c) {
         $this->firstName = $c->firstName;
         $this->lastName = $c->lastName;
         $this->email = $c->email;
+        $this->sorter = $c->sorter;
     }
 
     static function field_info($id, Conf $conf) {
@@ -157,7 +201,9 @@ class ReviewInfo {
     function unparse_sfields() {
         $data = null;
         foreach (get_object_vars($this) as $k => $v)
-            if (strlen($k) === 3 && $k[0] === "s" && (int) $v !== 0
+            if (strlen($k) === 3
+                && $k[0] === "s"
+                && (int) $v !== 0
                 && ($n = cvtint(substr($k, 1))) >= self::MIN_SFIELD)
                 $data[$k] = (int) $v;
         if ($data === null)
@@ -168,7 +214,10 @@ class ReviewInfo {
         global $Conf;
         $data = null;
         foreach (get_object_vars($this) as $k => $v)
-            if (strlen($k) === 3 && $k[0] === "t" && $v !== null && $v !== "")
+            if (strlen($k) === 3
+                && $k[0] === "t"
+                && $v !== null
+                && $v !== "")
                 $data[$k] = $v;
         if ($data === null)
             return null;
@@ -179,20 +228,33 @@ class ReviewInfo {
     }
 
     static function compare($a, $b) {
+        // 1. different papers
         if ($a->paperId != $b->paperId)
             return (int) $a->paperId < (int) $b->paperId ? -1 : 1;
-        if ($a->reviewOrdinal && $b->reviewOrdinal
+        // 2. different ordinals (both have ordinals)
+        if ($a->reviewOrdinal
+            && $b->reviewOrdinal
             && $a->reviewOrdinal != $b->reviewOrdinal)
             return (int) $a->reviewOrdinal < (int) $b->reviewOrdinal ? -1 : 1;
+        // 3. some submitted reviews have no ordinal (ordinal is reserved for
+        //    user-visible reviews)
         $asub = (int) $a->reviewSubmitted;
         $bsub = (int) $b->reviewSubmitted;
         if (($asub > 0) != ($bsub > 0))
             return $asub > 0 ? -1 : 1;
-        if ($asub != $bsub)
+        if ($asub !== $bsub)
             return $asub < $bsub ? -1 : 1;
-        if (isset($a->sorter) && isset($b->sorter)
+        // 4. submission class
+        $asclass = self::submission_class($a);
+        $bsclass = self::submission_class($b);
+        if ($asclass !== $bsclass)
+            return $asclass < $bsclass ? 1 : -1;
+        // 5. reviewer
+        if (isset($a->sorter)
+            && isset($b->sorter)
             && ($x = strcmp($a->sorter, $b->sorter)) != 0)
             return $x;
+        // 6. review id
         if ($a->reviewId != $b->reviewId)
             return (int) $a->reviewId < (int) $b->reviewId ? -1 : 1;
         return 0;
@@ -204,6 +266,21 @@ class ReviewInfo {
         if ($a->reviewId != $b->reviewId)
             return (int) $a->reviewId < (int) $b->reviewId ? -1 : 1;
         return 0;
+    }
+
+    static function submission_class($rr) {
+        if ($rr->reviewSubmitted > 0)
+            return 5;
+        else if ($rr->reviewType == REVIEW_SECONDARY && $rr->reviewNeedsSubmit <= 0)
+            return 4;
+        else if ($rr->reviewModified > 1 && $rr->timeApprovalRequested > 0)
+            return 3;
+        else if ($rr->reviewModified > 1)
+            return 2;
+        else if ($rr->reviewModified > 0)
+            return 1;
+        else
+            return 0;
     }
 
     function ratings() {
@@ -224,5 +301,35 @@ class ReviewInfo {
         if ($pos !== false)
             return intval(substr($this->allRatings, $pos + strlen($str) - 1));
         return null;
+    }
+
+    static function unparse_rating($rating) {
+        if (isset(self::$rating_bits[$rating]))
+            return self::$rating_bits[$rating];
+        else if (!$rating)
+            return "none";
+        else {
+            $a = [];
+            foreach (self::$rating_bits as $k => $v)
+                if ($rating & $k)
+                    $a[] = $v;
+            return join(" ", $a);
+        }
+    }
+
+    static function parse_rating($s) {
+        if (ctype_digit($s)) {
+            $n = intval($s);
+            if ($n >= 0 && $n < 127)
+                return $n ? : null;
+        }
+        $n = 0;
+        foreach (preg_split('/\s+/', $s) as $word) {
+            if (($k = array_search($word, ReviewInfo::$rating_bits)) !== false)
+                $n |= $k;
+            else if ($word !== "" && $word !== "none")
+                return false;
+        }
+        return $n;
     }
 }

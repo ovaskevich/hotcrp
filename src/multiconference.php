@@ -1,23 +1,32 @@
 <?php
 // multiconference.php -- HotCRP multiconference installations
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Multiconference {
     static private $original_opt = null;
 
     static function init() {
-        global $Opt;
+        global $Opt, $argv;
         assert(self::$original_opt === null);
         self::$original_opt = $Opt;
 
         $confid = get($Opt, "confid");
         if (!$confid && PHP_SAPI == "cli") {
-            $cliopt = getopt("n:", array("name:"));
-            if (get($cliopt, "n"))
-                $confid = $cliopt["n"];
-            else if (get($cliopt, "name"))
-                $confid = $cliopt["name"];
+            for ($i = 1; $i != count($argv); ++$i) {
+                if ($argv[$i] === "-n" || $argv[$i] === "--name") {
+                    if (isset($argv[$i + 1]))
+                        $confid = $argv[$i + 1];
+                    break;
+                } else if (substr($argv[$i], 0, 2) === "-n") {
+                    $confid = substr($argv[$i], 2);
+                    break;
+                } else if (substr($argv[$i], 0, 7) === "--name=") {
+                    $confid = substr($argv[$i], 7);
+                    break;
+                } else if ($argv[$i] === "--") {
+                    break;
+                }
+            }
         } else if (!$confid) {
             $base = Navigation::site_absolute(true);
             if (($multis = get($Opt, "multiconferenceAnalyzer"))) {
@@ -75,7 +84,8 @@ class Multiconference {
             fwrite(STDERR, join("\n", $errors) . "\n");
             exit(1);
         } else if (get($_GET, "ajax")) {
-            header("Content-Type: " . (get($_GET, "jsontext") ? "text/plain" : "application/json"));
+            $ctype = get($_GET, "text") ? "text/plain" : "application/json";
+            header("Content-Type: $ctype; charset=utf-8");
             if (get($Opt, "maintenance"))
                 echo "{\"error\":\"maintenance\"}\n";
             else
@@ -85,7 +95,7 @@ class Multiconference {
                 $Conf = Conf::$g = new Conf($Opt, false);
             $Me = null;
             header("HTTP/1.1 404 Not Found");
-            $Conf->header("HotCRP Error", "", false);
+            $Conf->header("HotCRP Error", "", ["action_bar" => false]);
             foreach ($errors as $i => &$e)
                 $e = ($i ? "<div class=\"hint\">" : "<p>") . htmlspecialchars($e) . ($i ? "</div>" : "</p>");
             echo join("", $errors);

@@ -1,7 +1,6 @@
 <?php
 // mailclasses.php -- HotCRP mail tool
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class MailRecipients {
     private $conf;
@@ -322,12 +321,20 @@ class MailRecipients {
                 Paper.managerContactId";
         else
             $q .= ", -1 as paperId";
-        if ($needreview)
-            $q .= ", PaperReview.reviewType, PaperReview.reviewType as myReviewType";
+        if ($needreview) {
+            if (!$revmatch || $this->type === "rev")
+                $q .= ", " . PaperInfo::my_review_permissions_sql("PaperReview.") . " myReviewPermissions";
+            else
+                $q .= ", (select " . PaperInfo::my_review_permissions_sql() . " from PaperReview where PaperReview.paperId=Paper.paperId and PaperReview.contactId=ContactInfo.contactId group by paperId) myReviewPermissions";
+        } else
+            $q .= ", '' myReviewPermissions";
         if ($needconflict)
             $joins[] = "left join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId=ContactInfo.contactId)";
         $q .= "\nfrom " . join("\n", $joins) . "\nwhere "
-            . join("\n    and ", $where) . "\norder by ";
+            . join("\n    and ", $where) . "\ngroup by ContactInfo.contactId";
+        if ($needpaper)
+            $q .= ", Paper.paperId";
+        $q .= "\norder by ";
         if (!$needpaper)
             $q .= "email";
         else if ($paper_sensitive)

@@ -1,39 +1,35 @@
 <?php
 // reviewprefs.php -- HotCRP review preference global settings page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 require_once("src/papersearch.php");
 if (!$Me->privChair && !$Me->isPC)
     $Me->escape();
 
-global $Qreq;
-if (!$Qreq)
-    $Qreq = make_qreq();
-
 // set reviewer
 $reviewer = $Me;
 $incorrect_reviewer = false;
-if ($Qreq->reviewer && $Me->privChair
+if ($Qreq->reviewer
+    && $Me->privChair
     && $Qreq->reviewer !== $Me->email
     && $Qreq->reviewer !== $Me->contactId) {
     $incorrect_reviewer = true;
     foreach ($Conf->full_pc_members() as $pcm)
-        if (strcasecmp($pcm->email, $Qreq->reviewer) == 0
-            || (string) $pcm->contactId === $Qreq->reviewer) {
+        if (strcasecmp($Qreq->reviewer, $pcm->email) == 0
+            || $Qreq->reviewer === (string) $pcm->contactId) {
             $reviewer = $pcm;
             $incorrect_reviewer = false;
+            $Qreq->reviewer = $pcm->email;
         }
 } else if (!$Qreq->reviewer && !($Me->roles & Contact::ROLE_PC)) {
     foreach ($Conf->pc_members() as $pcm) {
-        redirectSelf(["reviewer" => $pcm->email]);
+        SelfHref::redirect($Qreq, ["reviewer" => $pcm->email]);
         // in case redirection fails:
         $reviewer = $pcm;
         break;
     }
 }
-$Qreq->set_attachment("reviewer_contact", $reviewer);
 if ($incorrect_reviewer)
     Conf::msg_error("Reviewer " . htmlspecialchars($Qreq->reviewer) . " is not on the PC.");
 
@@ -61,7 +57,7 @@ if (!isset($Qreq->fn) && isset($Qreq->default))
 if ($Qreq->fn === "get"
     && ($Qreq->getfn === "revpref" || $Qreq->getfn === "revprefx")
     && !isset($Qreq->pap) && !isset($Qreq->p))
-    $Qreq->p = $_REQUEST["p"] = "all";
+    $Qreq->p = "all";
 
 function prefs_hoturl_args() {
     global $Me, $reviewer;
@@ -79,32 +75,32 @@ function savePreferences($Qreq, $reset_p) {
         return;
     }
 
-    $csv = new CsvGenerator;
-    $csv->set_header(["paper", "email", "preference"]);
+    $csvg = new CsvGenerator;
+    $csvg->select(["paper", "email", "preference"]);
     $suffix = "u" . $reviewer->contactId;
     foreach ($Qreq as $k => $v)
         if (strlen($k) > 7 && substr($k, 0, 7) == "revpref") {
             if (str_ends_with($k, $suffix))
                 $k = substr($k, 0, -strlen($suffix));
             if (($p = cvtint(substr($k, 7))) > 0)
-                $csv->add([$p, $reviewer->email, $v]);
+                $csvg->add([$p, $reviewer->email, $v]);
         }
-    if ($csv->is_empty()) {
+    if ($csvg->is_empty()) {
         Conf::msg_error("No reviewer preferences to update.");
         return;
     }
 
     $aset = new AssignmentSet($Me, true);
-    $aset->parse($csv->unparse());
+    $aset->parse($csvg->unparse());
     if ($aset->execute()) {
         Conf::msg_confirm("Preferences saved.");
         if ($reset_p)
-            unset($_REQUEST["p"], $_GET["p"], $_POST["p"], $_REQUEST["pap"], $_GET["pap"], $_POST["pap"]);
-        redirectSelf();
+            unset($Qreq->p, $Qreq->pap);
+        SelfHref::redirect($Qreq);
     } else
         Conf::msg_error(join("<br />", $aset->errors_html()));
 }
-if ($Qreq->fn === "saveprefs" && check_post())
+if ($Qreq->fn === "saveprefs" && $Qreq->post_ok())
     savePreferences($Qreq, true);
 
 
@@ -120,7 +116,7 @@ SearchSelection::clear_request($Qreq);
 
 
 // Set multiple paper preferences
-if ($Qreq->fn === "setpref" && $SSel && !$SSel->is_empty() && check_post()) {
+if ($Qreq->fn === "setpref" && $SSel && !$SSel->is_empty() && $Qreq->post_ok()) {
     $new_qreq = new Qrequest($Qreq->method());
     foreach ($SSel->selection() as $p)
         $new_qreq["revpref{$p}u{$reviewer->contactId}"] = $Qreq->pref;
@@ -134,7 +130,7 @@ function pref_xmsgc($msg) {
     if (!$Conf->headerPrinted)
         $Conf->warnMsg($msg);
     else
-        echo '<div class="xmsgs-atbody">', Ht::xmsg(1, $msg), '</div>';
+        echo '<div class="msgs-wide">', Ht::xmsg(1, $msg), '</div>';
 }
 
 function parseUploadedPreferences($text, $filename, $apply) {
@@ -177,18 +173,18 @@ function parseUploadedPreferences($text, $filename, $apply) {
             pref_xmsgc("Preferences unchanged.\n" . $assignset->errors_div_html(true));
     } else if ($apply) {
         if ($assignset->execute(true))
-            redirectSelf();
+            SelfHref::redirect($Qreq);
     } else {
-        $Conf->header("Review preferences", "revpref", actionBar());
+        $Conf->header("Review preferences", "revpref");
         if ($assignset->has_error())
             pref_xmsgc($assignset->errors_div_html(true));
 
-        echo Ht::form_div(hoturl_post("reviewprefs", prefs_hoturl_args() + ["fn" => "saveuploadpref"]));
+        echo Ht::form(hoturl_post("reviewprefs", prefs_hoturl_args() + ["fn" => "saveuploadpref"]));
 
         $actions = '<div class="aab aabr aabig">'
-            . '<div class="aabut">' . Ht::submit("Save changes", ["class" => "btn btn-default"]) . '</div>'
-            . '<div class="aabut">' . Ht::submit("cancel", "Cancel") . '</div>'
-            . '<hr class="c" /></div>';
+            . Ht::submit("Save changes", ["class" => "aabut btn btn-primary"])
+            . Ht::submit("cancel", "Cancel", ["class" => "aabut btn"])
+            . '</div>';
         if (count($assignset->assigned_pids()) >= 4)
             echo $actions;
 
@@ -198,14 +194,14 @@ function parseUploadedPreferences($text, $filename, $apply) {
         echo '<div class="g"></div>', $actions,
             Ht::hidden("file", $assignset->unparse_csv()->unparse()),
             Ht::hidden("filename", $filename),
-            '</div></form>', "\n";
+            '</form>', "\n";
         $Conf->footer();
         exit;
     }
 }
-if ($Qreq->fn === "saveuploadpref" && check_post() && !$Qreq->cancel)
+if ($Qreq->fn === "saveuploadpref" && $Qreq->post_ok() && !$Qreq->cancel)
     parseUploadedPreferences($Qreq->file, $Qreq->filename, true);
-else if ($Qreq->fn === "uploadpref" && check_post() && $Qreq->has_file("uploadedFile"))
+else if ($Qreq->fn === "uploadpref" && $Qreq->post_ok() && $Qreq->has_file("uploadedFile"))
     parseUploadedPreferences($Qreq->file_contents("uploadedFile"),
                              $Qreq->file_filename("uploadedFile"), false);
 else if ($Qreq->fn === "uploadpref")
@@ -213,7 +209,7 @@ else if ($Qreq->fn === "uploadpref")
 
 
 // Prepare search
-$Qreq->urlbase = hoturl_site_relative_raw("reviewprefs", prefs_hoturl_args());
+$Qreq->urlbase = hoturl_site_relative_raw("reviewprefs");
 $Qreq->q = get($Qreq, "q", "");
 $Qreq->t = "editpref";
 $Qreq->display = PaperList::change_display($Me, "pf");
@@ -231,17 +227,17 @@ if (isset($Qreq->redisplay)) {
         if (substr($k, 0, 4) == "show" && $v)
             $pfd .= substr($k, 4) . " ";
     $Conf->save_session("pfdisplay", $pfd);
-    redirectSelf();
+    SelfHref::redirect($Qreq);
 }
 
 
 // Header and body
-$Conf->header("Review preferences", "revpref", actionBar());
+$Conf->header("Review preferences", "revpref");
 $Conf->infoMsg($Conf->message_html("revprefdescription"));
 
 
 // search
-$search = new PaperSearch($Me, ["t" => $Qreq->t, "urlbase" => $Qreq->urlbase, "q" => $Qreq->q], $reviewer);
+$search = new PaperSearch($Me, ["t" => $Qreq->t, "urlbase" => $Qreq->urlbase, "q" => $Qreq->q, "reviewer" => $reviewer]);
 $pl = new PaperList($search, ["sort" => true, "report" => "pf"], $Qreq);
 $pl->set_table_id_class("foldpl", "pltable_full", "p#");
 $pl_text = $pl->table_html("editpref",
@@ -257,9 +253,8 @@ echo "<table id='searchform' class='tablinks1'>
 $showing_au = !$Conf->subBlindAlways() && !$pl->is_folded("au");
 $showing_anonau = (!$Conf->subBlindNever() || $Me->privChair) && !$pl->is_folded("anonau");
 
-echo Ht::form_div(hoturl("reviewprefs"), array("method" => "get", "id" => "redisplayform",
-                                               "class" => ($showing_au || ($showing_anonau && $Conf->subBlindAlways()) ? "fold10o" : "fold10c"),
-                                               "data-fold" => "true")),
+echo Ht::form(hoturl("reviewprefs"), ["method" => "get", "id" => "redisplayform",
+                                      "class" => "has-fold " . ($showing_au || ($showing_anonau && $Conf->subBlindAlways()) ? "fold10o" : "fold10c")]),
     "<table>";
 
 if ($Me->privChair) {
@@ -271,14 +266,14 @@ if ($Me->privChair) {
         $prefcount[$row[0]] = $row[1];
 
     $sel = [];
-    $textarg = ["lastFirst" => $Conf->opt("sortByLastName")];
+    $textarg = ["lastFirst" => $Conf->sort_by_last];
     foreach ($Conf->pc_members() as $p)
         $sel[$p->email] = Text::name_html($p, $textarg) . " &nbsp; [" . plural(get($prefcount, $p->contactId, 0), "pref") . "]";
     if (!isset($sel[$reviewer->email]))
         $sel[$reviewer->email] = Text::name_html($reviewer) . " &nbsp; [" . get($prefcount, $reviewer->contactId, 0) . "; not on PC]";
 
     echo Ht::select("reviewer", $sel, $reviewer->email),
-        "<div class='g'></div></td></tr>\n";
+        "<div class='g'></div></td><td></td></tr>\n";
     Ht::stash_script('$("#redisplayform select[name=reviewer]").on("change", function () { $$("redisplayform").submit() })');
 }
 
@@ -324,7 +319,7 @@ if (!empty($show_data) && $pl->count)
     echo '<tr><td class="lxcaption"><strong>Show:</strong> &nbsp;',
         '</td><td colspan="2" class="lentry">',
         join('', $show_data), '</td></tr>';
-echo "</table></div></form>"; // </div></div>
+echo "</table></form>"; // </div></div>
 echo "</td></tr></table>\n";
 Ht::stash_script("$(document).on(\"change\",\"input.paperlist-display\",plinfo.checkbox_change);$(\"#showau\").on(\"change\", function () { foldup.call(this, null, {n:10}) })");
 
@@ -333,13 +328,15 @@ Ht::stash_script("$(document).on(\"change\",\"input.paperlist-display\",plinfo.c
 $hoturl_args = prefs_hoturl_args();
 if ($Qreq->q)
     $hoturl_args["q"] = $Qreq->q;
-echo Ht::form_div(hoturl_post("reviewprefs", $hoturl_args), ["id" => "sel", "class" => "assignpc"]),
+if ($Qreq->sort)
+    $hoturl_args["sort"] = $Qreq->sort;
+echo Ht::form(hoturl_post("reviewprefs", $hoturl_args), ["id" => "sel", "class" => "assignpc"]),
     Ht::hidden("defaultact", "", array("id" => "defaultact")),
     Ht::hidden_default_submit("default", 1);
 Ht::stash_script('$("#sel").on("submit", paperlist_ui)');
 echo "<div class='pltable_full_ctr'>\n",
     '<noscript><div style="text-align:center">', Ht::submit("fn", "Save changes", ["value" => "saveprefs"]), '</div></noscript>',
     $pl_text,
-    "</div></div></form>\n";
+    "</div></form>\n";
 
 $Conf->footer();

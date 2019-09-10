@@ -1,7 +1,6 @@
 <?php
 // test05.php -- HotCRP review and some setting tests
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
@@ -12,6 +11,8 @@ require_once("$ConfSitePATH/src/settingvalues.php");
 // load users
 $user_chair = $Conf->user_by_email("chair@_.com");
 $user_mgbaker = $Conf->user_by_email("mgbaker@cs.stanford.edu"); // pc
+$user_diot = $Conf->user_by_email("christophe.diot@sophia.inria.fr"); // pc, red
+$user_pdruschel = $Conf->user_by_email("pdruschel@cs.rice.edu"); // pc
 $Conf->save_setting("rev_open", 1);
 
 // 1-18 have 3 assignments, reset have 0
@@ -368,13 +369,10 @@ assert_search_papers($user_chair, "sco14:0", "1");
 assert_search_papers($user_chair, "sco15:0", "1");
 assert_search_papers($user_chair, "sco16:0", "1");
 assert_search_papers($user_chair, "tex4:bobcat", "1");
-assert_search_papers($user_chair, "tex5:none", "1");
 assert_search_papers($user_chair, "tex6:fisher*", "1");
 assert_search_papers($user_chair, "tex7:tiger", "1");
 assert_search_papers($user_chair, "tex8:leopard", "1");
 assert_search_papers($user_chair, "tex9:tremolo", "1");
-assert_search_papers($user_chair, "tex10:none", "1");
-assert_search_papers($user_chair, "tex11:none", "1");
 
 // check handling of sfields and tfields: don't lose unchanged fields
 save_review(1, $user_mgbaker, [
@@ -402,12 +400,10 @@ assert_search_papers($user_chair, "comaut:author", "1");
 assert_search_papers($user_chair, "comaut:äuthor", "1");
 assert_search_papers($user_chair, "comaut:áuthor", "");
 assert_search_papers($user_chair, "tex4:bobcat", "1");
-assert_search_papers($user_chair, "tex5:none", "1");
 assert_search_papers($user_chair, "tex6:fisher*", "1");
 assert_search_papers($user_chair, "tex7:tiger", "1");
 assert_search_papers($user_chair, "tex8:leopard", "1");
 assert_search_papers($user_chair, "tex9:tremolo", "1");
-assert_search_papers($user_chair, "tex10:none", "1");
 assert_search_papers($user_chair, "tex11:butt", "1");
 
 // check handling of sfields and tfields: no changes at all
@@ -435,12 +431,10 @@ assert_search_papers($user_chair, "sco14:0", "1");
 assert_search_papers($user_chair, "sco15:0", "1");
 assert_search_papers($user_chair, "sco16:1", "1");
 assert_search_papers($user_chair, "tex4:bobcat", "1");
-assert_search_papers($user_chair, "tex5:none", "1");
 assert_search_papers($user_chair, "tex6:fisher*", "1");
 assert_search_papers($user_chair, "tex7:tiger", "1");
 assert_search_papers($user_chair, "tex8:leopard", "1");
 assert_search_papers($user_chair, "tex9:tremolo", "1");
-assert_search_papers($user_chair, "tex10:none", "1");
 assert_search_papers($user_chair, "tex11:butt", "1");
 
 // check handling of sfields and tfields: clear extension fields
@@ -483,12 +477,37 @@ assert_search_papers($user_chair, "sco14:0", "1");
 assert_search_papers($user_chair, "sco15:0", "1");
 assert_search_papers($user_chair, "sco16:1", "1");
 assert_search_papers($user_chair, "tex4:bobcat", "1");
-assert_search_papers($user_chair, "tex5:none", "1");
 assert_search_papers($user_chair, "tex6:fisher*", "1");
 assert_search_papers($user_chair, "tex7:tiger", "1");
 assert_search_papers($user_chair, "tex8:leopard", "1");
 assert_search_papers($user_chair, "tex9:tremolo", "1");
-assert_search_papers($user_chair, "tex10:none", "1");
+assert_search_papers($user_chair, "tex11:butt", "1");
+
+save_review(1, $user_mgbaker, [
+    "ovemer" => 3, "sco15" => 2,
+    "tex8" => "leopardino", "ready" => true
+]);
+
+assert_search_papers($user_chair, "sco3:1", "1");
+assert_search_papers($user_chair, "sco4:2", "1");
+assert_search_papers($user_chair, "sco5:3", "1");
+assert_search_papers($user_chair, "sco6:0", "1");
+assert_search_papers($user_chair, "sco7:1", "1");
+assert_search_papers($user_chair, "sco8:2", "1");
+assert_search_papers($user_chair, "sco9:3", "1");
+assert_search_papers($user_chair, "sco10:0", "1");
+assert_search_papers($user_chair, "sco11:2", "1");
+assert_search_papers($user_chair, "sco12:2", "1");
+assert_search_papers($user_chair, "sco13:3", "1");
+assert_search_papers($user_chair, "sco14:0", "1");
+assert_search_papers($user_chair, "sco15:2", "1");
+assert_search_papers($user_chair, "sco16:1", "1");
+assert_search_papers($user_chair, "tex4:bobcat", "1");
+assert_search_papers($user_chair, "tex6:fisher*", "1");
+assert_search_papers($user_chair, "tex7:tiger", "1");
+assert_search_papers($user_chair, "tex8:leopard", "");
+assert_search_papers($user_chair, "tex8:leopardino", "1");
+assert_search_papers($user_chair, "tex9:tremolo", "1");
 assert_search_papers($user_chair, "tex11:butt", "1");
 
 // simplify review form
@@ -516,8 +535,59 @@ xassert_eqq($rrow17m->t02, "No comments\n");
 xassert_eqq($rrow17m->reviewOrdinal, 1);
 xassert($rrow17m->reviewSubmitted > 0);
 
+// Check review diffs
+$paper18 = fetch_paper(18, $user_diot);
+$tf = new ReviewValues($Conf->review_form());
+xassert($tf->parse_json(["ovemer" => 2, "revexp" => 1, "papsum" => "No summary", "comaut" => "No comments"]));
+xassert($tf->check_and_save($user_diot, $paper18));
+
+$rrow18d = fetch_review($paper18, $user_diot);
+$rd = new ReviewDiffInfo($paper18, $rrow18d);
+$rd->add_field($Conf->find_review_field("ovemer"), 3);
+$rd->add_field($Conf->find_review_field("papsum"), "There definitely is a summary in this position.");
+xassert_eqq(ReviewDiffInfo::unparse_patch($rd->make_patch()),
+            '{"s01":2,"t01":"No summary\\n"}');
+xassert_eqq(ReviewDiffInfo::unparse_patch($rd->make_patch(1)),
+            '{"s01":3,"t01":"There definitely is a summary in this position."}');
+
+$rrow18d2 = clone $rrow18d;
+xassert_eq($rrow18d2->overAllMerit, 2);
+xassert_eq($rrow18d2->reviewerQualification, 1);
+xassert_eqq($rrow18d2->t01, "No summary\n");
+ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch(1));
+xassert_eq($rrow18d2->overAllMerit, 3);
+xassert_eq($rrow18d2->reviewerQualification, 1);
+xassert_eqq($rrow18d2->t01, "There definitely is a summary in this position.");
+ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch());
+xassert_eq($rrow18d2->overAllMerit, 2);
+xassert_eq($rrow18d2->reviewerQualification, 1);
+xassert_eqq($rrow18d2->t01, "No summary\n");
+
+$tf = new ReviewValues($Conf->review_form());
+xassert($tf->parse_json(["papsum" =>
+    "Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal.\n\
+\n\
+Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure. We are met on a great battle-field of that war. We have come to dedicate a portion of that field, as a final resting place for those who here gave their lives that that nation might live. It is altogether fitting and proper that we should do this.\n\
+\n\
+But, in a larger sense, we can not dedicate -- we can not consecrate -- we can not hallow -- this ground. The brave men, living and dead, who struggled here, have consecrated it, far above our poor power to add or detract. The world will little note, nor long remember what we say here, but it can never forget what they did here. It is for us the living, rather, to be dedicated here to the unfinished work which they who fought here have thus far so nobly advanced. It is rather for us to be here dedicated to the great task remaining before us -- that from these honored dead we take increased devotion to that cause for which they gave the last full measure of devotion -- that we here highly resolve that these dead shall not have died in vain -- that this nation, under God, shall have a new birth of freedom -- and that government of the people, by the people, for the people, shall not perish from the earth.\n"]));
+xassert($tf->check_and_save($user_diot, $paper18));
+
+$rrow18d = fetch_review($paper18, $user_diot);
+$gettysburg = $rrow18d->t01;
+$gettysburg2 = str_replace("by the people", "near the people", $gettysburg);
+
+$rd = new ReviewDiffInfo($paper18, $rrow18d);
+$rd->add_field($Conf->find_review_field("papsum"), $gettysburg2);
+
+$rrow18d2 = clone $rrow18d;
+xassert_eqq($rrow18d2->t01, $gettysburg);
+ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch(1));
+xassert_eqq($rrow18d2->t01, $gettysburg2);
+ReviewDiffInfo::apply_patch($rrow18d2, $rd->make_patch());
+xassert_eqq($rrow18d2->t01, $gettysburg);
+
 // check some review visibility policies
-$user_external = Contact::create($Conf, ["email" => "external@_.com", "name" => "External Reviewer"]);
+$user_external = Contact::create($Conf, null, ["email" => "external@_.com", "name" => "External Reviewer"]);
 $user_mgbaker->assign_review(17, $user_external->contactId, REVIEW_EXTERNAL,
     ["round_number" => 3]);
 xassert(!$user_external->can_view_review($paper17, $rrow17m));
@@ -526,6 +596,7 @@ $Conf->save_setting("extrev_view", 0);
 save_review(17, $user_external, [
     "ovemer" => 2, "revexp" => 1, "papsum" => "Hi", "comaut" => "Bye", "ready" => true
 ]);
+MailChecker::check_db("test06-17external");
 xassert(!$user_external->can_view_review($paper17, $rrow17m));
 xassert(!$user_external->can_view_review_identity($paper17, $rrow17m));
 $Conf->save_setting("extrev_view", 1);
@@ -540,6 +611,7 @@ $user_lixia = $Conf->user_by_email("lixia@cs.ucla.edu");
 $tf = new ReviewValues($Conf->review_form());
 xassert($tf->parse_json(["ovemer" => 2, "revexp" => 1, "papsum" => "Radical", "comaut" => "Nonradical"]));
 xassert($tf->check_and_save($user_lixia, $paper17));
+MailChecker::check_db("test06-17lixia");
 $rrow17h = fetch_review($paper17, $user_lixia);
 $rrow17x = fetch_review($paper17, $user_external);
 xassert_eqq($rrow17m->reviewRound, 3);
@@ -639,5 +711,68 @@ xassert(!$user_external->can_view_review_identity($paper17, $rrow17h));
 xassert($user_external->can_view_review_identity($paper17, $rrow17x));
 assert_search_papers($user_chair, "re:mgbaker", "1 13 17");
 assert_search_papers($user_lixia, "re:mgbaker", "1");
+
+save_review(17, $user_external, [
+    "ovemer" => 1
+]);
+assert_search_papers($user_chair, "17 ovemer:2<=1", "");
+assert_search_papers($user_chair, "17 ovemer:=1<=1", "17");
+assert_search_papers($user_chair, "17 ovemer=1<=1", "17");
+
+save_review(17, $user_pdruschel, [
+    "ready" => true, "ovemer" => 1, "revexp" => 1
+]);
+assert_search_papers($user_chair, "17 ovemer:2<=1", "17");
+assert_search_papers($user_chair, "17 ovemer:=2<=1", "17");
+assert_search_papers($user_chair, "17 ovemer:1<=1", "17");
+assert_search_papers($user_chair, "17 ovemer:=1<=1", "");
+assert_search_papers($user_chair, "17 ovemer=1<=1", "");
+
+assert_search_papers($user_chair, "ovemer:1..2", "17 18");
+assert_search_papers($user_chair, "ovemer:1..3", "1 17 18");
+assert_search_papers($user_chair, "ovemer:1–2", "17");
+assert_search_papers($user_chair, "ovemer:1-3", "");
+assert_search_papers($user_chair, "ovemer:2..1", "17 18");
+assert_search_papers($user_chair, "ovemer:3..1", "1 17 18");
+
+// `r` vs. `rout`
+assert_search_papers($user_mgbaker, ["t" => "r", "q" => ""], "1 13 17");
+assert_search_papers($user_mgbaker, ["t" => "rout", "q" => ""], "13");
+assert_search_papers($user_mgbaker, ["t" => "r", "q" => "internet OR datagram"], "13");
+assert_search_papers($user_mgbaker, ["t" => "rout", "q" => "internet OR datagram"], "13");
+
+xassert_assign($user_chair, "paper,action,user\n19,review,new-anonymous");
+$user_mgbaker->change_review_token($Conf->fetch_ivalue("select reviewToken from PaperReview where paperId=19 and reviewToken!=0"), true);
+assert_search_papers($user_mgbaker, ["t" => "r", "q" => ""], "1 13 17 19");
+assert_search_papers($user_mgbaker, ["t" => "rout", "q" => ""], "13 19");
+assert_search_papers($user_mgbaker, ["t" => "r", "q" => "internet"], "13");
+assert_search_papers($user_mgbaker, ["t" => "rout", "q" => "internet"], "13");
+assert_search_papers($user_mgbaker, ["t" => "r", "q" => "internet OR datagram"], "13 19");
+assert_search_papers($user_mgbaker, ["t" => "rout", "q" => "internet OR datagram"], "13 19");
+assert_search_papers($user_mgbaker, "(internet OR datagram) 13 19", "13 19");
+
+// paper options
+assert_search_papers($user_mgbaker, "has:calories", "1 2 3 4 5");
+$sv = SettingValues::make_request($user_chair, [
+    "has_options" => 1,
+    "optn_1" => "Fudge",
+    "optid_1" => 1,
+    "optfp_1" => 1,
+    "optvt_1" => "numeric"
+]);
+xassert($sv->execute());
+xassert_eqq(join(" ", $sv->changes()), "options");
+assert_search_papers($user_mgbaker, "has:fudge", "1 2 3 4 5");
+
+$sv = SettingValues::make_request($user_chair, [
+    "has_options" => 1,
+    "optn_1" => "Fudge",
+    "optid_1" => 1,
+    "optfp_1" => 1,
+    "optvt_1" => "checkbox"
+]);
+xassert($sv->execute());
+xassert_eqq(join(" ", $sv->changes()), "options");
+assert_search_papers($user_mgbaker, "has:fudge", "");
 
 xassert_exit();

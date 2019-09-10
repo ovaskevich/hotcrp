@@ -1,7 +1,6 @@
 <?php
 // listactions/la_tag.php -- HotCRP helper classes for list actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Tag_ListAction extends ListAction {
     static function render(PaperList $pl) {
@@ -24,7 +23,7 @@ class Tag_ListAction extends ListAction {
         $t .= 'tag<span class="fn99">(s)</span> &nbsp;'
             . Ht::entry("tag", $pl->qreq->tag,
                         ["size" => 15, "class" => "want-focus js-autosubmit js-submit-action-info-tag", "data-autosubmit-type" => "tag"])
-            . ' &nbsp;' . Ht::submit("fn", "Go", ["value" => "tag"]);
+            . ' &nbsp;' . Ht::submit("fn", "Go", ["value" => "tag", "class" => "btn uix js-submit-mark"]);
         if ($pl->user->privChair) {
             $t .= "<div class='fx'><div style='margin:2px 0'>"
                 . Ht::checkbox("tagcr_gapless", 1, !!$pl->qreq->tagcr_gapless, array("style" => "margin-left:0"))
@@ -38,7 +37,7 @@ class Tag_ListAction extends ListAction {
         }
 
         return [Ht::select("tagfn", $tagopt, $pl->qreq->tagfn, $tagextra) . " &nbsp;",
-            ["linelink-class" => "foldc fold99c", "linelink-data-fold" => 1, "content" => $t]];
+            ["linelink-class" => "has-fold foldc fold99c", "content" => $t]];
     }
     function allow(Contact $user) {
         return $user->can_change_some_tag();
@@ -117,7 +116,7 @@ class Tag_ListAction extends ListAction {
             foreach (array("tag", "tagfn", "tagcr_method", "tagcr_source", "tagcr_gapless") as $arg)
                 if (isset($qreq[$arg]))
                     $args[$arg] = $qreq[$arg];
-            redirectSelf($args);
+            SelfHref::redirect($qreq, $args);
         }
     }
 }

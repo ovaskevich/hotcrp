@@ -1,49 +1,42 @@
 <?php
 // home.php -- HotCRP home page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
-$email_class = "";
-$password_class = "";
-
 // signin links
 // auto-signin when email & password set
-if (isset($_REQUEST["email"]) && isset($_REQUEST["password"])) {
-    $_REQUEST["action"] = get($_REQUEST, "action", "login");
-    $_REQUEST["signin"] = get($_REQUEST, "signin", "go");
+if (isset($Qreq->email) && isset($Qreq->password)) {
+    $Qreq->action = $Qreq->get("action", "login");
+    $Qreq->signin = $Qreq->get("signin", "go");
 }
 // CSRF protection: ignore unvalidated signin/signout for known users
-if (!$Me->is_empty() && !check_post())
-    unset($_REQUEST["signout"]);
+if (!$Me->is_empty() && !$Qreq->post_ok())
+    unset($Qreq->signout);
 if ($Me->has_email()
-    && (!check_post() || strcasecmp($Me->email, trim(req("email"))) == 0))
-    unset($_REQUEST["signin"]);
-if (!isset($_REQUEST["email"]) || !isset($_REQUEST["action"]))
-    unset($_REQUEST["signin"]);
+    && (!$Qreq->post_ok() || strcasecmp($Me->email, trim($Qreq->email)) == 0))
+    unset($Qreq->signin);
+if (!isset($Qreq->email) || !isset($Qreq->action))
+    unset($Qreq->signin);
 // signout
-if (isset($_REQUEST["signout"]))
+if (isset($Qreq->signout))
     LoginHelper::logout(true);
-else if (isset($_REQUEST["signin"]) && !$Conf->opt("httpAuthLogin"))
+else if (isset($Qreq->signin) && !$Conf->opt("httpAuthLogin"))
     LoginHelper::logout(false);
 // signin
 if ($Conf->opt("httpAuthLogin"))
-    LoginHelper::check_http_auth();
-else if (isset($_REQUEST["signin"]))
-    LoginHelper::check_login();
-else if ((isset($_REQUEST["signin"]) || isset($_REQUEST["signout"]))
-         && isset($_REQUEST["post"]))
-    redirectSelf();
-
-// set a session variable to test that their browser supports cookies
-// NB need to do this whenever we'll send a "testsession=1" param
-if ($Me->is_empty() || isset($_REQUEST["signin"]))
-    $_SESSION["testsession"] = true;
+    LoginHelper::check_http_auth($Qreq);
+else if (isset($Qreq->signin))
+    LoginHelper::check_login($Qreq);
+else if ((isset($Qreq->signin) || isset($Qreq->signout))
+         && isset($Qreq->post))
+    SelfHref::redirect($Qreq);
+else if (isset($Qreq->postlogin))
+    LoginHelper::check_postlogin($Qreq);
 
 // disabled users
 if (!$Me->is_empty() && $Me->disabled) {
-    $Conf->header("Account disabled", "home", false);
+    $Conf->header("Account disabled", "home", ["action_bar" => false]);
     echo Conf::msg_info("Your account on this site has been disabled by an administrator. Please contact the site administrators with questions.");
     echo "<hr class=\"c\" />\n";
     $Conf->footer();
@@ -75,11 +68,11 @@ if ($Me->has_database_account() && $Conf->session("freshlogin") === true) {
 
 
 // review tokens
-function change_review_tokens() {
+function change_review_tokens($qreq) {
     global $Conf, $Me;
     $cleared = $Me->change_review_token(false, false);
     $tokeninfo = array();
-    foreach (preg_split('/\s+/', $_REQUEST["token"]) as $x)
+    foreach (preg_split('/\s+/', $qreq->token) as $x)
         if ($x == "")
             /* no complaints */;
         else if (!($token = decode_token($x, "V")))
@@ -101,12 +94,12 @@ function change_review_tokens() {
         $tokeninfo[] = "Review tokens cleared.";
     if (count($tokeninfo))
         $Conf->infoMsg(join("<br />\n", $tokeninfo));
-    redirectSelf();
+    SelfHref::redirect($qreq);
 }
 
-if (isset($_REQUEST["token"]) && check_post() && !$Me->is_empty())
-    change_review_tokens();
-if (isset($_REQUEST["cleartokens"]))
+if (isset($Qreq->token) && $Qreq->post_ok() && !$Me->is_empty())
+    change_review_tokens($Qreq);
+if (isset($Qreq->cleartokens) && $Qreq->post_ok())
     $Me->change_review_token(false, false);
 
 
@@ -114,8 +107,8 @@ if ($Me->privChair)
     require_once("adminhome.php");
 
 
-$title = ($Me->is_empty() || isset($_REQUEST["signin"]) ? "Sign in" : "Home");
-$Conf->header($title, "home", actionBar());
+$title = ($Me->is_empty() || isset($Qreq->signin) ? "Sign in" : "Home");
+$Conf->header($title, "home");
 $xsep = " <span class='barsep'>·</span> ";
 
 if ($Me->privChair)
@@ -127,7 +120,7 @@ echo '<div class="homeside">';
 
 echo '<noscript><div class="homeinside"><strong>This site requires JavaScript.</strong> ',
     "Many features will work without JavaScript, but not all.<br />",
-    '<a style="font-size:smaller" href="https://github.com/kohler/hotcrp/">Report bad compatibility problems</a></div></noscript>';
+    '<a class="small" href="https://github.com/kohler/hotcrp/">Report bad compatibility problems</a></div></noscript>';
 
 // Conference management and information sidebar
 $inside_links = [];
@@ -181,15 +174,13 @@ Welcome to the ', htmlspecialchars($Conf->full_name()), " submissions site.";
         echo " For general conference information, see <a href=\"", htmlspecialchars($Conf->opt("conferenceSite")), "\">", htmlspecialchars($Conf->opt("conferenceSite")), "</a>.";
     echo '</div>';
 }
-if (!$Me->has_email() || isset($_REQUEST["signin"])) {
+if (!$Me->has_email() || isset($Qreq->signin)) {
     echo '<div class="homegrp">', $Conf->_("Sign in to submit or review papers."), '</div>';
-    $passwordFocus = ($email_class == "" && $password_class != "");
+    $passwordFocus = !Ht::control_class("email") && Ht::control_class("password");
     echo '<hr class="home" />
 <div class="homegrp foldo" id="homeacct">',
-        Ht::form(hoturl_post("index")),
+        Ht::form(hoturl("index", ["post" => post_value(true)])),
         '<div class="f-contain">';
-    if ($Me->is_empty() || isset($_REQUEST["signin"]))
-        echo Ht::hidden("testsession", 1);
     if ($Conf->opt("contactdb_dsn") && $Conf->opt("contactdb_loginFormHeading"))
         echo $Conf->opt("contactdb_loginFormHeading");
     $password_reset = $Conf->session("password_reset");
@@ -197,47 +188,27 @@ if (!$Me->has_email() || isset($_REQUEST["signin"])) {
         $password_reset = null;
         $Conf->save_session("password_reset", null);
     }
-    echo '<div class="f-i">
-  <div class="f-c', $email_class, '">',
-        ($Conf->opt("ldapLogin") ? "Username" : "Email"),
+    $is_external_login = $Conf->external_login();
+    echo '<div class="', Ht::control_class("email", "f-i"), '">',
+        Ht::label($is_external_login ? "Username" : "Email", "signin_email"),
+        Ht::entry("email", $Qreq->get("email", $password_reset ? $password_reset->email : ""),
+                  ["size" => 36, "id" => "signin_email", "class" => "fullw", "autocomplete" => "username", "tabindex" => 1, "type" => $is_external_login ? "text" : "email"]),
         '</div>
-  <div class="f-e', $email_class, '">',
-        Ht::entry("email", (isset($_REQUEST["email"]) ? $_REQUEST["email"] : ($password_reset ? $password_reset->email : "")),
-                  ["size" => 36, "tabindex" => 1, "id" => "signin_email"]),
-        '</div>
-</div>
-<div class="f-i fx">
-  <div class="f-c', $password_class, '">Password</div>
-  <div class="f-e">',
+<div class="', Ht::control_class("password", "f-i fx"), '">';
+    if (!$is_external_login)
+        echo '<div class="floatright"><a href="" class="n x small ui js-forgot-password">Forgot your password?</a></div>';
+    echo Ht::label("Password", "signin_password"),
         Ht::password("password", "",
-                     array("size" => 36, "tabindex" => 1, "id" => "signin_password")),
-        "</div>\n</div>\n";
+                     ["size" => 36, "id" => "signin_password", "class" => "fullw", "autocomplete" => "current-password", "tabindex" => 1]),
+        "</div>\n";
     if ($password_reset)
         echo Ht::unstash_script("jQuery(function(){jQuery(\"#signin_password\").val(" . json_encode_browser($password_reset->password) . ")})");
-    if ($Conf->opt("ldapLogin"))
+    if ($is_external_login)
         echo Ht::hidden("action", "login");
-    else {
-        echo "<div class='f-i'>\n  ",
-            Ht::radio("action", "login", true, array("tabindex" => 2, "id" => "signin_action_login")),
-            "&nbsp;", Ht::label("<b>Sign me in</b>"), "<br />\n";
-        echo Ht::radio("action", "forgot", false, array("tabindex" => 2)),
-            "&nbsp;", Ht::label("I forgot my password"), "<br />\n";
-        echo Ht::radio("action", "new", false, array("tabindex" => 2)),
-            "&nbsp;", Ht::label("I’m a new user and want to create an account");
-        echo "\n</div>\n";
-        Ht::stash_script("function login_type() {
-    var act = jQuery(\"#homeacct input[name=action]:checked\")[0] || jQuery(\"#signin_action_login\")[0];
-    fold(\"homeacct\", act.value != \"login\");
-    var felt = act.value != \"login\" || !jQuery(\"#signin_email\").val().length;
-    jQuery(\"#signin_\" + (felt ? \"email\" : \"password\"))[0].focus();
-    jQuery(\"#signin_signin\")[0].value = {\"login\":\"Sign in\",\"forgot\":\"Reset password\",\"new\":\"Create account\"}[act.value];
-}
-jQuery(\"#homeacct input[name='action']\").on('click',login_type);jQuery(login_type)");
-    }
-    echo "<div class='f-i'>",
-        Ht::submit("signin", "Sign in", array("tabindex" => 1, "id" => "signin_signin")),
-        "</div></div></form>
-<hr class='home' /></div>\n";
+    echo '<div class="popup-actions">',
+        Ht::submit("signin", "Sign in", ["id" => "signin_signin", "class" => "btn btn-primary"]),
+        '</div><p class="hint">New to the site? <a href="" class="ui js-create-account">Create an account</a></p></div></form></div>
+<hr class="home" />';
     Ht::stash_script("focus_within(\$(\"#login\"));window.scroll(0,0)");
 }
 
@@ -252,17 +223,17 @@ if ($homelist) {
     echo ($nhome_hr ? $home_hr : ""), '<div class="homegrp" id="homelist">';
 
     // Lists
-    echo Ht::form_div(hoturl("search"), array("method" => "get")),
+    echo Ht::form(hoturl("search"), array("method" => "get")),
         '<h4><a class="qq" href="', hoturl("search"), '">Search</a>: &nbsp;&nbsp;</h4>';
 
     $tOpt = PaperSearch::search_types($Me);
-    echo Ht::entry("q", req("q"),
+    echo Ht::entry("q", (string) $Qreq->q,
                    array("id" => "homeq", "size" => 32, "title" => "Enter paper numbers or search terms",
-                         "class" => "hotcrp_searchbox", "placeholder" => "(All)")),
+                         "class" => "papersearch", "placeholder" => "(All)")),
         " &nbsp;in&nbsp; ",
         PaperSearch::searchTypeSelector($tOpt, key($tOpt), 0), "
     &nbsp; ", Ht::submit("Search"),
-        "</div></form></div>\n";
+        "</form></div>\n";
     ++$nhome_hr;
 }
 
@@ -282,15 +253,15 @@ function reviewTokenGroup($non_reviews) {
             "<h4>Review tokens: &nbsp;</h4>";
     else
         echo '<table id="foldrevtokens" class="', count($tokens) ? "fold2o" : "fold2c", '" style="display:inline-table">',
-            '<tr><td class="fn2"><a class="ui fn2 js-foldup" href="#">Add review tokens</a></td>',
+            '<tr><td class="fn2"><a href="" class="fn2 ui js-foldup">Add review tokens</a></td>',
             '<td class="fx2">Review tokens: &nbsp;';
 
-    echo Ht::form_div(hoturl_post("index")),
+    echo Ht::form(hoturl_post("index")),
         Ht::entry("token", join(" ", $tokens), array("size" => max(15, count($tokens) * 8))),
         " &nbsp;", Ht::submit("Save");
-    if (!count($tokens))
+    if (empty($tokens))
         echo '<div class="hint">Enter tokens to gain access to the corresponding reviews.</div>';
-    echo '</div></form>';
+    echo '</form>';
 
     if ($non_reviews)
         echo '<hr class="home" /></div>', "\n";
@@ -442,20 +413,17 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     if ($myrow && $Conf->setting("rev_ratings") != REV_RATINGS_NONE) {
         $badratings = PaperSearch::unusableRatings($Me);
         $qx = (count($badratings) ? " and not (PaperReview.reviewId in (" . join(",", $badratings) . "))" : "");
-        $result = Dbl::qe_raw("select rating, count(PaperReview.reviewId) from PaperReview join ReviewRating on (PaperReview.contactId=$Me->contactId and PaperReview.reviewId=ReviewRating.reviewId$qx) group by rating order by rating desc");
-        if (edb_nrows($result)) {
-            $a = array();
-            while (($row = edb_row($result)))
-                if (isset(ReviewForm::$rating_types[$row[0]]))
-                    $a[] = "<a href=\"" . hoturl("search", "q=re:me+rate:%22" . urlencode(ReviewForm::$rating_types[$row[0]]) . "%22") . "\" title='List rated reviews'>$row[1] &ldquo;" . htmlspecialchars(ReviewForm::$rating_types[$row[0]]) . "&rdquo; " . pluralx($row[1], "rating") . "</a>";
-            if (count($a) > 0) {
-                echo "<div class='hint g'>\nYour reviews have received ",
-                    commajoin($a);
-                if (count($a) > 1)
-                    echo " (these sets might overlap)";
-                echo ".<a class='help' href='", hoturl("help", "t=revrate"), "' title='About ratings'>?</a></div>\n";
-            }
-        }
+        $result = $Conf->qe_raw("select sum((rating&" . ReviewInfo::RATING_GOODMASK . ")!=0), sum((rating&" . ReviewInfo::RATING_BADMASK . ")!=0) from PaperReview join ReviewRating using (reviewId) where PaperReview.contactId={$Me->contactId} $qx");
+        $row = edb_row($result);
+        Dbl::free($result);
+
+        $a = [];
+        if ($row[0])
+            $a[] = Ht::link(plural($row[0], "positive rating"), hoturl("search", "q=re:me+rate:good"));
+        if ($row[1])
+            $a[] = Ht::link(plural($row[1], "negative rating"), hoturl("search", "q=re:me+rate:bad"));
+        if (!empty($a))
+            echo '<div class="hint g">Your reviews have received ', commajoin($a), '.</div>';
     }
 
     if ($Me->has_review()) {
@@ -467,9 +435,9 @@ if ($Me->is_reviewer() && ($Me->privChair || $papersub)) {
     }
 
     if ($Me->is_reviewer()) {
-        echo "<div class=\"homegrp fold20c\" id=\"homeactivity\" data-fold=\"true\" data-fold-session=\"foldhomeactivity\">",
+        echo "<div class=\"homegrp has-fold fold20c\" id=\"homeactivity\" data-fold-session=\"foldhomeactivity\">",
             foldupbutton(20),
-            "<h4><a class=\"x ui homeactivity js-foldup\" href=\"#\" data-fold-target=\"20\">Recent activity<span class='fx20'>:</span></a></h4>",
+            "<h4><a href=\"\" class=\"x homeactivity ui js-foldup\" data-fold-target=\"20\">Recent activity<span class='fx20'>:</span></a></h4>",
             "</div>";
         Ht::stash_script('$("#homeactivity").on("fold", function(e,opts) { opts.f || unfold_events(this); })');
         if (!$Conf->session("foldhomeactivity", 1))
@@ -548,7 +516,7 @@ if ($Me->is_author() || $Conf->timeStartPaper() > 0 || $Me->privChair
         else if ($startable || $Me->privChair)
             echo "<br />";
         echo "<span class='deadline'>",
-            join("</span><br />\n<span class='deadline'>", $deadlines),
+            join("</span><br>\n<span class='deadline'>", $deadlines),
             "</span>";
     }
 

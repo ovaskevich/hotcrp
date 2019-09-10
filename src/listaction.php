@@ -1,30 +1,10 @@
 <?php
-// searchaction.php -- HotCRP helper class for paper search actions
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
-
-class SearchResult {
-}
-
-class Csv_SearchResult extends SearchResult {
-    public $name;
-    public $header;
-    public $items;
-    public $options = [];
-    function __construct($name, $header, $items, $selection = false) {
-        $this->name = $name;
-        $this->header = $header;
-        $this->items = $items;
-        if (is_array($selection))
-            $this->options = $selection;
-        else if ($selection)
-            $this->options["selection"] = true;
-    }
-}
+// listaction.php -- HotCRP helper class for paper search actions
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class ListAction {
     public $subname;
-    const ENOENT = "No such search action.";
+    const ENOENT = "No such action.";
     const EPERM = "Permission error.";
     function allow(Contact $user) {
         return true;
@@ -34,9 +14,9 @@ class ListAction {
     }
 
     static private function do_call($name, Contact $user, Qrequest $qreq, $selection) {
-        if ($qreq->method() !== "GET" && $qreq->method() !== "HEAD" && !check_post($qreq))
+        if ($qreq->method() !== "GET" && $qreq->method() !== "HEAD" && !$qreq->post_ok())
             return new JsonResult(403, ["ok" => false, "error" => "Missing credentials."]);
-        $uf = $user->conf->list_action($name, $user, $qreq);
+        $uf = $user->conf->list_action($name, $user, $qreq->method());
         if (!$uf) {
             if ($user->conf->has_list_action($name, $user, null))
                 return new JsonResult(405, ["ok" => false, "error" => "Method not supported."]);
@@ -49,12 +29,12 @@ class ListAction {
             $selection = new SearchSelection($selection);
         if (get($uf, "paper") && $selection->is_empty())
             return new JsonResult(400, ["ok" => false, "error" => "No papers selected."]);
-        if (isset($uf->factory_class)) {
-            $fc = $uf->factory_class;
-            $action = new $fc($uf, $user->conf);
+        if ($uf->callback[0] === "+") {
+            $class = substr($uf->callback, 1);
+            $action = new $class($user->conf, $uf);
         } else
-            $action = call_user_func($uf->factory, $uf, $user->conf);
-        if (!$action->allow($user))
+            $action = call_user_func($uf->callback, $user->conf, $uf);
+        if (!$action || !$action->allow($user))
             return new JsonResult(403, ["ok" => false, "error" => "Permission error."]);
         else
             return $action->run($user, $qreq, $selection);
@@ -69,8 +49,9 @@ class ListAction {
                 Conf::msg_error($res->content["error"]);
             else
                 json_exit($res);
-        } else if ($res instanceof Csv_SearchResult)
-            downloadCSV($res->items, $res->header, $res->name, $res->options);
+        } else if ($res instanceof CsvGenerator) {
+            csv_exit($res);
+        }
     }
 
 
@@ -83,8 +64,7 @@ class ListAction {
         $any_round = $any_token = false;
 
         $texts = array();
-        $result = $user->paper_result(["paperId" => $selection, "reviewSignatures" => 1]);
-        while (($prow = PaperInfo::fetch($result, $user)))
+        foreach ($user->paper_set($selection, ["reviewSignatures" => true]) as $prow) {
             if (!$user->allow_administer($prow)) {
                 $texts[] = array();
                 $texts[] = array("paper" => $prow->paperId,
@@ -111,7 +91,7 @@ class ListAction {
 
                     $round = $rrow->reviewRound;
                     $d = ["paper" => $prow->paperId,
-                          "action" => ReviewAssigner_Data::unparse_type($rrow->reviewType),
+                          "action" => ReviewInfo::unparse_assigner_action($rrow->reviewType),
                           "email" => $u->email,
                           "round" => $round ? $round_list[$round] : "none"];
                     if ($rrow->reviewToken)
@@ -120,6 +100,7 @@ class ListAction {
                     $any_round = $any_round || $round != 0;
                 }
             }
+        }
         $header = array("paper", "action", "email");
         if ($any_round)
             $header[] = "round";
@@ -128,7 +109,4 @@ class ListAction {
         $header[] = "title";
         return [$header, $texts];
     }
-}
-
-class SearchAction extends ListAction {
 }

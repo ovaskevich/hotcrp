@@ -1,7 +1,6 @@
 <?php
 // paperapi.php -- HotCRP paper-related API calls
-// HotCRP is Copyright (c) 2008-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
 
 class PaperApi {
     static function decision_api(Contact $user, Qrequest $qreq, $prow) {
@@ -129,6 +128,7 @@ class PaperApi {
         $assigner->parse(join("\n", $x));
         $error = join("<br />", $assigner->errors_html());
         $ok = $assigner->execute();
+        $user->remove_overrides(Contact::OVERRIDE_CONFLICT);
 
         // exit
         if ($ok && $prow) {
@@ -139,12 +139,10 @@ class PaperApi {
         } else if ($ok) {
             $p = [];
             if ($pids) {
-                $result = $user->paper_result(["paperId" => array_keys($pids), "tags" => true]);
-                while (($prow = PaperInfo::fetch($result, $user))) {
+                foreach ($user->paper_set(array_keys($pids)) as $prow) {
                     $p[$prow->paperId] = (object) [];
                     $prow->add_tag_info_json($p[$prow->paperId], $user);
                 }
-                Dbl::free($result);
             }
             $jr = new JsonResult(["ok" => true, "p" => (object) $p]);
         } else
@@ -176,53 +174,6 @@ class PaperApi {
             json_exit(["ok" => true, "result" => ""]);
         else
             json_exit(["ok" => true, "result" => '<span class="nw">' . join(',</span> <span class="nw">', $result) . '</span>']);
-    }
-
-    static function alltags_api(Contact $user, $qreq, $prow) {
-        if (!$user->isPC)
-            json_exit(["ok" => false]);
-
-        $need_paper = $cflt_where = false;
-        $where = $args = array();
-
-        if ($user->allow_administer(null)) {
-            $need_paper = true;
-            if ($user->conf->has_any_manager() && !$user->conf->tag_seeall)
-                $cflt_where = "(p.managerContactId=0 or p.managerContactId=$user->contactId or pc.conflictType is null)";
-        } else if ($user->conf->check_track_sensitivity(Track::VIEW)) {
-            $where[] = "t.paperId ?a";
-            $args[] = $user->list_submitted_papers_with_viewable_tags();
-        } else {
-            $need_paper = true;
-            if ($user->conf->has_any_manager() && !$user->conf->tag_seeall)
-                $cflt_where = "(p.managerContactId=$user->contactId or pc.conflictType is null)";
-            else if (!$user->conf->tag_seeall)
-                $cflt_where = "pc.conflictType is null";
-        }
-
-        $q = "select distinct tag from PaperTag t";
-        if ($need_paper) {
-            $q .= " join Paper p on (p.paperId=t.paperId)";
-            $where[] = "p.timeSubmitted>0";
-        }
-        if ($cflt_where) {
-            $q .= " left join PaperConflict pc on (pc.paperId=t.paperId and pc.contactId=$user->contactId)";
-            $where[] = $cflt_where;
-        }
-        $q .= " where " . join(" and ", $where);
-
-        $tags = array();
-        $result = $user->conf->qe_apply($q, $args);
-        while (($row = edb_row($result))) {
-            $twiddle = strpos($row[0], "~");
-            if ($twiddle === false
-                || ($twiddle == 0 && $row[0][1] === "~" && $user->privChair))
-                $tags[] = $row[0];
-            else if ($twiddle > 0 && substr($row[0], 0, $twiddle) == $user->contactId)
-                $tags[] = substr($row[0], $twiddle);
-        }
-        Dbl::free($result);
-        json_exit(["ok" => true, "tags" => $tags]);
     }
 
     static function get_user(Contact $user, Qrequest $qreq, $forceShow = null) {
@@ -285,7 +236,7 @@ class PaperApi {
         $opt = $user->conf->paper_opts->get($dtype);
         if (!$opt || !$user->can_view_paper_option($prow, $opt))
             return ["ok" => false, "error" => "Permission error."];
-        $cf = new CheckFormat;
+        $cf = new CheckFormat($prow->conf);
         $doc = $cf->fetch_document($prow, $dtype, $qreq->docid);
         $cf->check_document($prow, $doc);
         return ["ok" => !$cf->failed, "response" => $cf->document_report($prow, $doc)];
@@ -296,8 +247,10 @@ class PaperApi {
         $following = friendly_boolean($qreq->following);
         if ($following === null)
             return ["ok" => false, "error" => "Bad 'following'."];
-        saveWatchPreference($prow->paperId, $reviewer->contactId,
-            WATCHTYPE_COMMENT, $following, true);
+        $bits = Contact::WATCH_REVIEW_EXPLICIT | ($following ? Contact::WATCH_REVIEW : 0);
+        $user->conf->qe("insert into PaperWatch set paperId=?, contactId=?, watch=? on duplicate key update watch=(watch&~?)|?",
+            $prow->paperId, $reviewer->contactId, $bits,
+            Contact::WATCH_REVIEW_EXPLICIT | Contact::WATCH_REVIEW, $bits);
         return ["ok" => true, "following" => $following];
     }
 
@@ -324,25 +277,29 @@ class PaperApi {
     static function review_api(Contact $user, Qrequest $qreq, PaperInfo $prow) {
         if (!$user->can_view_review($prow, null))
             return new JsonResult(403, "Permission error.");
+        $need_id = false;
         if (isset($qreq->r)) {
             $rrow = $prow->full_review_of_textual_id($qreq->r);
             if ($rrow === false)
                 return new JsonResult(400, "Parameter error.");
             $rrows = $rrow ? [$rrow] : [];
         } else if (isset($qreq->u)) {
+            $need_id = true;
             $u = self::get_user($user, $qreq);
-            $rrow = $prow->full_review_of_user($u);
-            if (!$user->can_view_review_identity($prow, $rrow))
+            $rrows = $prow->full_reviews_of_user($u);
+            if (!$rrows
+                && $user->contactId !== $u->contactId
+                && !$user->can_view_review_identity($prow, null))
                 return new JsonResult(403, "Permission error.");
-            $rrows = $rrow ? [$rrow] : [];
         } else {
             $prow->ensure_full_reviews();
-            $rrows = $prow->viewable_submitted_reviews_by_display($user, null);
+            $rrows = $prow->viewable_submitted_reviews_by_display($user);
         }
         $vrrows = [];
         $rf = $user->conf->review_form();
         foreach ($rrows as $rrow)
-            if ($user->can_view_review($prow, $rrow))
+            if ($user->can_view_review($prow, $rrow)
+                && (!$need_id || $user->can_view_review_identity($prow, $rrow)))
                 $vrrows[] = $rf->unparse_review_json($prow, $rrow, $user);
         if (!$vrrows && $rrows)
             return new JsonResult(403, "Permission error.");
@@ -360,8 +317,8 @@ class PaperApi {
             return new JsonResult(404, "No such review.");
         $editable = $user->can_rate_review($prow, $rrow);
         if ($qreq->method() !== "GET") {
-            if (!isset($qreq->rating)
-                || ($rating = ReviewForm::parse_rating($qreq->rating)) === false)
+            if (!isset($qreq->user_rating)
+                || ($rating = ReviewInfo::parse_rating($qreq->user_rating)) === false)
                 return new JsonResult(400, "Parameter error.");
             else if (!$editable)
                 return new JsonResult(403, "Permission error.");
@@ -372,11 +329,11 @@ class PaperApi {
             $rrow = $prow->fresh_review_of_id($rrow->reviewId);
         }
         $rating = $rrow->rating_of_user($user);
-        $jr = new JsonResult(["ok" => true, "rating" => $rating, "rating_html" => ReviewForm::$rating_types[$rating ? : "n"]]);
+        $jr = new JsonResult(["ok" => true, "user_rating" => $rating]);
         if ($editable)
             $jr->content["editable"] = true;
         if ($user->can_view_review_ratings($prow, $rrow))
-            $jr->content["ratings"] = ReviewForm::unparse_ratings_json($rrow, 0);
+            $jr->content["ratings"] = array_values($rrow->ratings());
         return $jr;
     }
 

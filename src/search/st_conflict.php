@@ -1,7 +1,6 @@
 <?php
 // search/st_conflict.php -- HotCRP helper class for searching for papers
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 class Conflict_SearchTerm extends SearchTerm {
     private $csm;
@@ -15,7 +14,7 @@ class Conflict_SearchTerm extends SearchTerm {
         if (($qr = PaperSearch::check_tautology($m[1])))
             return $qr;
         else {
-            $contacts = $srch->matching_reviewers($m[0], $sword->quoted, $sword->kwdef->pc_only);
+            $contacts = $srch->matching_users($m[0], $sword->quoted, $sword->kwdef->pc_only);
             return new Conflict_SearchTerm($m[1], $contacts, $srch->user);
         }
     }
@@ -39,7 +38,7 @@ class Conflict_SearchTerm extends SearchTerm {
         }
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
-        $can_view = $srch->user->can_view_conflicts($row, true);
+        $can_view = $srch->user->can_view_conflicts($row);
         $n = 0;
         foreach ($this->csm->contact_set() as $cid) {
             if (($cid == $srch->cid || $can_view)

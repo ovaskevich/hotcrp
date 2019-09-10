@@ -1,14 +1,13 @@
 <?php
 // scorechart.php -- HotCRP chart generator
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 // Generates a PNG image of a bar chat.
 // Arguments are passed in as v; s is graph style.
 // Don't forget to change the width and height calculations in
 // ReviewField::unparse_graph if you change the width and height here.
 
-if (!isset($_REQUEST["v"])) {
+if (!isset($_GET["v"])) {
     header("HTTP/1.0 400 Bad Request");
     exit;
 }
@@ -22,24 +21,26 @@ if (!function_exists("imagecreate")) {
 }
 
 // parse values
-$s = (isset($_REQUEST["s"]) ? $_REQUEST["s"] : 0);
+$s = (isset($_GET["s"]) ? $_GET["s"] : 0);
+if ($s != 0 && $s != 1 && $s != 2)
+    $s = 2;
 $valMax = 1;
 $values = array();
 $maxY = $sum = 0;
-foreach (explode(",", $_REQUEST["v"]) as $value) {
+foreach (explode(",", $_GET["v"]) as $value) {
     $value = (ctype_digit($value) && $value > 0 ? intval($value) : 0);
     $values[$valMax++] = $value;
     $maxY = max($value, $maxY);
     $sum += $value;
 }
-if (isset($_REQUEST["h"]) && is_numeric($_REQUEST["h"]))
-    $valLight = intval($_REQUEST["h"]);
+if (isset($_GET["h"]) && is_numeric($_GET["h"]))
+    $valLight = intval($_GET["h"]);
 else
     $valLight = 0;
 if ($valLight < 1 || $valLight >= $valMax)
     $valLight = 0;
-$levelChar = (isset($_REQUEST["c"]) && ord($_REQUEST["c"]) >= 65
-              ? ord($_REQUEST["c"]) : 0);
+$levelChar = (isset($_GET["c"]) && ord($_GET["c"]) >= 65
+              ? ord($_GET["c"]) : 0);
 
 
 // set shape constants
@@ -126,11 +127,11 @@ if ($s == 0) {
     $lx = $textWidth + $blockPad;
     $rx = $picWidth - $blockWidth - $textWidth - $blockPad;
     $y = $picHeight - $blockHeight - $blockSkip - 3;
-    if (isset($_REQUEST["c"]) && ord($_REQUEST["c"]) >= 65) {
+    if (isset($_GET["c"]) && ord($_GET["c"]) >= 65) {
         if ($values[1] == 0)
-            imagestring($pic, 1, $rx, $y, $_REQUEST["c"], $cgray);
+            imagestring($pic, 1, $rx, $y, $_GET["c"], $cgray);
         if ($values[$valMax - 1] == 0)
-            imagestring($pic, 1, $lx, $y, chr(ord($_REQUEST["c"]) - $valMax + 2), $cgray);
+            imagestring($pic, 1, $lx, $y, chr(ord($_GET["c"]) - $valMax + 2), $cgray);
     } else {
         if ($values[1] == 0)
             imagestring($pic, 1, $lx, $y, 1, $cgray);

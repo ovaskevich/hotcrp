@@ -1,24 +1,23 @@
 <?php // -*- mode: php -*-
 // doc -- HotCRP paper download page
-// HotCRP is Copyright (c) 2006-2017 Eddie Kohler and Regents of the UC
-// Distributed under an MIT-like license; see LICENSE
+// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
 function document_error($status, $msg) {
-    global $Conf, $Me;
+    global $Conf, $Me, $Qreq;
     if (str_starts_with($status, "403") && $Me->is_empty()) {
         $Me->escape();
         exit;
     }
 
     $navpath = Navigation::path();
-    error_log($Conf->dbname . ": bad doc $status $msg " . json_encode(make_qreq()) . ($navpath ? " @$navpath" : "") . ($Me ? " {$Me->email}" : ""));
+    error_log($Conf->dbname . ": bad doc $status $msg " . json_encode($Qreq) . ($navpath ? " @$navpath" : "") . ($Me ? " {$Me->email}" : "") . (empty($_SERVER["HTTP_REFERER"]) ? "" : " R[" . $_SERVER["HTTP_REFERER"] . "]"));
     header("HTTP/1.1 $status");
-    if (isset($_GET["fn"]))
+    if (isset($Qreq->fn))
         json_exit(["ok" => false, "error" => $msg ? : "Internal error."]);
     else {
-        $Conf->header("Download", null, actionBar());
+        $Conf->header("Download", null);
         $msg && Conf::msg_error($msg);
         $Conf->footer();
         exit;
@@ -101,14 +100,16 @@ class DocumentRequest {
         while ((string) $dtname !== "" && $this->opt === null) {
             if (($dtnum = cvtint($dtname, null)) !== null)
                 $this->opt = $conf->paper_opts->get($dtnum);
+            else if ($this->paperId >= 0)
+                $this->opt = $conf->paper_opts->find($dtname);
             else
-                $this->opt = $conf->paper_opts->find($dtname, $this->paperId < 0);
+                $this->opt = $conf->paper_opts->find_nonpaper($dtname);
             if ($this->opt !== null) {
                 $dtname = "";
                 break;
             }
             $filter = null;
-            foreach (FileFilter::all_by_name() as $ff)
+            foreach (FileFilter::all_by_name($conf) as $ff)
                 if (str_ends_with($dtname, "-" . $ff->name) || $dtname === $ff->name) {
                     $filter = $ff;
                     break;
@@ -188,11 +189,11 @@ function document_history(PaperInfo $prow, $dtype) {
     return $pjs;
 }
 
-function document_download() {
+function document_download($qreq) {
     global $Conf, $Me;
 
     $dr = new DocumentRequest;
-    $dr->parse($_GET, Navigation::path(), $Conf);
+    $dr->parse($qreq, Navigation::path(), $Conf);
 
     $docid = null;
 
@@ -204,30 +205,27 @@ function document_download() {
         $prow = new PaperInfo(["paperId" => -2], null, $Conf);
         if (($dr->opt->visibility === "admin" && !$Me->privChair)
             || ($dr->opt->visibility !== "all" && !$Me->isPC))
-            document_error("403 Forbidden", "You don’t have permission to view this document.");
+            document_error("403 Forbidden", "You aren’t allowed to view this document.");
     } else {
         $prow = $Conf->paperRow($dr->paperId, $Me, $whyNot);
         if (!$prow)
-            document_error("404 Not Found", whyNotText($whyNot, "view"));
-        else if (($whyNot = $Me->perm_view_pdf($prow)))
-            document_error("403 Forbidden", whyNotText($whyNot, "view"));
-        else if ($dr->dtype > 0
-                 && !$Me->can_view_paper_option($prow, $dr->dtype, true))
-            document_error("403 Forbidden", "You don’t have permission to view this document.");
+            document_error(isset($whyNot["permission"]) ? "403 Forbidden" : "404 Not Found", whyNotText($whyNot));
+        else if (($whyNot = $Me->perm_view_paper_option($prow, $dr->dtype)))
+            document_error("403 Forbidden", whyNotText($whyNot));
     }
 
     // history
-    if (isset($_GET["fn"]) && $_GET["fn"] === "history")
+    if ($qreq->fn === "history")
         json_exit(["ok" => true, "result" => document_history($prow, $dr->dtype)]);
 
-    if (!isset($_GET["version"]) && isset($_GET["hash"]))
-        $_GET["version"] = $_GET["hash"];
+    if (!isset($qreq->version) && isset($qreq->hash))
+        $qreq->version = $qreq->hash;
 
     // time
-    if (isset($_GET["at"]) && !isset($_GET["version"])) {
-        if (ctype_digit($_GET["at"]))
-            $time = intval($_GET["at"]);
-        else if (!($time = $Conf->parse_time($_GET["at"])))
+    if (isset($qreq->at) && !isset($qreq->version)) {
+        if (ctype_digit($qreq->at))
+            $time = intval($qreq->at);
+        else if (!($time = $Conf->parse_time($qreq->at)))
             $time = $Now;
         $want_pj = null;
         foreach (document_history($prow, $dr->dtype) as $pj) {
@@ -237,13 +235,13 @@ function document_download() {
                 $want_pj = $pj;
         }
         if ($want_pj)
-            $_GET["version"] = $want_pj->hash;
+            $qreq->version = $want_pj->hash;
     }
 
     // version
     $want_docid = $request_docid = 0;
-    if (isset($_GET["version"])) {
-        $version_hash = Filer::hash_as_binary(trim($_GET["version"]));
+    if (isset($qreq->version)) {
+        $version_hash = Filer::hash_as_binary(trim($qreq->version));
         if (!$version_hash)
             document_error("404 Not Found", "No such version.");
         $want_docid = $Conf->fetch_ivalue("select max(paperStorageId) from PaperStorage where paperId=? and documentType=? and sha1=? and filterType is null", $dr->paperId, $dr->dtype, $version_hash);
@@ -265,15 +263,15 @@ function document_download() {
         $doc = $filter->apply($doc, $prow) ? : $doc;
 
     // check for contents request
-    if (isset($_GET["fn"]) && ($_GET["fn"] === "listing" || $_GET["fn"] === "consolidatedlisting")) {
-        if (!$doc->docclass->is_archive($doc))
+    if ($qreq->fn === "listing" || $qreq->fn === "consolidatedlisting") {
+        if (!$doc->is_archive())
             json_exit(["ok" => false, "error" => "That file is not an archive."]);
-        else if (($listing = $doc->docclass->archive_listing($doc, 65536)) === false)
-            json_exit(["ok" => false, "error" => isset($doc->error) ? $doc->error_text : "Internal error."]);
+        else if (($listing = $doc->archive_listing(65536)) === false)
+            json_exit(["ok" => false, "error" => $doc->error ? $doc->error_html : "Internal error."]);
         else {
-            $listing = $doc->docclass->clean_archive_listing($listing);
-            if ($_GET["fn"] == "consolidatedlisting")
-                $listing = join(", ", $doc->docclass->consolidate_archive_listing($listing));
+            $listing = ArchiveInfo::clean_archive_listing($listing);
+            if ($qreq->fn === "consolidatedlisting")
+                $listing = join(", ", ArchiveInfo::consolidate_archive_listing($listing));
             json_exit(["ok" => true, "result" => $listing]);
         }
     }
@@ -295,8 +293,8 @@ function document_download() {
 
     // Actually download paper.
     session_write_close();      // to allow concurrent clicks
-    $opts = ["attachment" => cvtint(req("save")) > 0];
-    if ($doc->has_hash() && ($x = req("hash")) && $doc->check_text_hash($x))
+    $opts = ["attachment" => cvtint($qreq->save) > 0];
+    if ($doc->has_hash() && ($x = $qreq->hash) && $doc->check_text_hash($x))
         $opts["cacheable"] = true;
     if ($Conf->download_documents([$doc], $opts))
         exit;
@@ -304,4 +302,5 @@ function document_download() {
     document_error("500 Server Error", null);
 }
 
-document_download();
+$Me->add_overrides(Contact::OVERRIDE_CONFLICT);
+document_download($Qreq);
