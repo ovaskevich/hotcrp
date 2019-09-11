@@ -1,6 +1,6 @@
 <?php
 // papersaver.php -- HotCRP helper for mapping requests to JSON
-// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
 
 class PaperSaver {
     static private $list = [];
@@ -31,7 +31,7 @@ class PaperSaver {
         $pj->contacts = array();
         for ($i = 1; isset($qreq["contact_email_{$i}"]); ++$i) {
             if ($qreq["contact_active_{$i}"])
-                $pj->contacts[] = $qreq["contact_email_{$i}"];
+                $pj->contacts[] = (object) ["email" => $qreq["contact_email_{$i}"], "index" => $i];
         }
         for ($i = 1; isset($qreq["newcontact_email_{$i}"]); ++$i) {
             $email = trim((string) $qreq["newcontact_email_{$i}"]);
@@ -41,7 +41,7 @@ class PaperSaver {
                 $name = simplify_whitespace((string) $qreq["newcontact_name_{$i}"]);
                 if ($name === "Name")
                     $name = "";
-                $pj->contacts[] = (object) ["email" => $email, "name" => $name];
+                $pj->contacts[] = (object) ["email" => $email, "name" => $name, "index" => $i, "is_new" => true];
             }
         }
     }
@@ -125,9 +125,9 @@ class Default_PaperSaver extends PaperSaver {
         // Paper upload
         if ($qreq->has_file("paperUpload")) {
             if ($action === "final")
-                $pj->final = DocumentInfo::make_file_upload($pj->pid, DTYPE_FINAL, $qreq->file("paperUpload"));
+                $pj->final = DocumentInfo::make_file_upload($pj->pid, DTYPE_FINAL, $qreq->file("paperUpload"), $user->conf);
             else if ($action === "update" || $action === "submit")
-                $pj->submission = DocumentInfo::make_file_upload($pj->pid, DTYPE_SUBMISSION, $qreq->file("paperUpload"));
+                $pj->submission = DocumentInfo::make_file_upload($pj->pid, DTYPE_SUBMISSION, $qreq->file("paperUpload"), $user->conf);
         }
 
         // Blindness
@@ -137,22 +137,26 @@ class Default_PaperSaver extends PaperSaver {
         // Topics
         if ($qreq->has_topics) {
             $pj->topics = (object) array();
-            foreach ($user->conf->topic_map() as $tid => $tname)
+            foreach ($user->conf->topic_set() as $tid => $tname)
                 if (+$qreq["top$tid"] > 0)
                     $pj->topics->$tname = true;
         }
 
         // Options
-        if (!isset($pj->options))
+        if (!isset($pj->options)) {
             $pj->options = (object) [];
-        foreach ($user->conf->paper_opts->option_list() as $o)
+        }
+        foreach ($user->conf->paper_opts->option_list() as $o) {
             if ($qreq["has_{$o->formid}"]
                 && (!$o->final || $action === "final")) {
+                // XXX test_editable
                 $okey = $o->json_key();
                 $pj->options->$okey = $o->parse_request(get($pj->options, $okey), $qreq, $user, $prow);
             }
-        if (!count(get_object_vars($pj->options)))
+        }
+        if (!count(get_object_vars($pj->options))) {
             unset($pj->options);
+        }
 
         // PC conflicts
         if ($user->conf->setting("sub_pcconf")
@@ -163,7 +167,7 @@ class Default_PaperSaver extends PaperSaver {
                 $ctype = Conflict::constrain_editable($qreq["pcc$pcid"], $admin);
                 if ($ctype) {
                     $email = $pc->email;
-                    $pj->pc_conflicts->$email = Conflict::$type_names[$ctype];
+                    $pj->pc_conflicts->$email = $user->conf->conflict_types()->unparse_json($ctype);
                 }
             }
         }

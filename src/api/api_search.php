@@ -1,6 +1,6 @@
 <?php
 // api_search.php -- HotCRP search-related API calls
-// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
 
 class Search_API {
     static function search(Contact $user, Qrequest $qreq) {
@@ -15,12 +15,12 @@ class Search_API {
             if ($q === "(All)")
                 $q = "";
         } else if (isset($qreq->qa) || isset($qreq->qo) || isset($qreq->qx))
-            $q = PaperSearch::canonical_query((string) $qreq->qa, (string) $qreq->qo, (string) $qreq->qx, $user->conf);
+            $q = PaperSearch::canonical_query((string) $qreq->qa, (string) $qreq->qo, (string) $qreq->qx, $qreq->qt, $user->conf);
         else
             return new JsonResult(400, "Missing parameter.");
 
         $search = new PaperSearch($user, ["t" => $t, "q" => $q, "qt" => $qreq->qt, "urlbase" => $qreq->urlbase, "reviewer" => $qreq->reviewer]);
-        $pl = new PaperList($search, ["sort" => true], $qreq);
+        $pl = new PaperList($search, ["report" => $qreq->report ? : "pl", "sort" => true], $qreq);
         $ih = $pl->ids_and_groups();
         return ["ok" => true, "ids" => $ih[0], "groups" => $ih[1],
                 "hotlist" => $pl->session_list_object()->info_string()];
@@ -48,11 +48,35 @@ class Search_API {
             $report = "pf";
         $pl = new PaperList($search, ["report" => $report]);
         $response = $pl->column_json($qreq->f);
-        $response["ok"] = !empty($response);
+        if (!$response)
+            return ["ok" => false];
+        else {
+            $response["ok"] = true;
+            if ($qreq->session && $qreq->post_ok())
+                Session_API::setsession($user, $qreq->session);
+            return $response;
+        }
+    }
 
-        if ($qreq->session && $qreq->post_ok())
-            $user->setsession_api($qreq->session);
+    static function fieldtext(Contact $user, Qrequest $qreq, PaperInfo $prow = null) {
+        if ($qreq->f === null)
+            return new JsonResult(400, "Missing parameter.");
+        $fdefs = [];
+        foreach (preg_split('/\s+/', trim($qreq->f)) as $fid) {
+            if ($user->conf->paper_columns($fid, $user))
+                $fdefs[] = $fid;
+            else if ($fid !== "")
+                return new JsonResult(404, "No such field “{$fid}”.");
+        }
 
-        return $response;
+        if (!isset($qreq->q) && $prow) {
+            $qreq->t = $prow->timeSubmitted > 0 ? "s" : "all";
+            $qreq->q = $prow->paperId;
+        } else if (!isset($qreq->q))
+            $qreq->q = "";
+        $search = new PaperSearch($user, $qreq);
+
+        $pl = new PaperList($search, ["report" => "pl"]);
+        return ["ok" => true, "data" => $pl->text_json($qreq->f)];
     }
 }

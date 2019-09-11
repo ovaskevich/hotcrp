@@ -1,6 +1,6 @@
 <?php
 // test05.php -- HotCRP paper submission tests
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
@@ -34,7 +34,7 @@ $doc = DocumentInfo::make_file_upload(-1, DTYPE_SUBMISSION, [
         "error" => UPLOAD_ERR_OK, "name" => "amazing-sample.pdf",
         "tmp_name" => "$ConfSitePATH/src/sample.pdf",
         "type" => "application/pdf"
-    ]);
+    ], $Conf);
 xassert_eqq($doc->content_text_signature(), "starts with “%PDF-1.2”");
 $ps->save_paper_json((object) ["id" => 1, "submission" => $doc]);
 xassert(!$ps->has_error());
@@ -82,7 +82,7 @@ $ps->save_paper_json(json_decode("{\"id\":2,\"options\":{\"attachments\":[{\"con
 xassert(!$ps->has_error());
 $Conf->check_document_inactive_invariants();
 
-$paper2 = $Conf->paperRow(2, $user_estrin);
+$paper2 = $Conf->fetch_paper(2, $user_estrin);
 $docs = $paper2->option(2)->documents();
 xassert_eqq(count($docs), 2);
 xassert($docs[0]->check_text_hash("4c18e2ec1d1e6d9e53f57499a66aeb691d687370"));
@@ -94,7 +94,7 @@ $ps->save_paper_json(json_decode("{\"id\":2,\"options\":{\"attachments\":[{\"con
 xassert(!$ps->has_error());
 $Conf->check_document_inactive_invariants();
 
-$paper2 = $Conf->paperRow(2, $user_estrin);
+$paper2 = $Conf->fetch_paper(2, $user_estrin);
 $docs = $paper2->option(2)->documents();
 xassert_eqq(count($docs), 3);
 xassert($docs[0]->check_text_hash("4c18e2ec1d1e6d9e53f57499a66aeb691d687370"));
@@ -107,7 +107,7 @@ xassert_eqq($docs[2]->paperStorageId, $d1psid);
 // backwards compatibility
 $Conf->qe("delete from PaperOption where paperId=2 and optionId=2");
 $Conf->qe("insert into PaperOption (paperId,optionId,value,data) values (2,2,$d0psid,'0'),(2,2,$d1psid,'1')");
-$paper2 = $Conf->paperRow(2, $user_estrin);
+$paper2 = $Conf->fetch_paper(2, $user_estrin);
 $docs = $paper2->option(2)->documents();
 xassert_eqq(count($docs), 2);
 xassert($docs[0]->check_text_hash("4c18e2ec1d1e6d9e53f57499a66aeb691d687370"));
@@ -122,7 +122,7 @@ $ps->save_paper_json(json_decode("{\"id\":3,\"submission\":{\"content\":\"%PDF-w
 xassert(!$ps->has_error());
 $Conf->check_document_inactive_invariants();
 
-$paper3 = $Conf->paperRow(3, $user_estrin);
+$paper3 = $Conf->fetch_paper(3, $user_estrin);
 xassert_eqq($paper3->sha1, "sha2-" . hex2bin("38b74d4ab9d3897b0166aa975e5e00dd2861a218fad7ec8fa08921fff7f0f0f4"));
 xassert_eqq($paper3->document(DTYPE_SUBMISSION)->text_hash(), "sha2-38b74d4ab9d3897b0166aa975e5e00dd2861a218fad7ec8fa08921fff7f0f0f4");
 
@@ -139,7 +139,7 @@ xassert($ps->diffs["authors"]);
 xassert($ps->execute_save_paper_json($pj));
 xassert(!$ps->has_error());
 
-$newpaper = $Conf->paperRow($ps->paperId, $user_estrin);
+$newpaper = $Conf->fetch_paper($ps->paperId, $user_estrin);
 xassert($newpaper);
 xassert_eqq($newpaper->title, "New paper");
 xassert_eqq($newpaper->abstract, "This is an abstract");
@@ -159,7 +159,7 @@ xassert($ps->diffs["status"]);
 xassert($ps->execute_save_paper_json($pj));
 xassert(!$ps->has_error());
 
-$newpaper = $Conf->paperRow($ps->paperId, $user_estrin);
+$newpaper = $Conf->fetch_paper($ps->paperId, $user_estrin);
 xassert($newpaper);
 xassert_eqq($newpaper->title, "New paper");
 xassert_eqq($newpaper->abstract, "This is an abstract");
@@ -180,7 +180,7 @@ xassert($ps->diffs["calories"]);
 xassert($ps->execute_save_paper_json($pj));
 xassert(!$ps->has_error());
 
-$newpaper = $Conf->paperRow($ps->paperId, $user_estrin);
+$newpaper = $Conf->fetch_paper($ps->paperId, $user_estrin);
 xassert($newpaper);
 xassert_eqq($newpaper->title, "New paper");
 xassert_eqq($newpaper->abstract, "This is an abstract");
@@ -205,7 +205,7 @@ xassert($ps->diffs["authors"]);
 xassert($ps->execute_save_paper_json($pj));
 xassert(!$ps->has_error());
 
-$newpaper = $Conf->paperRow($ps->paperId, $user_estrin);
+$newpaper = $Conf->fetch_paper($ps->paperId, $user_estrin);
 xassert($newpaper);
 xassert_eqq($newpaper->title, "Paper about mantis shrimp");
 xassert_eqq($newpaper->abstract, "They see lots of colors.");
@@ -222,14 +222,14 @@ xassert(count($newpaper->option(2)->documents()) == 1);
 xassert_eqq($newpaper->option(2)->document(0)->text_hash(), "sha2-38b74d4ab9d3897b0166aa975e5e00dd2861a218fad7ec8fa08921fff7f0f0f4");
 
 // check some content_text_signature functionality
-$doc = new DocumentInfo(["content" => "ABCdefGHIjklMNO"]);
+$doc = new DocumentInfo(["content" => "ABCdefGHIjklMNO"], $Conf);
 xassert_eqq($doc->content_text_signature(), "starts with “ABCdefGH”");
-$doc = new DocumentInfo(["content" => "\x02\x00A\x80BCdefGHIjklMN"]);
+$doc = new DocumentInfo(["content" => "\x02\x00A\x80BCdefGHIjklMN"], $Conf);
 xassert_eqq($doc->content_text_signature(), "starts with “\\x02\\x00A\\x80BCde”");
-$doc = new DocumentInfo(["content" => ""]);
+$doc = new DocumentInfo(["content" => ""], $Conf);
 xassert_eqq($doc->content_text_signature(), "is empty");
 
-$doc = new DocumentInfo(["content_file" => "/tmp/this-file-is-expected-not-to-exist.png.zip"]);
+$doc = new DocumentInfo(["content_file" => "/tmp/this-file-is-expected-not-to-exist.png.zip"], $Conf);
 ++Xassert::$disabled;
 $s = $doc->content_text_signature();
 --Xassert::$disabled;

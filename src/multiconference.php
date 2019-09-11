@@ -1,9 +1,10 @@
 <?php
 // multiconference.php -- HotCRP multiconference installations
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Multiconference {
-    static private $original_opt = null;
+    static private $original_opt;
+    static private $cache;
 
     static function init() {
         global $Opt, $argv;
@@ -28,7 +29,7 @@ class Multiconference {
                 }
             }
         } else if (!$confid) {
-            $base = Navigation::site_absolute(true);
+            $base = Navigation::base_absolute(true);
             if (($multis = get($Opt, "multiconferenceAnalyzer"))) {
                 foreach (is_array($multis) ? $multis : array($multis) as $multi) {
                     list($match, $replace) = explode(" ", $multi);
@@ -45,8 +46,10 @@ class Multiconference {
 
         if (!$confid)
             $confid = "__nonexistent__";
-        else if (!preg_match(',\A[-a-zA-Z0-9_][-a-zA-Z0-9_.]*\z,', $confid))
+        else if (!preg_match(',\A[-a-zA-Z0-9_][-a-zA-Z0-9_.]*\z,', $confid)) {
+            $Opt["__original_confid"] = $confid;
             $confid = "__invalid__";
+        }
 
         self::assign_confid($Opt, $confid);
     }
@@ -58,6 +61,18 @@ class Multiconference {
         if (!get($opt, "dbName") && !get($opt, "dsn"))
             $opt["dbName"] = $confid;
         $opt["confid"] = $confid;
+    }
+
+    static function get_confid($confid) {
+        if (self::$cache === null) {
+            self::$cache = [];
+            if (Conf::$g && ($xconfid = Conf::$g->opt("confid")))
+                self::$cache[$xconfid] = Conf::$g;
+        }
+        $conf = get(self::$cache, $confid);
+        if ($conf === null && ($conf = self::load_confid($confid)))
+            self::$cache[$confid] = $conf;
+        return $conf;
     }
 
     static function load_confid($confid) {
@@ -83,8 +98,9 @@ class Multiconference {
         if (PHP_SAPI == "cli") {
             fwrite(STDERR, join("\n", $errors) . "\n");
             exit(1);
-        } else if (get($_GET, "ajax")) {
+        } else if (Navigation::page() === "api" || get($_GET, "ajax")) {
             $ctype = get($_GET, "text") ? "text/plain" : "application/json";
+            header("HTTP/1.1 404 Not Found");
             header("Content-Type: $ctype; charset=utf-8");
             if (get($Opt, "maintenance"))
                 echo "{\"error\":\"maintenance\"}\n";
@@ -106,7 +122,9 @@ class Multiconference {
 
     static function fail_bad_options() {
         global $Opt;
-        $errors = array();
+        if (isset($Opt["multiconferenceFailureCallback"]))
+            call_user_func($Opt["multiconferenceFailureCallback"], "options");
+        $errors = [];
         if (get($Opt, "multiconference") && $Opt["confid"] === "__nonexistent__")
             $errors[] = "You haven’t specified a conference and this is a multiconference installation.";
         else if (get($Opt, "multiconference"))
@@ -126,7 +144,9 @@ class Multiconference {
 
     static function fail_bad_database() {
         global $Conf, $Opt;
-        $errors = array();
+        if (isset($Opt["multiconferenceFailureCallback"]))
+            call_user_func($Opt["multiconferenceFailureCallback"], "database");
+        $errors = [];
         if (get($Opt, "multiconference") && $Opt["confid"] === "__nonexistent__")
             $errors[] = "You haven’t specified a conference and this is a multiconference installation.";
         else if (get($Opt, "multiconference"))

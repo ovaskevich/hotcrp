@@ -1,6 +1,6 @@
 <?php
 // abbreviationmatcher.php -- HotCRP abbreviation matcher helper class
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 // Match priority (higher = more priority):
 // 5. Exact match
@@ -44,21 +44,29 @@ class AbbreviationMatchTracker {
             $this->dpattern = $this->dupattern = AbbreviationMatcher::dedash($pattern);
         }
         $this->is_camel_word = AbbreviationMatcher::is_camel_word($pattern);
-        $this->has_star = strpos($pattern, "*") !== false;
+        $starpos = strpos($pattern, "*");
+        if ($starpos === false) {
+            $this->has_star = 0;
+        } else if ($starpos === 0) {
+            $this->has_star = 2;
+        } else {
+            $this->has_star = 1;
+        }
     }
     private function wmatch_score($pattern, $subject, $flags) {
         // assert($pattern whitespace is simplified)
         $pwords = explode(" ", $pattern);
         $swords = preg_split('{\s+}', $subject);
-        $ppos = $spos = $demerits = 0;
         $pword = null;
         $pword_pos = -1;
         $pword_star = false;
+        $ppos = $spos = $demerits = $skipped = 0;
         while (isset($pwords[$ppos]) && isset($swords[$spos])) {
             if ($pword_pos !== $ppos) {
-                $pword = '{\A' . preg_quote($pwords[$ppos]) . '(\S*)\z}' . $flags;
+                $pword = '{\A' . preg_quote($pwords[$ppos]) . '([^-\s,.:;\'"\[\]{}()!?&]*).*\z}' . $flags;
                 $pword_pos = $ppos;
-                if ($this->has_star && strpos($pwords[$ppos], "*") !== false) {
+                if ($this->has_star !== 0
+                    && strpos($pwords[$ppos], "*") !== false) {
                     $pword = str_replace('\\*', '.*', $pword);
                     $pword_star = true;
                 } else
@@ -66,16 +74,19 @@ class AbbreviationMatchTracker {
             }
             if (preg_match($pword, $swords[$spos], $m)) {
                 ++$ppos;
-                $demerits += ($m[1] !== "" || $pword_star ? 1 : 0);
-            } else
-                $demerits += 1;
+                $demerits += $m[1] !== "" || $pword_star;
+            } else if ($this->has_star !== 2) {
+                $skipped = 1;
+            }
             ++$spos;
         }
         // missed words cost 1/64 point, partial words cost 1/64 point
         if (!isset($pwords[$ppos])) {
-            if (!$this->has_star)
-                $demerits += count($swords) - $spos;
-            return 1 - 0.015625 * max(min($demerits, 63), 1);
+            $demerits += $skipped;
+            if ($this->has_star === 0 && $skipped === 0)
+                $demerits += $spos < count($swords);
+            //error_log("- $subject $this->pattern $demerits $ppos $spos");
+            return 1 - 0.015625 * min($demerits + 1, 63);
         } else
             return 0;
     }
@@ -91,7 +102,7 @@ class AbbreviationMatchTracker {
             }
         }
         $swords = preg_split('{\s+}', $subject);
-        $ppos = $spos = $demerits = 0;
+        $ppos = $spos = $demerits = $skipped = 0;
         while (isset($this->camelwords[$ppos]) && isset($swords[$spos])) {
             $pword = $this->camelwords[$ppos];
             $sword = $swords[$spos];
@@ -105,13 +116,19 @@ class AbbreviationMatchTracker {
                     break;
                 $pword = $this->camelwords[$ppos];
             }
-            $demerits += ($sidx < strlen($sword) ? 1 : 0);
+            if ($sidx === 0) {
+                $skipped = 1;
+            } else {
+                $demerits += $sidx < strlen($sword);
+            }
             ++$spos;
         }
         if (!isset($this->camelwords[$ppos])) {
-            if (!$this->has_star)
-                $demerits += count($swords) - $spos;
-            return 1 - 0.015625 * max(min($demerits, 63), 1);
+            $demerits += $skipped;
+            if ($this->has_star === 0 && $skipped === 0)
+                $demerits += $spos < count($swords);
+            //error_log("+ $subject $this->pattern $demerits $ppos $spos");
+            return 1 - 0.015625 * min($demerits + 1, 63);
         } else
             return 0;
     }
@@ -177,12 +194,14 @@ class AbbreviationMatchTracker {
 
     function check($subject, $data, $sisu = null) {
         $mclass = $this->mclass($subject, $sisu);
+        //if ($mclass > 0) error_log("$subject : {$this->pattern} : $mclass");
         if ($mclass > $this->mclass) {
             $this->mclass = $mclass;
             $this->matches = [$data];
         } else if ($mclass == $this->mclass
-                   && $this->matches[count($this->matches) - 1] !== $data)
+                   && $this->matches[count($this->matches) - 1] !== $data) {
             $this->matches[] = $data;
+        }
     }
 
     function matches() {
@@ -193,14 +212,24 @@ class AbbreviationMatchTracker {
 class AbbreviationClass {
     const TYPE_CAMELCASE = 0;
     const TYPE_LOWERDASH = 1;
-    public $type = self::TYPE_CAMELCASE;
+    const TYPE_ASIS = 2;
+    public $type;
+    public $nwords;
     public $drop_parens = true;
-    public $nwords = 3;
     public $stopwords = "";
     public $tflags = 0;
     public $index = 0;
+    public $force = false;
 
+    function __construct($type = self::TYPE_CAMELCASE, $nwords = 3) {
+        $this->type = $type;
+        $this->nwords = $nwords;
+    }
     function step() {
+        if ($this->nwords < 3) {
+            $this->nwords = 3;
+            return true;
+        }
         ++$this->index;
         if ($this->index >= 1)
             $this->drop_parens = false;
@@ -208,7 +237,12 @@ class AbbreviationClass {
             $this->stopwords = false;
         if ($this->index > $this->nwords)
             $this->nwords = $this->index;
-        return $this->index <= 5;
+        if ($this->type === self::TYPE_ASIS) {
+            if ($this->index === 6)
+                $this->nwords = 0;
+            return $this->index <= 6;
+        } else
+            return $this->index <= 5;
     }
 }
 
@@ -220,6 +254,10 @@ class AbbreviationMatcher {
 
     function add($name, $data, $tflags = 0, $prio = 0) {
         $this->data[] = [$name, null, $data, $tflags, $prio];
+        $this->matches = [];
+    }
+    function add_lazy($name, $callback, $args, $tflags = 0, $prio = 0) {
+        $this->data[] = [$name, null, $this, $tflags, $prio, $callback, $args];
         $this->matches = [];
     }
 
@@ -245,6 +283,14 @@ class AbbreviationMatcher {
             $this->data[$this->nanal][1] = self::dedash($uname);
             ++$this->nanal;
         }
+    }
+
+    private function _resolve($i) {
+        $d =& $this->data[$i];
+        if ($d[2] === $this) {
+            $d[2] = call_user_func_array($d[5], $d[6]);
+        }
+        return $d[2];
     }
 
     private function _find_all($pattern) {
@@ -276,8 +322,9 @@ class AbbreviationMatcher {
                     $matches = [];
                 $mclass = 1;
                 $matches[] = $i;
-            } else if ($mclass === 0 && preg_match($re, $d[1]))
+            } else if ($mclass === 0 && preg_match($re, $d[1])) {
                 $matches[] = $i;
+            }
         }
 
         if (count($matches) > 1) {
@@ -293,6 +340,8 @@ class AbbreviationMatcher {
             $last_abbreviator = $last_value = null;
             $amt = new AbbreviationMatchTracker($spat, $sisu);
             foreach ($this->data as $i => $d) {
+                if ($d[2] === $this)
+                    $d[2] = $this->_resolve($i);
                 if ($d[2] instanceof Abbreviator)
                     $abbreviator = $d[2];
                 else if (isset($this->abbreviators[$d[3]]))
@@ -320,13 +369,17 @@ class AbbreviationMatcher {
         $last = $prio = false;
         foreach ($this->matches[$pattern] as $i) {
             $d = $this->data[$i];
-            if (!$tflags || ($d[3] & $tflags) != 0) {
+            if (!$tflags || ($d[3] & $tflags) !== 0) {
                 if ($prio === false || $d[4] > $prio) {
                     $results = [];
                     $prio = $d[4];
                 }
-                if (empty($results) || $d[2] !== $last)
+                if ($d[2] === $this) {
+                    $d[2] = $this->_resolve($i);
+                }
+                if (empty($results) || $d[2] !== $last) {
                     $results[] = $last = $d[2];
+                }
             }
         }
         return $results;
@@ -343,21 +396,56 @@ class AbbreviationMatcher {
     }
 
 
-    function unique_abbreviation($name, $data, AbbreviationClass $aclass) {
-        $last = $aclass_clone = null;
-        while (true) {
+    function unique_abbreviation($name, $data, AbbreviationClass $aclass1) {
+        $last = null;
+        $aclass = $aclass1;
+        do {
             $x = self::make_abbreviation($name, $aclass);
             if ($last !== $x) {
                 $last = $x;
                 $a = $this->find_all($x, $aclass->tflags);
-                if (count($a) === 1 && $a[0] === $data)
+                if (count($a) === 1 && $a[0] === $data) {
                     return $x;
+                }
             }
-            if (!$aclass_clone)
-                $aclass = $aclass_clone = clone $aclass;
-            if (!$aclass->step())
-                return null;
+            if ($aclass === $aclass1) {
+                $aclass = clone $aclass1;
+            }
+        } while ($aclass->step());
+
+        if ($aclass1->force) {
+            $pfx = self::make_abbreviation($name, $aclass1) . ".";
+            $sfx = 1;
+            foreach ($this->data as $i => $d) {
+                if (!$aclass1->tflags || ($d[3] & $aclass1->tflags) !== 0) {
+                    if ($d[2] === $this) {
+                        $d[2] = $this->_resolve($i);
+                    }
+                    if ($d[2] === $data) {
+                        return $pfx . $sfx;
+                    }
+                    if ($d[2] instanceof Abbreviator) {
+                        $abbreviator = $d[2];
+                    } else if (isset($this->abbreviators[$d[3]])) {
+                        $abbreviator = $this->abbreviators[$d[3]];
+                    } else {
+                        $abbreviator = null;
+                    }
+                    if ($abbreviator) {
+                        $tries = $d[2]->abbreviations_for($d[0], $d[2]);
+                    } else {
+                        $tries = self::make_abbreviation($d[0], $aclass1);
+                    }
+                    foreach (is_string($tries) ? [$tries] : $tries as $s) {
+                        if ($s === $pfx . $sfx) {
+                            ++$sfx;
+                        }
+                    }
+                }
+            }
         }
+
+        return null;
     }
 
     static function make_abbreviation($name, AbbreviationClass $aclass) {
@@ -376,11 +464,17 @@ class AbbreviationMatcher {
         // drop unlikely punctuation
         $xname = preg_replace('/[-:\s+,.?!()\[\]\{\}_\/\"]+/', " ", " $name ");
         // drop extraneous words
-        $xname = preg_replace('/\A(' . str_repeat(' \S+', $aclass->nwords) . ' ).*\z/', '$1', $xname);
+        if ($aclass->nwords > 0)
+            $xname = preg_replace('/\A(' . str_repeat(' \S+', $aclass->nwords) . ' ).*\z/', '$1', $xname);
         if ($aclass->type === AbbreviationClass::TYPE_CAMELCASE) {
             $xname = str_replace(" ", "", ucwords($xname));
-            return preg_replace('/([A-Z][a-z][a-z])[a-z]*/', '$1', $xname);
-        } else
+            if (strlen($xname) < 6 && preg_match('/\A[A-Z][a-z]+\z/', $xname))
+                return $xname;
+            else
+                return preg_replace('/([A-Z][a-z][a-z])[a-z]*/', '$1', $xname);
+        } else if ($aclass->type === AbbreviationClass::TYPE_LOWERDASH)
             return strtolower(str_replace(" ", "-", trim($xname)));
+        else
+            return $xname;
     }
 }

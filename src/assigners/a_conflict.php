@@ -1,6 +1,6 @@
 <?php
 // a_conflict.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Conflict_AssignmentParser extends AssignmentParser {
     private $remove;
@@ -10,18 +10,22 @@ class Conflict_AssignmentParser extends AssignmentParser {
         $this->remove = $aj->remove;
         $this->iscontact = $aj->iscontact;
     }
+    static function load_conflict_state(AssignmentState $state) {
+        if ($state->mark_type("conflict", ["pid", "cid"], "Conflict_Assigner::make")) {
+            $result = $state->conf->qe("select paperId, contactId, conflictType from PaperConflict where conflictType!=0 and paperId?a", $state->paper_ids());
+            while (($row = $result->fetch_row())) {
+                $state->load(["type" => "conflict", "pid" => +$row[0], "cid" => +$row[1], "_ctype" => +$row[2]]);
+            }
+            Dbl::free($result);
+        }
+    }
     function load_state(AssignmentState $state) {
-        if (!$state->mark_type("conflict", ["pid", "cid"], "Conflict_Assigner::make"))
-            return;
-        $result = $state->conf->qe("select paperId, contactId, conflictType from PaperConflict where conflictType>0 and paperId?a", $state->paper_ids());
-        while (($row = edb_row($result)))
-            $state->load(["type" => "conflict", "pid" => +$row[0], "cid" => +$row[1], "_ctype" => +$row[2]]);
-        Dbl::free($result);
+        self::load_conflict_state($state);
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
         if (!$state->user->can_administer($prow)
             && !$state->user->privChair
-            && !$state->user->act_author_view($prow))
+            && !$state->user->act_author($prow))
             return "You can’t administer #{$prow->paperId}.";
         else if (!$this->iscontact
                  && !$state->user->can_administer($prow)
@@ -30,35 +34,67 @@ class Conflict_AssignmentParser extends AssignmentParser {
         else
             return true;
     }
-    function expand_any_user(PaperInfo $prow, &$req, AssignmentState $state) {
+    function make_conflict_type($req, AssignmentState $state) {
         if ($this->remove) {
+            $s = $this->iscontact ? "=" . CONFLICT_CONTACTAUTHOR : "!=0";
+            return [new CountMatcher($s), 0, false];
+        } else if ($this->iscontact) {
+            return [null, CONFLICT_CONTACTAUTHOR, false];
+        } else {
+            $cts = strtolower(trim((string) $req["conflict"]));
+            $cm = null;
+            $error = false;
+            $confset = $state->conf->conflict_types();
+            if (($colon = strpos($cts, ":")) !== false) {
+                $octs = trim(substr($cts, 0, $colon));
+                if ($octs === "" || $octs === "any" || $octs === "all")
+                    $cm = new CountMatcher("!=0");
+                else if (($ct = $confset->parse_text($octs, 1000)) !== false)
+                    $cm = new CountMatcher("=" . $ct);
+                else
+                    $error = true;
+                $cts = trim(substr($cts, $colon + 1));
+                if ($cts === "")
+                    $cts = "none";
+            }
+            if ($cts === "")
+                $ct = 1000;
+            else if (($ct = $confset->parse_text($cts, 1000)) === false) {
+                $ct = 1000;
+                $error = true;
+            }
+            return [$cm, $ct, $error];
+        }
+    }
+    function conflict_type($req, AssignmentState $state) {
+        if (!isset($req["_conflict_type"]) || !is_array($req["_conflict_type"]))
+            $req["_conflict_type"] = $this->make_conflict_type($req, $state);
+        return $req["_conflict_type"];
+    }
+    function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
+        list($matcher, $ct, $error) = $this->conflict_type($req, $state);
+        if ($matcher && !$matcher->test(0)) {
             $m = $state->query(["type" => "conflict", "pid" => $prow->paperId]);
             $cids = array_map(function ($x) { return $x["cid"]; }, $m);
             return $state->users_by_id($cids);
         } else
             return false;
     }
-    function allow_contact(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function allow_user(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         return $contact->contactId != 0;
     }
-    function apply(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         $res = $state->remove(["type" => "conflict", "pid" => $prow->paperId, "cid" => $contact->contactId]);
         $admin = $state->user->can_administer($prow);
-        if ($this->remove)
-            $ct = 0;
-        else if ($this->iscontact)
-            $ct = CONFLICT_CONTACTAUTHOR;
-        else {
-            $ct = 1000;
-            $cts = get($req, "conflicttype", get($req, "conflict"));
-            if ($cts !== null && ($ct = Conflict::parse($cts, 1000)) === false)
-                return "Bad conflict type.";
-            if ($ct !== 1000)
-                $ct = Conflict::constrain_editable($ct, $admin);
-        }
+        list($matcher, $ct, $error) = $this->conflict_type($req, $state);
+        if ($error)
+            return "Bad conflict type.";
+        if (!$this->remove && !$this->iscontact && $ct !== 1000)
+            $ct = Conflict::constrain_editable($ct, $admin);
         if (!empty($res)) {
             $old_ct = $res[0]["_ctype"];
-            if ((!$this->iscontact && $old_ct >= CONFLICT_AUTHOR)
+            if ((!$this->iscontact
+                 && $old_ct >= CONFLICT_AUTHOR)
                 || (!$this->iscontact
                     && $ct < CONFLICT_CHAIRMARK
                     && $old_ct == CONFLICT_CHAIRMARK
@@ -67,12 +103,17 @@ class Conflict_AssignmentParser extends AssignmentParser {
                     && $ct == 0
                     && $old_ct > 0
                     && $old_ct < CONFLICT_AUTHOR)
-                || ($ct === 1000 && $old_ct > 0))
+                || ($ct === 1000
+                    && $old_ct > 0)
+                || ($matcher
+                    && !$matcher->test($old_ct)))
                 $ct = $old_ct;
+        } else if ($matcher && !$matcher->test(0)) {
+            $ct = 0;
         }
         if ($ct === 1000)
             $ct = $admin ? CONFLICT_CHAIRMARK : CONFLICT_AUTHORMARK;
-        if ($ct > 0)
+        if ($ct !== 0)
             $state->add(["type" => "conflict", "pid" => $prow->paperId, "cid" => $contact->contactId, "_ctype" => $ct]);
         return true;
     }
@@ -91,11 +132,29 @@ class Conflict_Assigner extends Assigner {
             foreach ($state->query(["type" => "conflict", "pid" => $item["pid"]]) as $m)
                 if ($m["_ctype"] >= CONFLICT_CONTACTAUTHOR)
                     ++$ncontacts;
-            if ($ncontacts == 0)
+            if ($ncontacts === 0)
                 throw new Exception("Each submission must have at least one contact.");
         }
         return new Conflict_Assigner($item, $state);
     }
+    static function check_unconflicted($item, AssignmentState $state) {
+        $pid = $item["pid"];
+        $cid = isset($item["cid"]) ? $item["cid"] : $item["_cid"];
+        $cflt = $state->query(["type" => "conflict", "pid" => $pid, "cid" => $cid]);
+        if ($cflt && $cflt[0]["_ctype"] > 0) {
+            $uname = Text::user_html_nolink($state->user_by_id($cid));
+            if (isset($item["_override"])
+                && $state->user->can_administer($state->prow($pid))) {
+                $state->warning("Overriding {$uname} conflict with #{$pid}.");
+            } else if ($state->filename !== null
+                       && $state->user->allow_administer($state->prow($pid))) {
+                throw new Exception("{$uname} has a conflict with #{$pid}. Set an “override” column to “yes” to assign the " . $item["type"] . " anyway.");
+            } else {
+                throw new Exception("{$uname} has a conflict with #{$pid}.");
+            }
+        }
+    }
+
     function unparse_description() {
         return "conflict";
     }
@@ -121,7 +180,7 @@ class Conflict_Assigner extends Assigner {
     function unparse_csv(AssignmentSet $aset, AssignmentCsv $acsv) {
         return [
             "pid" => $this->pid, "action" => $this->ctype ? "conflict" : "noconflict",
-            "email" => $this->contact->email, "name" => $this->contact->name_text()
+            "email" => $this->contact->email, "name" => $this->contact->name()
         ];
     }
     function account(AssignmentSet $aset, AssignmentCountSet $deltarev) {

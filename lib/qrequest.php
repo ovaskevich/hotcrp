@@ -1,6 +1,6 @@
 <?php
 // qrequest.php -- HotCRP helper class for request objects (no warnings)
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSerializable {
     // NB see also count()
@@ -36,7 +36,7 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         unset($this->$offset);
     }
     function getIterator() {
-        return new ArrayIterator($this->make_array());
+        return new ArrayIterator($this->as_array());
     }
     function __set($name, $value) {
         $this->$name = $value;
@@ -89,14 +89,17 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
         return count(get_object_vars($this)) - 6;
     }
     function jsonSerialize() {
-        return $this->make_array();
+        return $this->as_array();
     }
-    function make_array() {
+    function as_array() {
         $d = [];
         foreach (get_object_vars($this) as $k => $v)
             if (substr($k, 0, 4) !== "____")
                 $d[$k] = $v;
         return $d;
+    }
+    function as_object() {
+        return (object) $this->as_array();
     }
     function keys() {
         $d = [];
@@ -104,9 +107,6 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
             if (substr($k, 0, 4) !== "____")
                 $d[] = $k;
         return $d;
-    }
-    function make_object() {
-        return (object) $this->make_array();
     }
     function contains($key) {
         return property_exists($this, $key);
@@ -141,23 +141,23 @@ class Qrequest implements ArrayAccess, IteratorAggregate, Countable, JsonSeriali
     function files() {
         return $this->____files;
     }
-    function set_attachment($name, $x) {
-        $this->____x[$name] = $x;
-    }
-    function has_attachments() {
+    function has_annexes() {
         return !empty($this->____x);
     }
-    function has_attachment($name) {
+    function annexes() {
+        return $this->____x;
+    }
+    function has_annex($name) {
         return isset($this->____x[$name]);
     }
-    function attachment($name) {
+    function annex($name) {
         $x = null;
         if (array_key_exists($name, $this->____x))
             $x = $this->____x[$name];
         return $x;
     }
-    function attachments() {
-        return $this->____x;
+    function set_annex($name, $x) {
+        $this->____x[$name] = $x;
     }
     function approve_post() {
         $this->____post_ok = true;

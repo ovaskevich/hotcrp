@@ -1,6 +1,6 @@
 <?php
 // a_tag.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class NextTagAssigner {
     private $tag;
@@ -57,7 +57,7 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         if (!$this->remove && $aj->next)
             $this->isnext = $aj->next === "seq" ? self::NEXTSEQ : self::NEXT;
     }
-    function expand_papers(&$req, AssignmentState $state) {
+    function expand_papers($req, AssignmentState $state) {
         return $this->isnext ? "ALL" : false;
     }
     static function load_tag_state(AssignmentState $state) {
@@ -84,9 +84,9 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
             $state->paper_error("You can’t view that tag for #{$prow->paperId}.");
         return false;
     }
-    function apply(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         // tag argument (can have multiple space-separated tags)
-        if (($tag = trim(get($req, "tag", ""))) === "")
+        if (($tag = trim((string) $req["tag"])) === "")
             return "Tag missing.";
         $tags = preg_split('/\s+/', $tag);
         while (count($tags) > 1) {
@@ -96,11 +96,10 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         $tag = $tags[0];
 
         // index argument
-        $xindex = get($req, "index");
-        if ($xindex === null)
-            $xindex = get($req, "value");
-        if ($xindex !== null && ($xindex = trim($xindex)) !== "") {
-            $tag = preg_replace(',\A(#?.+)(?:[=!<>]=?|#|≠|≤|≥)(?:|-?\d+(?:\.\d*)?|-?\.\d+|any|all|none|clear)\z,i', '$1', $tag);
+        $xindex = $req["tag_value"];
+        if ($xindex !== null
+            && ($xindex = trim($xindex)) !== "") {
+            $tag = preg_replace(',\A([-+]?#?.+)(?:[=!<>]=?|#|≠|≤|≥)(?:|-?\d+(?:\.\d*)?|-?\.\d+|any|all|none|clear)\z,i', '$1', $tag);
             if (!preg_match(',\A(?:[=!<>]=?|#|≠|≤|≥),i', $xindex))
                 $xindex = "#" . $xindex;
             $tag .= $xindex;
@@ -113,20 +112,26 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
             $tag = substr($tag, 1);
         } else if ($tag[0] === "+" && !$remove)
             $tag = substr($tag, 1);
-        if ($tag[0] === "#")
+        if ($tag !== "" && $tag[0] === "#")
             $tag = substr($tag, 1);
         $m = array(null, "", "", "", "");
         $xtag = $tag;
-        if (preg_match(',\A(.*?)([=!<>]=?|#|≠|≤|≥)(.*?)\z,', $xtag, $xm))
+        if (preg_match(',\A(.*?)(#|#?[=!<>]=?|#?≠|#?≤|#?≥)(.*?)\z,', $xtag, $xm)) {
             list($xtag, $m[3], $m[4]) = array($xm[1], $xm[2], strtolower($xm[3]));
-        if (!preg_match(',\A(|[^#]*~)([a-zA-Z!@*_:.]+[-a-zA-Z0-9!@*_:.\/]*)\z,i', $xtag, $xm))
+            if ($m[3] === "#")
+                $m[3] = "=";
+            else if ($m[3][0] === "#")
+                $m[3] = substr($m[3], 1);
+        }
+        if ($xtag === "")
+            return "Empty tag.";
+        if (!preg_match(',\A(|[^#]*~)([a-zA-Z@*_:.]+[-+a-zA-Z0-9!@*_:.\/]*)\z,i', $xtag, $xm))
             return "“" . htmlspecialchars($tag) . "”: Invalid tag.";
-        else if ($m[3] && $m[4] === "")
+        if ($m[3] && $m[4] === "")
             return "“" . htmlspecialchars($tag) . "”: Tag value missing.";
-        else if ($m[3] && !preg_match(',\A([-+]?(?:\d+(?:\.\d*)?|\.\d+)|any|all|none|clear)\z,', $m[4]))
+        if ($m[3] && !preg_match(',\A([-+]?(?:\d+(?:\.\d*)?|\.\d+)|any|all|none|clear)\z,', $m[4]))
             return "“" . htmlspecialchars($tag) . "”: Tag value should be a number.";
-        else
-            list($m[1], $m[2]) = array($xm[1], $xm[2]);
+        list($m[1], $m[2]) = array($xm[1], $xm[2]);
         if ($m[1] == "~" || strcasecmp($m[1], "me~") == 0)
             $m[1] = ($contact->contactId ? : $state->user->contactId) . "~";
         // ignore attempts to change vote tags
@@ -157,7 +162,7 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         $tag = $m[1] . $m[2];
 
         // resolve index portion
-        if ($m[3] && $m[3] != "#" && $m[3] != "=" && $m[3] != "==")
+        if ($m[3] && $m[3] !== "=" && $m[3] !== "==")
             return "“" . htmlspecialchars($m[3]) . "” isn’t allowed when adding tags.";
         if ($this->isnext)
             $index = $this->apply_next_index($prow->paperId, $tag, $state, $m);
@@ -234,11 +239,8 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         // resolve index comparator
         if (preg_match(',\A(?:any|all|none|clear)\z,i', $m[4]))
             $m[3] = $m[4] = "";
-        else {
-            if ($m[3] == "#")
-                $m[3] = "=";
+        else
             $m[4] = cvtint($m[4], 0);
-        }
 
         // if you can't view the tag, you can't clear the tag
         // (information exposure)

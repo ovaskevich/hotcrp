@@ -21,15 +21,18 @@
     },
     {
         "name": "aumatch",
-        "require": "src/search/st_author.php",
         "parse_callback": "AuthorMatch_SearchTerm::parse",
         "synonym": ["authormatch", "authmatch"]
     },
     {
         "name": "comatch",
-        "require": "src/search/st_author.php",
         "parse_callback": "AuthorMatch_SearchTerm::parse",
         "synonym": ["collabmatch", "collaboratormatch", "collaboratorsmatch"]
+    },
+    {
+        "name": "acmatch",
+        "parse_callback": "AuthorMatch_SearchTerm::parse",
+        "synonym": ["ac"]
     },
     {
         "name": "conf",
@@ -112,7 +115,7 @@
     },
     {
         "name": "admin",
-        "parse_callback": "PaperPC_SearchTerm::parse", "pcfield": "manager",
+        "parse_callback": "Admin_SearchTerm::parse",
         "synonym": ["manager", "administrator"], "has": "any"
     },
     {
@@ -195,16 +198,15 @@
         "synonym": ["rtoken", "retoken", "reviewtoken"], "has": "any"
     },
     {
-        "name": "approvable",
-        "parse_callback": "Review_SearchTerm::parse",
-        "retype": null, "recompleteness": "approvable", "has": ">0"
-    },
-    {
-        "match": "(|c|i|p|complete-?|incomplete-?|partial-?|in-?progress-?)(|meta-?|pri-?|sec-?|ext-?|primary-?|secondary-?|external-?)(?:re|rev|review)",
+        "match": "(|c|i|p|complete-?|incomplete-?|partial-?|in-?progress-?|not-?started-?|pending-?|pending-?approval-?|propos(?:al|ed)-?)(|meta-?|pri-?|sec-?|ext-?|primary-?|secondary-?|external-?)(?:re|rev|review)",
         "expand_callback": "Review_SearchTerm::keyword_factory"
     },
     {
-        "match": "(|c|i|p|complete-?|incomplete-?|partial-?|in-?progress-?)(meta|pri|sec|ext|primary|secondary|external)",
+        "match": "(?:|review-?)(|c|i|p|complete-?|incomplete-?|in-?progress-?|not-?started-?|partial-?|pending-?|pending-?approval-?|propos(?:al|ed)-?)(meta|pri|sec|ext|primary|secondary|external)",
+        "expand_callback": "Review_SearchTerm::keyword_factory"
+    },
+    {
+        "match": "(?:|review-?)(complete|incomplete|in-?progress|not-?started|partial|pending|pending-?approval|propos(?:al|ed))()",
         "expand_callback": "Review_SearchTerm::keyword_factory"
     },
     {
@@ -231,32 +233,34 @@
     {
         "name": "show",
         "parse_callback": "Show_SearchTerm::parse", "allow_parens": true,
-        "showtype": true, "sorting": false
+        "view_action": "show", "sorting": false
     },
     {
         "name": "hide",
         "parse_callback": "Show_SearchTerm::parse", "allow_parens": true,
-        "showtype": false, "sorting": false
+        "view_action": "hide", "sorting": false
     },
     {
         "name": "edit",
         "parse_callback": "Show_SearchTerm::parse",
-        "showtype": "edit", "sorting": false
+        "view_action": "edit", "sorting": false
     },
     {
         "name": "showsort",
         "parse_callback": "Show_SearchTerm::parse", "allow_parens": true,
-        "showtype": true, "sorting": true, "synonym": "sortshow"
+        "view_action": "show", "sorting": true,
+        "synonym": "sortshow"
     },
     {
         "name": "editsort",
         "parse_callback": "Show_SearchTerm::parse",
-        "showtype": "edit", "sorting": true, "synonym": "sortedit"
+        "view_action": "edit", "sorting": true,
+        "synonym": "sortedit"
     },
     {
         "name": "sort",
         "parse_callback": "Show_SearchTerm::parse", "allow_parens": true,
-        "showtype": null, "sorting": true
+        "view_action": false, "sorting": true
     },
     {
         "name": "HEADING",

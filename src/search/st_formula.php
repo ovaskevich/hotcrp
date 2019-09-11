@@ -1,6 +1,6 @@
 <?php
 // search/st_formula.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Formula_SearchTerm extends SearchTerm {
     private $formula;
@@ -29,7 +29,7 @@ class Formula_SearchTerm extends SearchTerm {
     }
     static function parse_graph($word, SearchWord $sword, PaperSearch $srch) {
         if (($formula = self::read_formula($word, $sword->quoted, true, $srch)))
-            return SearchTerm::make_float(["view" => ["graph($word)" => true]]);
+            return SearchTerm::make_float(["view" => [["graph($word)", "show"]]]);
         return null;
     }
     function sqlexpr(SearchQueryInfo $sqi) {

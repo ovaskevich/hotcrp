@@ -1,22 +1,22 @@
 [
     {
         "name": "sel",
-        "column": true, "minimal": true, "callback": "+SelectorPaperColumn",
+        "column": true, "minimal": true, "callback": "+Selector_PaperColumn",
         "position": 10
     },
     {
         "name": "selon",
-        "column": true, "minimal": true, "className": "pl_sel", "callback": "+SelectorPaperColumn",
+        "column": true, "minimal": true, "className": "pl_sel", "callback": "+Selector_PaperColumn",
         "position": 10
     },
     {
         "name": "id",
-        "column": true, "sort": true, "minimal": true, "completion": true, "callback": "+IdPaperColumn",
-        "position": 50
+        "column": true, "sort": true, "minimal": true, "completion": true, "callback": "+Id_PaperColumn",
+        "position": 50, "synonym": ["pid"]
     },
     {
         "name": "title",
-        "column": true, "sort": true, "minimal": true, "completion": true, "callback": "+TitlePaperColumn",
+        "column": true, "sort": true, "minimal": true, "completion": true, "callback": "+Title_PaperColumn",
         "position": 120
     },
     {
@@ -118,15 +118,16 @@
         "className": "pl_score",
         "callback": "+Score_PaperColumn",
         "position": 1100,
-        "expand_callback": "Score_PaperColumnFactory::expand",
-        "completion_callback": "Score_PaperColumnFactory::completions"
+        "expand_callback": "Score_PaperColumn::expand",
+        "completion_callback": "Score_PaperColumn::completions"
     },
     {
+        "name": "?graph",
         "match": "(?:g|graph):?\\((.*)\\)", "priority": -1,
         "column": true, "fold": true, "sort": true, "minimal": true, "className": "pl_score",
         "callback": "+FormulaGraph_PaperColumn",
         "position": 1200,
-        "expand_callback": "FormulaGraph_PaperColumnFactory::expand",
+        "expand_callback": "FormulaGraph_PaperColumn::expand",
         "completion": "graph(<formula>)"
     },
     {
@@ -164,12 +165,13 @@
     {
         "name": "abstract",
         "row": true, "fold": true, "completion": true, "callback": "+Abstract_PaperColumn",
-        "position": 140
+        "synonym": ["abstracts"], "position": 140
     },
     {
         "name": "authors",
-        "row": true, "fold": 1, "completion": true, "callback": "+Authors_PaperColumn",
-        "synonym": "au", "position": 150
+        "row": true, "fold": 1, "completion": true, "sort": true,
+        "callback": "+Authors_PaperColumn",
+        "synonym": ["au", "author"], "position": 150
     },
     {
         "name": "potentialconflict",

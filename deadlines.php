@@ -1,6 +1,6 @@
 <?php
 // deadlines.php -- HotCRP deadline reporting page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
@@ -18,7 +18,7 @@ echo "<dl>\n";
 
 function printDeadline($time, $phrase, $description) {
     global $Conf;
-    echo "<dt><strong>", $phrase, "</strong>: ", $Conf->printableTime($time, "span") , "</dt>\n",
+    echo "<dt><strong>", $phrase, "</strong>: ", $Conf->unparse_time_long($time, "span") , "</dt>\n",
         "<dd>", $description, ($description ? "<br />" : ""), "</dd>";
 }
 
@@ -35,7 +35,7 @@ if (get($dl->sub, "update"))
 
 if (get($dl->sub, "sub"))
     printDeadline($dl->sub->sub, $Conf->_("Submission deadline"),
-                  $Conf->_("Papers must be submitted by this deadline to be reviewed."));
+                  $Conf->_("Submissions must be ready by this deadline to be reviewed."));
 
 if (get($dl, "resps"))
     foreach ($dl->resps as $rname => $dlr)

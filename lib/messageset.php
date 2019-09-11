@@ -1,9 +1,10 @@
 <?php
 // messageset.php -- HotCRP sets of messages by fields
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class MessageSet {
     public $ignore_msgs = false;
+    public $ignore_duplicates = false;
     private $allow_error;
     private $werror;
     private $errf;
@@ -59,12 +60,24 @@ class MessageSet {
             return;
         $this->canonfield && ($field = $this->canonical_field($field));
         if ($status == self::WARNING
-            && $field && $this->werror && isset($this->werror[$field]))
+            && $field
+            && $this->werror
+            && isset($this->werror[$field]))
             $status = self::ERROR;
         if ($field)
             $this->errf[$field] = max(get($this->errf, $field, 0), $status);
-        if ($msg)
-            $this->msgs[] = [$field, $msg, $status];
+        if ($msg === null || $msg === false || $msg === [])
+            $msg = "";
+        if ($this->ignore_duplicates
+            && $msg !== ""
+            && is_string($msg)
+            && (!$field || isset($this->errf[$field]))
+            && in_array([$field, $msg, $status], $this->msgs))
+            return;
+        if ($msg !== "") {
+            foreach (is_array($msg) ? $msg : [$msg] as $m)
+                $this->msgs[] = [$field, $m, $status];
+        }
         if ($status == self::WARNING)
             ++$this->has_warning;
         if ($status == self::ERROR
@@ -81,50 +94,67 @@ class MessageSet {
         $this->msg($field, $msg, self::INFO);
     }
 
-    function has_error() {
-        return $this->has_error > 0;
-    }
-    function nerrors() {
-        return $this->has_error;
-    }
-    function has_warning() {
-        return $this->has_warning > 0;
-    }
-    function nwarnings() {
-        return $this->has_warning;
-    }
-    function has_problem() {
-        return $this->has_warning > 0 || $this->has_error > 0;
-    }
-    function has_messages() {
-        return !empty($this->msgs);
-    }
     function problem_status() {
         if ($this->has_error > 0)
             return self::ERROR;
         else
             return $this->has_warning > 0 ? self::WARNING : self::INFO;
     }
-    function has_error_at($field) {
-        $this->canonfield && ($field = $this->canonical_field($field));
-        return get($this->errf, $field, 0) > 1;
+    function has_messages() {
+        return !empty($this->msgs);
+    }
+    function has_problem() {
+        return $this->has_warning > 0 || $this->has_error > 0;
+    }
+    function has_error() {
+        return $this->has_error > 0;
+    }
+    function has_warning() {
+        return $this->has_warning > 0;
+    }
+
+    function nerrors() {
+        return $this->has_error;
+    }
+    function nwarnings() {
+        return $this->has_warning;
+    }
+
+    function problem_status_at($field) {
+        if ($this->has_warning > 0 || $this->has_error > 0) {
+            $this->canonfield && ($field = $this->canonical_field($field));
+            return get($this->errf, $field, 0);
+        } else
+            return 0;
+    }
+    function has_messages_at($field) {
+        if (!empty($this->errf)) {
+            $this->canonfield && ($field = $this->canonical_field($field));
+            if (isset($this->errf[$field])) {
+                foreach ($this->msgs as $mx)
+                    if ($mx[0] === $field)
+                        return true;
+            }
+        }
+        return false;
     }
     function has_problem_at($field) {
-        $this->canonfield && ($field = $this->canonical_field($field));
-        return get($this->errf, $field, 0) > 0;
+        return $this->problem_status_at($field) > 0;
     }
-    function problem_status_at($field) {
-        $this->canonfield && ($field = $this->canonical_field($field));
-        return get($this->errf, $field, 0);
+    function has_error_at($field) {
+        return $this->problem_status_at($field) > 1;
     }
-    function control_class($field, $rest = "") {
-        $x = $field ? get($this->errf, $field, 0) : 0;
-        if ($x >= self::ERROR)
-            return $rest === "" ? "has-error" : $rest . " has-error";
-        else if ($x === self::WARNING)
-            return $rest === "" ? "has-warning" : $rest . " has-warning";
-        else
-            return $rest;
+
+    static function status_class($status, $rest = "", $prefix = "has-") {
+        if ($status >= self::WARNING) {
+            if ((string) $rest !== "")
+                $rest .= " ";
+            $rest .= $prefix . ($status >= self::ERROR ? "error" : "warning");
+        }
+        return $rest;
+    }
+    function control_class($field, $rest = "", $prefix = "has-") {
+        return self::status_class($field ? get($this->errf, $field, 0) : 0, $rest, $prefix);
     }
 
     static private function filter_msgs($ms, $include_fields) {
@@ -144,6 +174,9 @@ class MessageSet {
             return [];
         return array_keys(array_filter($this->errf, function ($v) { return $v >= self::ERROR; }));
     }
+    function warning_fields() {
+        return array_keys(array_filter($this->errf, function ($v) { return $v == self::WARNING; }));
+    }
     function problem_fields() {
         return array_keys(array_filter($this->errf, function ($v) { return $v >= self::WARNING; }));
     }
@@ -162,8 +195,14 @@ class MessageSet {
         $ms = array_filter($this->msgs, function ($mx) { return $mx[2] == self::WARNING; });
         return self::filter_msgs($ms, $include_fields);
     }
+    function problems($include_fields = false) {
+        if (!$this->has_error && !$this->has_warning)
+            return [];
+        $ms = array_filter($this->msgs, function ($mx) { return $mx[2] >= self::WARNING; });
+        return self::filter_msgs($ms, $include_fields);
+    }
     function messages_at($field, $include_fields = false) {
-        if (empty($this->msgs) || !isset($this->errf[$field]))
+        if (!isset($this->errf[$field]))
             return [];
         $this->canonfield && ($field = $this->canonical_field($field));
         $ms = array_filter($this->msgs, function ($mx) use ($field) { return $mx[0] === $field; });

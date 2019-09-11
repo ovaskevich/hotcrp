@@ -1,12 +1,13 @@
 <?php
 // authormatcher.php -- HotCRP author matchers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class AuthorMatcher extends Author {
     private $firstName_matcher;
     private $lastName_matcher;
     private $affiliation_matcher;
     private $general_pregexes_;
+    private $highlight_pregexes_;
 
     private static $wordinfo;
 
@@ -45,24 +46,27 @@ class AuthorMatcher extends Author {
             if (!empty($rr))
                 $this->lastName_matcher = (object) [
                     "preg_raw" => '\A' . join("", $rr),
-                    "preg_utf8" => '\A' . join("", $ur)
+                    "preg_utf8" => '\A' . join("", $ur),
+                    "simple" => count($m[0]) === 1 && strlen($m[0][0]) === strlen($this->lastName) ? $m[0][0] : false
                 ];
         }
+        $highlight_any = false;
         if ($this->affiliation !== "") {
             $wordinfo = self::wordinfo();
             preg_match_all('/[a-z0-9&]+/', $this->deaccent(2), $m);
 
-            $directs = $alts = [];
-            $any_weak = false;
+            $directs = $wstrong = $wweak = $alts = [];
+            $any_strong_alternate = false;
             foreach ($m[0] as $w) {
                 $aw = get($wordinfo, $w);
                 if ($aw && isset($aw->stop) && $aw->stop)
                     continue;
-                $any[] = preg_quote($w);
-                $directs[] = $w;
-                if ($aw && isset($aw->weak) && $aw->weak)
-                    $any_weak = true;
+                $weak = $aw && isset($aw->weak) && $aw->weak;
+                if ($wstrong !== false && !$weak)
+                    $wstrong[] = $w;
+                $wweak[] = $w;
                 if ($aw && isset($aw->alternate)) {
+                    $any_strong_alternate = $any_strong_alternate || !$weak;
                     if (is_array($aw->alternate))
                         $alts = array_merge($alts, $aw->alternate);
                     else
@@ -76,27 +80,43 @@ class AuthorMatcher extends Author {
                 }
             }
 
-            $rs = $directs;
+            $directs = $wweak;
+            if (empty($wstrong))
+                $wstrong = false;
+
             foreach ($alts as $alt) {
                 if (is_object($alt)) {
-                    if ((isset($alt->if) && !self::match_if($alt->if, $rs))
-                        || (isset($alt->if_not) && self::match_if($alt->if_not, $rs)))
+                    if ((isset($alt->if) && !self::match_if($alt->if, $wweak))
+                        || (isset($alt->if_not) && self::match_if($alt->if_not, $wweak)))
                         continue;
                     $alt = $alt->word;
                 }
-                if (!is_string($alt))
-                    echo var_export($alt, true);
+                $have_strong = false;
                 foreach (explode(" ", $alt) as $altw)
                     if ($altw !== "") {
-                        $any[] = preg_quote($altw);
-                        $rs[] = $altw;
-                        $any_weak = true;
+                        if ($wstrong !== false) {
+                            $aw = get($wordinfo, $altw);
+                            if (!$aw || !isset($aw->weak) || !$aw->weak) {
+                                $wstrong[] = $altw;
+                                $have_strong = true;
+                            }
+                        }
+                        $wweak[] = $altw;
                     }
+                if ($any_strong_alternate && !$have_strong)
+                    $wstrong = false;
             }
 
-            if (!empty($rs)) {
-                $rex = '{\b(?:' . str_replace('&', '\\&', join("|", $rs)) . ')\b}';
-                $this->affiliation_matcher = [$directs, $any_weak, $rex];
+            if (!empty($wstrong)) {
+                $wstrong = str_replace("&", "\\&", join("|", $wstrong));
+                $wweak = str_replace("&", "\\&", join("|", $wweak));
+                $any[] = $wstrong;
+                $highlight_any = $wweak;
+                $this->affiliation_matcher = [$directs, "{\\b(?:{$wstrong})\\b}", "{\\b(?:{$wweak})\\b}"];
+            } else if (!empty($wweak)) {
+                $wweak = str_replace("&", "\\&", join("|", $wweak));
+                $any[] = $wweak;
+                $this->affiliation_matcher = [$directs, false, "{\\b(?:{$wweak})\\b}"];
             }
         }
 
@@ -108,12 +128,27 @@ class AuthorMatcher extends Author {
             ];
         } else
             $this->general_pregexes_ = false;
+        if ($highlight_any !== false && $highlight_any !== $any[count($any) - 1]) {
+            $any[count($any) - 1] = $highlight_any;
+            $content = join("|", $any);
+            $this->highlight_pregexes_ = (object) [
+                "preg_raw" => '\b(?:' . $content . ')\b',
+                "preg_utf8" => Text::UTF8_INITIAL_NONLETTER . '(?:' . $content . ')' . Text::UTF8_FINAL_NONLETTER
+            ];
+        } else
+            $this->highlight_pregexes_ = false;
     }
 
     function general_pregexes() {
         if ($this->general_pregexes_ === null)
             $this->prepare();
         return $this->general_pregexes_;
+    }
+
+    function highlight_pregexes() {
+        if ($this->general_pregexes_ === null)
+            $this->prepare();
+        return $this->highlight_pregexes_ ? : $this->general_pregexes_;
     }
 
     static function make($x, $nonauthor) {
@@ -158,7 +193,9 @@ class AuthorMatcher extends Author {
             $au = Author::make_string_guess($au);
         if ($this->lastName_matcher
             && $au->lastName !== ""
-            && Text::match_pregexes($this->lastName_matcher, $au->lastName, $au->deaccent(1))
+            && ($this->lastName_matcher->simple
+                ? $this->lastName_matcher->simple === $au->deaccent(1)
+                : Text::match_pregexes($this->lastName_matcher, $au->lastName, $au->deaccent(1)))
             && ($au->firstName === ""
                 || !$this->firstName_matcher
                 || Text::match_pregexes($this->firstName_matcher, $au->firstName, $au->deaccent(0)))) {
@@ -184,7 +221,7 @@ class AuthorMatcher extends Author {
         }
         $pregexes = [];
         foreach ($matchers as $matcher)
-            $pregexes[] = $matcher->general_pregexes();
+            $pregexes[] = $matcher->highlight_pregexes();
         if (count($pregexes) > 1)
             $pregexes = [Text::merge_pregexes($pregexes)];
         if (!empty($pregexes))
@@ -205,11 +242,11 @@ class AuthorMatcher extends Author {
             self::$wordinfo = (array) json_decode(file_get_contents("$ConfSitePATH/etc/affiliationmatchers.json"));
         return self::$wordinfo;
     }
+
     private function test_affiliation($mtext) {
-        list($am_words, $am_any_weak, $am_regex) = $this->affiliation_matcher;
-        if (!$am_any_weak)
-            return preg_match($am_regex, $mtext) === 1;
-        else if (!preg_match_all($am_regex, $mtext, $m))
+        list($am_words, $am_sregex, $am_wregex) = $this->affiliation_matcher;
+        if (($am_sregex && !preg_match($am_sregex, $mtext))
+            || !preg_match_all($am_wregex, $mtext, $m))
             return false;
         $result = true;
         $wordinfo = self::wordinfo();
@@ -306,22 +343,24 @@ class AuthorMatcher extends Author {
             $aw = get($wordinfo, strtolower($w));
             if ($aw) {
                 if (isset($aw->nameish)) {
-                    if ($aw->nameish === false)
+                    if ($aw->nameish === false) {
                         return true;
-                    else if ($aw->nameish === 1) {
+                    } else if ($aw->nameish === 1) {
                         ++$ninit;
                         continue;
                     } else if ($aw->nameish === true
                                || ($aw->nameish === 2 && $i > 0)) {
                         $has_nameish = true;
                         continue;
-                    } else if ($aw->nameish === 0)
+                    } else if ($aw->nameish === 0) {
                         continue;
+                    }
                 }
-                if (isset($aw->weak) && $aw->weak)
+                if (isset($aw->weak) && $aw->weak) {
                     $has_weak = true;
-                else
+                } else {
                     return true;
+                }
             } else if (strlen($w) > 2 && ctype_upper($w)) {
                 if ($fc === null)
                     $fc = $i;
@@ -554,6 +593,19 @@ class AuthorMatcher extends Author {
             ++$len;
             --$depth;
         }
+        // check for unknown affiliation
+        if ($pos - $paren <= 4
+            && preg_match('{\G\(\s*\)}i', $line, $m, 0, $paren)) {
+            $au = AuthorMatcher::make_string_guess($name);
+            if ($au->affiliation) {
+                $line = $name . " (unknown)" . substr($line, $pos);
+                $paren = strlen($name) + 1;
+                $pos = $paren + 9;
+                $len = strlen($line);
+            } else {
+                return self::fix_collaborators_line_no_parens(rtrim($name . " " . substr($line, $pos)));
+            }
+        }
         // check for abbreviation, e.g., "Massachusetts Institute of Tech (MIT)"
         if ($pos === $len) {
             $aff = substr($line, $paren + 1, $pos - $paren - 2);
@@ -564,8 +616,9 @@ class AuthorMatcher extends Author {
             return $line;
         }
         // check for suffix
-        if (preg_match('{\G[-,:;.#()\s"]*\z}', $line, $m, 0, $pos))
+        if (preg_match('{\G[-,:;.#()\s"]*\z}', $line, $m, 0, $pos)) {
             return substr($line, 0, $pos);
+        }
         if (preg_match('{\G(\s*-+\s*|\s*[,:;.#%(\[\{]\s*|\s*(?=[a-z/\s]+\z))}', $line, $m, 0, $pos)) {
             $suffix = substr($line, $pos + strlen($m[1]));
             $line = substr($line, 0, $pos);

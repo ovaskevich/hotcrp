@@ -1,6 +1,6 @@
 <?php
 // a_decision.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Decision_AssignmentParser extends UserlessAssignmentParser {
     private $remove;
@@ -8,11 +8,14 @@ class Decision_AssignmentParser extends UserlessAssignmentParser {
         parent::__construct("decision");
         $this->remove = $aj->remove;
     }
+    static function load_decision_state(AssignmentState $state) {
+        if ($state->mark_type("decision", ["pid"], "Decision_Assigner::make")) {
+            foreach ($state->prows() as $prow)
+                $state->load(["type" => "decision", "pid" => $prow->paperId, "_decision" => +$prow->outcome]);
+        }
+    }
     function load_state(AssignmentState $state) {
-        if (!$state->mark_type("decision", ["pid"], "Decision_Assigner::make"))
-            return;
-        foreach ($state->prows() as $prow)
-            $state->load(["type" => "decision", "pid" => $prow->paperId, "_decision" => +$prow->outcome]);
+        self::load_decision_state($state);
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
         if (!$state->user->can_set_decision($prow))
@@ -20,23 +23,49 @@ class Decision_AssignmentParser extends UserlessAssignmentParser {
         else
             return true;
     }
-    function apply(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
-        if (!$this->remove) {
-            if (!isset($req["decision"]))
-                return "Decision missing.";
-            $matchexpr = PaperSearch::decision_matchexpr($state->conf, $req["decision"], 0);
-            $dec = array_keys($state->conf->decision_map());
-            $dec = array_values(CountMatcher::filter_using($dec, $matchexpr));
-            if (count($dec) == 1)
-                $dec = $dec[0];
-            else if (empty($dec))
-                return "No decisions match “" . htmlspecialchars($req["decision"]) . "”.";
-            else
-                return "More than one decision matches “" . htmlspecialchars($req["decision"]) . "”.";
+    function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
+        $removepred = null;
+        if (isset($req["decision"])) {
+            $matchexpr = PaperSearch::decision_matchexpr($state->conf, $req["decision"], false);
+            if (!$this->remove) {
+                if (is_string($matchexpr)) {
+                    $dec = array_keys($state->conf->decision_map());
+                    $dec = array_values(CountMatcher::filter_using($dec, $matchexpr));
+                } else {
+                    $dec = $matchexpr;
+                }
+                if (count($dec) === 1)
+                    $dec = $dec[0];
+                else if (empty($dec))
+                    return "No decisions match “" . htmlspecialchars($req["decision"]) . "”.";
+                else
+                    return "More than one decision matches “" . htmlspecialchars($req["decision"]) . "”.";
+            } else {
+                $removepred = function ($item) use ($matchexpr) {
+                    return CountMatcher::compare_using($item["_decision"], $matchexpr);
+                };
+            }
+        } else if (!$this->remove) {
+            return "Decision missing.";
         }
-        $state->remove(["type" => "decision", "pid" => $prow->paperId]);
-        if (!$this->remove && $dec)
-            $state->add(["type" => "decision", "pid" => $prow->paperId, "_decision" => +$dec]);
+        $state->remove_if(["type" => "decision", "pid" => $prow->paperId], $removepred);
+        if (!$this->remove && $dec) {
+            $decyes = 0;
+            // accepted papers are always submitted
+            if ($dec > 0) {
+                global $Now;
+                Status_AssignmentParser::load_status_state($state);
+                $sm = $state->remove(["type" => "status", "pid" => $prow->paperId]);
+                $sres = $sm[0];
+                if ($sres["_submitted"] === 0)
+                    $sres["_submitted"] = ($sres["_withdrawn"] > 0 ? -$Now : $Now);
+                $state->add($sres);
+                if ($sres["_submitted"] > 0)
+                    $decyes = 1;
+            }
+            $state->add(["type" => "decision", "pid" => $prow->paperId,
+                         "_decision" => +$dec, "_decyes" => $decyes]);
+        }
         return true;
     }
 }
@@ -83,19 +112,9 @@ class Decision_Assigner extends Assigner {
         global $Now;
         $dec = $this->item->deleted() ? 0 : $this->item["_decision"];
         $aset->stage_qe("update Paper set outcome=? where paperId=?", $dec, $this->pid);
-        if ($dec > 0) {
-            // accepted papers are always submitted
-            $prow = $aset->prow($this->pid);
-            if ($prow->timeSubmitted <= 0 && $prow->timeWithdrawn <= 0) {
-                $aset->stage_qe("update Paper set timeSubmitted=? where paperId=?", $Now, $this->pid);
-                $aset->cleanup_callback("papersub", function ($aset, $vals) {
-                    $aset->conf->update_papersub_setting(min($vals));
-                }, 1);
-            }
-        }
         if ($dec > 0 || $this->item->get(true, "_decision") > 0)
             $aset->cleanup_callback("paperacc", function ($aset, $vals) {
                 $aset->conf->update_paperacc_setting(min($vals));
-            }, $dec > 0 ? 1 : 0);
+            }, $dec > 0 && $this->item["_decyes"] ? 1 : 0);
     }
 }

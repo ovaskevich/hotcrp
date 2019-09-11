@@ -1,7 +1,7 @@
 // graph.js -- HotCRP JavaScript library for graph drawing
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
-var hotcrp_graphs = (function ($, d3) {
+var hotcrp_graph = (function ($, d3) {
 var BOTTOM_MARGIN = 30;
 var PATHSEG_ARGMAP = {
     m: 2, M: 2, z: 0, Z: 0, l: 2, L: 2, h: 1, H: 1, v: 1, V: 1, c: 6, C: 6,
@@ -213,7 +213,7 @@ function closestPoint(pathNode, point, inbest) {
         return inbest;
 
     var pathLength = pathNode.getTotalLength(),
-        precision = pathLength / svg_path_number_of_items(pathNode) * .125,
+        precision = Math.max(pathLength / svg_path_number_of_items(pathNode) * .125, 3),
         best, bestLength, bestDistance2 = Infinity;
 
     function check(pLength) {
@@ -283,14 +283,15 @@ max_procrastination_seq.label = function (dl) {
 procrastination_seq.tick_format = max_procrastination_seq.tick_format =
     function (x) { return -x; };
 
-function seq_to_cdf(seq, flip) {
+function seq_to_cdf(seq, flip, raw) {
     var cdf = [], i, n = seq.ntotal || seq.length;
     seq.sort(flip ? d3.descending : d3.ascending);
     for (i = 0; i <= seq.length; ++i) {
+        var y = raw ? i : i/n;
         if (i != 0 && (i == seq.length || seq[i-1] != seq[i]))
-            cdf.push([seq[i-1], i/n]);
+            cdf.push([seq[i-1], y]);
         if (i != seq.length && (i == 0 || seq[i-1] != seq[i]))
-            cdf.push([seq[i], i/n]);
+            cdf.push([seq[i], y]);
     }
     cdf.cdf = true;
     return cdf;
@@ -321,6 +322,7 @@ function make_axes(svg, xAxis, yAxis, args) {
         .attr("class", "x axis")
         .attr("transform", "translate(0," + args.height + ")")
         .call(xAxis)
+        .attr("font-family", null)
         .attr("font-size", null)
         .attr("fill", null)
         .call(make_rotate_ticks(args.x.rotate_ticks))
@@ -332,6 +334,7 @@ function make_axes(svg, xAxis, yAxis, args) {
     svg.append("g")
         .attr("class", "y axis")
         .call(yAxis)
+        .attr("font-family", null)
         .attr("font-size", null)
         .attr("fill", null)
         .call(make_rotate_ticks(args.y.rotate_ticks))
@@ -360,25 +363,65 @@ function proj2(d) {
 }
 
 function pid_sorter(a, b) {
+    if (typeof a === "object")
+        a = a.id || a[2];
+    if (typeof b === "object")
+        b = b.id || b[2];
     var d = (typeof a === "string" ? parseInt(a, 10) : a) -
             (typeof b === "string" ? parseInt(b, 10) : b);
     return d ? d : (a < b ? -1 : (a == b ? 0 : 1));
 }
 
+function pid_renderer(ps, cc) {
+    ps.sort(pid_sorter);
+    var a = [];
+    for (var i = 0; i !== ps.length; ++i) {
+        var p = ps[i], cx = cc, rest = null;
+        if (typeof p === "object") {
+            if (p.id) {
+                rest = p.rest;
+                cx = p.color_classes;
+                p = p.id;
+            } else {
+                cx = p[3];
+                p = p[2];
+            }
+        }
+        if (cx) {
+            make_pattern_fill(cx);
+            p = '<span class="' + cx + '">#' + p + '</span>';
+        } else
+            p = '#' + p;
+        var comma = i === ps.length - 1 ? "" : ","
+        if (rest)
+            a.push('<span class="nw">' + p + rest + comma + '</span>');
+        else if (cx && comma)
+            a.push('<span class="nw">' + p + comma + '</span>');
+        else
+            a.push(p + comma);
+    }
+    return a.join(" ");
+}
+
 function clicker(pids) {
-    var m, x, i, url;
+    var m, x, i, url, last_review = null;
     if (!pids)
         return;
     if (typeof pids !== "object")
         pids = [pids];
-    for (i = 0, x = []; i < pids.length; ++i) {
-        m = parseInt(pids[i], 10);
-        if (!x.length || x[x.length - 1] != m)
-            x.push(m);
+    for (i = 0, x = []; i !== pids.length; ++i) {
+        var p = pids[i];
+        if (typeof p === "object")
+            p = p.id;
+        if (typeof p === "string") {
+            last_review = p;
+            p = parseInt(p, 10);
+        }
+        x.push(p);
     }
-    if (x.length == 1 && pids.length == 1 && /[A-Z]$/.test(pids[0]))
-        clicker_go(hoturl("paper", {p: x[0], anchor: "r" + pids[0]}));
-    else if (x.length == 1)
+    if (x.length === 1 && pids.length === 1 && last_review !== null)
+        clicker_go(hoturl("paper", {p: x[0], anchor: "r" + last_review}));
+    else if (x.length === 1)
         clicker_go(hoturl("paper", {p: x[0]}));
     else {
         x = d3.set(x).values();
@@ -388,7 +431,7 @@ function clicker(pids) {
 }
 
 function clicker_go(url) {
-    if (d3.event.metaKey)
+    if (d3.event && d3.event.metaKey)
         window.open(url, "_blank");
     else
         window.location = url;
@@ -397,12 +440,14 @@ function clicker_go(url) {
 function make_axis(ticks) {
     if (ticks && ticks[0] === "named")
         ticks = named_integer_ticks(ticks[1]);
-    else if (ticks && ticks[0] === "option_letter")
-        ticks = option_letter_ticks(ticks[1], ticks[2], ticks[3]);
+    else if (ticks && ticks[0] === "score")
+        ticks = score_ticks(ticks[1], ticks[2], ticks[3]);
+    else if (ticks && ticks[0] === "time")
+        ticks = time_ticks();
     else
-        ticks = {};
+        ticks = {type: ticks ? ticks[0] : null};
     return $.extend({
-        ticks: function (extent) {},
+        prepare: function (domain, range) {},
         rewrite: function () {},
         unparse_html: function (value, include_numeric) {
             if (value == Math.floor(value))
@@ -423,14 +468,14 @@ function axis_domain(axis, argextent, e) {
     axis.domain(e);
 }
 
-function make_args(args) {
+function make_args(selector, args) {
     args = $.extend({top: 20, right: 20, bottom: BOTTOM_MARGIN, left: 50}, args);
     args.x = args.x || {};
     args.y = args.y || {};
+    args.width = $(selector).width() - args.left - args.right;
+    args.height = 520 - args.top - args.bottom;
     args.x.ticks = make_axis(args.x.ticks);
     args.y.ticks = make_axis(args.y.ticks);
-    args.width = $(args.selector).width() - args.left - args.right;
-    args.height = 500 - args.top - args.bottom;
     return args;
 }
 
@@ -438,27 +483,17 @@ function position_label(axis, p, prefix) {
     var aa = axis.axis_args, t = '<span class="nw">' + (prefix || "");
     if (aa.label)
         t += escape_entities(aa.label) + " ";
-    return t + aa.ticks.unparse_html.call(axis, p) + '</span>';
+    return t + aa.ticks.unparse_html.call(axis, p, true) + '</span>';
 }
 
-
-/* actual graphs */
-var hotcrp_graphs = {};
 
 // args: {selector: JQUERYSELECTOR,
 //        data: [{d: [ARRAY], label: STRING, className: STRING}],
 //        x/y: {label: STRING, tick_format: STRING}}
-function hotcrp_graphs_cdf(args) {
-    args = make_args(args);
-
+function graph_cdf(selector, args) {
     var x = d3.scaleLinear().range(args.x.flip ? [args.width, 0] : [0, args.width]),
-        y = d3.scaleLinear().range([args.height, 0]);
-
-    var svg = d3.select(args.selector).append("svg")
-        .attr("width", args.width + args.left + args.right)
-        .attr("height", args.height + args.top + args.bottom)
-      .append("g")
-        .attr("transform", "translate(" + args.left + "," + args.top + ")");
+        y = d3.scaleLinear().range([args.height, 0]),
+        svg = this;
 
     // massage data
     var series = args.data;
@@ -473,7 +508,7 @@ function hotcrp_graphs_cdf(args) {
     });
     var data = series.map(function (d) {
         d = d.d ? d.d : d;
-        return d.cdf ? d : seq_to_cdf(d, !!args.x.flip);
+        return d.cdf ? d : seq_to_cdf(d, args.x.flip, args.y.raw);
     });
 
     // axis domains
@@ -491,7 +526,7 @@ function hotcrp_graphs_cdf(args) {
 
     // axes
     var xAxis = d3.axisBottom(x);
-    args.x.ticks.ticks.call(xAxis, x.domain());
+    args.x.ticks.prepare.call(xAxis, x.domain(), x.range());
     args.x.tick_format && xAxis.tickFormat(args.x.tick_format);
     var yAxis = d3.axisLeft(y);
     var line = d3.line().x(function (d) {return x(d[0]);})
@@ -512,17 +547,21 @@ function hotcrp_graphs_cdf(args) {
             p.attr("stroke-dasharray", series[i].dashpattern.join(","));
     });
 
-    svg.append("path").attr("class", "gcdf gcdf_hover0");
-    svg.append("path").attr("class", "gcdf gcdf_hover1");
-    var hovers = svg.selectAll(".gcdf_hover0, .gcdf_hover1");
+    svg.append("path").attr("class", "gcdf gcdf-hover0");
+    svg.append("path").attr("class", "gcdf gcdf-hover1");
+    var hovers = svg.selectAll(".gcdf-hover0, .gcdf-hover1");
     hovers.style("display", "none");
 
     make_axes(svg, xAxis, yAxis, args);
 
-    svg.append("rect").attr("x", -args.left).attr("width", args.width + args.left)
+    svg.append("rect")
+        .attr("x", -args.left)
+        .attr("width", args.width + args.left)
         .attr("height", args.height + args.bottom)
-        .style("fill", "none").style("pointer-events", "all")
-        .on("mouseover", mousemoved).on("mousemove", mousemoved)
+        .attr("fill", "none")
+        .style("pointer-events", "all")
+        .on("mouseover", mousemoved)
+        .on("mousemove", mousemoved)
         .on("mouseout", mouseout);
 
     var hovered_path, hubble;
@@ -543,7 +582,7 @@ function hotcrp_graphs_cdf(args) {
         }
         var u = p.pathNode ? series[p.pathNode.getAttribute("data-index")] : null;
         if (u && (u.label || args.cdf_tooltip_position)) {
-            hubble = hubble || make_bubble("", {color: "graphtip dark", "pointer-events": "none"});
+            hubble = hubble || make_bubble("", {color: args.tooltip_class || "graphtip", "pointer-events": "none"});
             var dir = Math.abs(tangentAngle(p.pathNode, p.pathLength));
             if (args.cdf_tooltip_position) {
                 var xp = x.invert(p[0]), yp = y.invert(p[1]);
@@ -567,37 +606,36 @@ function hotcrp_graphs_cdf(args) {
         hovered_path = hubble = null;
     }
 };
-hotcrp_graphs.cdf = hotcrp_graphs_cdf;
 
 
-hotcrp_graphs.procrastination = function (selector, revdata) {
-    var args = {selector: selector, data: {}, x: {}, y: {}};
+function procrastination_filter(revdata) {
+    var args = {type: "cdf", data: {}, x: {}, y: {}, tooltip_class: "graphtip dark"};
 
     // collect data
     var alldata = [], d, i, l, cid, u;
     for (cid in revdata.reviews) {
-        var d = {d: revdata.reviews[cid]};
+        var d = {d: revdata.reviews[cid], className: "gcdf-many"};
         if ((u = revdata.users[cid]) && u.name)
             d.label = u.name;
         if (cid && cid == hotcrp_user.cid) {
-            d.className = "revtimel_hilite";
+            d.className = "gcdf-highlight";
             d.priority = 1;
         } else if (u && u.light)
-            d.className = "revtimel_light";
+            d.className += " gcdf-thin";
         if (u && u.color_classes)
-            d.className = (d.className ? d.className + " " : "") + u.color_classes;
+            d.className += " " + u.color_classes;
         Array.prototype.push.apply(alldata, d.d);
         if (cid !== "conflicts")
             args.data[cid] = d;
     }
-    args.data.all = {d: alldata, className: "revtimel_all", priority: 2};
+    args.data.all = {d: alldata, className: "gcdf-cumulative", priority: 2};
 
     var dlf = max_procrastination_seq;
 
     // infer deadlines when not set
     for (i in revdata.deadlines)
         if (!revdata.deadlines[i]) {
-            var subat = alldata.filter(function (d) { return d[2] == i; })
+            var subat = alldata.filter(function (d) { return (d[2] || 0) == i; })
                 .map(proj0);
             subat.sort(d3.ascending);
             revdata.deadlines[i] = subat.length ? d3.quantile(subat, 0.8) : 0;
@@ -611,7 +649,7 @@ hotcrp_graphs.procrastination = function (selector, revdata) {
     args.x.label = dlf.label(revdata.deadlines);
     args.y.label = "Fraction of assignments completed";
 
-    hotcrp_graphs_cdf(args);
+    return args;
 };
 
 
@@ -701,8 +739,14 @@ function grouped_quadtree(data, xs, ys, rf) {
             vp[2].push(d);
             vp.n += 1;
         } else {
-            vp ? vp.next = vd : q.add(vd);
+            if (vp) {
+                vp.next = vd;
+                vd.head = vp.head || vp;
+            } else {
+                q.add(vd);
+            }
             vd.n = 1;
+            vd.i = nd.length;
             nd.push(vd);
         }
     }
@@ -730,81 +774,178 @@ function data_to_scatter(data) {
     return data;
 }
 
-hotcrp_graphs.scatter = function (args) {
-    args = make_args(args);
-    var data = data_to_scatter(args.data);
+function remap_scatter_data(data, rv, map) {
+    if (!rv.x || !rv.x.reordered || rv.x.ticks[0] !== "named")
+        return;
+    var ov2ok = {}, k;
+    for (k in map) {
+        if (typeof map[k] === "string")
+            ov2ok[map[k]] = +k;
+        else
+            ov2ok[map[k].id] = +k;
+    }
+    var ik2ok = {}, inmap = rv.x.ticks[1];
+    for (k in inmap) {
+        if (typeof inmap[k] === "string") {
+            if (ov2ok[inmap[k]] != null)
+                ik2ok[k] = ov2ok[inmap[k]];
+        } else {
+            if (ov2ok[inmap[k].id] != null)
+                ik2ok[k] = ov2ok[inmap[k].id];
+        }
+    }
+    var n = data.length;
+    for (var i = 0; i !== n; ) {
+        var x = ik2ok[data[i][0]];
+        if (x != null) {
+            data[i][0] = x;
+            ++i;
+        } else {
+            data[i] = data[n - 1];
+            data.pop();
+            --n;
+        }
+    }
+}
+
+var scatter_annulus = d3.arc()
+    .innerRadius(function (d) { return d.r0 ? d.r0 - 0.5 : 0; })
+    .outerRadius(function (d) { return d.r - 0.5; })
+    .startAngle(0)
+    .endAngle(Math.PI * 2);
+
+function scatter_transform(d) {
+    return "translate(" + d[0] + "," + d[1] + ")";
+}
+
+function scatter_key(d) {
+    return d[0] + "," + d[1] + "," + d.r;
+}
+
+function scatter_create(svg, data, klass) {
+    var sel = svg.selectAll(".gdot");
+    if (klass)
+        sel = sel.filter("." + klass);
+    sel = sel.data(data, scatter_key);
+    sel.exit().remove();
+    var pathklass = "gdot" + (klass ? " " + klass : "");
+    sel.enter()
+        .append("path")
+        .attr("class", function (d) { return pathklass + (d[3] ? " " + d[3] : "") })
+        .style("fill", function (d) { return make_pattern_fill(d[3], "gdot"); })
+      .merge(sel)
+        .attr("d", scatter_annulus)
+        .attr("transform", scatter_transform);
+    return sel;
+}
+
+function scatter_highlight(svg, data, klass) {
+    if (!$$("svggpat_dot_highlight"))
+        $("div.body").prepend('<svg width="0" height="0" style="position:absolute"><defs><radialGradient id="svggpat_dot_highlight"><stop offset="50%" stop-opacity="0" /><stop offset="50%" stop-color="#ffff00" stop-opacity="0.5" /><stop offset="100%" stop-color="#ffff00" stop-opacity="0" /></radialGradient></defs></svg>');
+
+    var sel = svg.selectAll(".ghighlight");
+    if (klass)
+        sel = sel.filter("." + klass);
+    sel = sel.data(data, scatter_key);
+    sel.exit().remove();
+    var g = sel.enter()
+      .append("g")
+        .attr("class", "ghighlight" + (klass ? " " + klass : ""));
+    g.append("circle")
+        .attr("class", "gdot-hover");
+    g.append("circle")
+        .style("fill", "url(#svggpat_dot_highlight)");
+    g.merge(sel).selectAll("circle")
+        .attr("cx", proj0)
+        .attr("cy", proj1)
+        .attr("r", function (d, i) {
+            return i ? (d.r + 0.5) * 2 : d.r - 0.5;
+        });
+}
+
+function scatter_union(p) {
+    if (p.head)
+        p = p.head;
+    if (!p.next)
+        return p;
+    if (!p.union) {
+        var u = [p[0], p[1], [].concat(p[2]), p[3]], pp = p.next;
+        u.r = p.r;
+        while (pp) {
+            u.r = Math.max(u.r, pp.r);
+            Array.prototype.push.apply(u[2], pp[2]);
+            pp = pp.next;
+        }
+        u[2].sort(pid_sorter);
+        p.union = u;
+    }
+    return p.union;
+}
+
+function graph_scatter(selector, args) {
+    var data = data_to_scatter(args.data),
+        svg = this;
 
     var xe = d3.extent(data, proj0),
         ye = d3.extent(data, proj1),
         x = d3.scaleLinear().range(args.x.flip ? [args.width, 0] : [0, args.width]),
-        y = d3.scaleLinear().range(args.y.flip ? [0, args.height] : [args.height, 0]),
-        rf = function (d) { return d.r - 1; };
+        y = d3.scaleLinear().range(args.y.flip ? [0, args.height] : [args.height, 0]);
     axis_domain(x, args.x.extent, expand_extent(xe));
     axis_domain(y, args.y.extent, expand_extent(ye, true));
-    data = grouped_quadtree(data, x, y, 4);
 
     var xAxis = d3.axisBottom(x);
-    args.x.ticks.ticks.call(xAxis, xe);
+    args.x.ticks.prepare.call(xAxis, xe, x.range());
     var yAxis = d3.axisLeft(y);
-    args.y.ticks.ticks.call(yAxis, ye);
+    args.y.ticks.prepare.call(yAxis, ye, y.range());
 
-    var svg = d3.select(args.selector).append("svg")
-        .attr("width", args.width + args.left + args.right)
-        .attr("height", args.height + args.top + args.bottom)
-      .append("g")
-        .attr("transform", "translate(" + args.left + "," + args.top + ")");
+    $(selector).on("hotgraphhighlight", highlight);
 
-    var annulus = d3.arc()
-        .innerRadius(function (d) { return d.r0 ? d.r0 - 0.5 : 0; })
-        .outerRadius(function (d) { return d.r - 0.5; })
-        .startAngle(0)
-        .endAngle(Math.PI * 2);
+    data = grouped_quadtree(data, x, y, 4);
+    scatter_create(svg, data.data);
 
-    function place(sel) {
-        return sel.attr("d", annulus)
-            .attr("transform", function (d) { return "translate(" + d[0] + "," + d[1] + ")"; });
-    }
-
-    place(svg.selectAll(".gdot").data(data.data)
-          .enter().append("path")
-            .attr("class", function (d) {
-                return d[3] ? "gdot " + d[3] : "gdot";
-            })
-            .style("fill", function (d) { return make_pattern_fill(d[3], "gdot "); }));
-
-    svg.append("path").attr("class", "gdot gdot_hover0");
-    svg.append("path").attr("class", "gdot gdot_hover1");
-    var hovers = svg.selectAll(".gdot_hover0, .gdot_hover1").style("display", "none");
+    svg.append("path").attr("class", "gdot gdot-hover");
+    var hovers = svg.selectAll(".gdot-hover").style("display", "none");
 
     make_axes(svg, xAxis, yAxis, args);
 
-    svg.append("rect").attr("x", -args.left).attr("width", args.width + args.left)
+    svg.append("rect")
+        .attr("x", -args.left)
+        .attr("width", args.width + args.left)
         .attr("height", args.height + args.bottom)
-        .style("fill", "none").style("pointer-events", "all")
-        .on("mouseover", mousemoved).on("mousemove", mousemoved)
-        .on("mouseout", mouseout).on("click", mouseclick);
+        .attr("fill", "none")
+        .style("pointer-events", "all")
+        .on("mouseover", mousemoved)
+        .on("mousemove", mousemoved)
+        .on("mouseout", mouseout)
+        .on("click", mouseclick);
 
     function make_tooltip(p, ps) {
-        ps.sort(pid_sorter);
         return '<p>' + position_label(xAxis, p[0]) + ', ' +
-            position_label(yAxis, p[1]) + '</p><p>#' + ps.join(', #') + '</p>';
+            position_label(yAxis, p[1]) + '</p><p>' +
+            pid_renderer(ps, p[3]) + '</p>';
     }
 
     var hovered_data, hubble;
     function mousemoved() {
         var m = d3.mouse(this), p = data.quadtree.gfind(m, 4);
+        if (p && (p.head || p.next))
+            p = scatter_union(p);
         if (p != hovered_data) {
             if (p)
-                place(hovers.datum(p)).style("display", null);
+                hovers.datum(p)
+                    .attr("d", scatter_annulus)
+                    .attr("transform", scatter_transform)
+                    .style("display", null);
             else
                 hovers.style("display", "none");
             svg.style("cursor", p ? "pointer" : null);
             hovered_data = p;
         }
         if (p) {
-            hubble = hubble || make_bubble("", {color: "graphtip dark", "pointer-events": "none"});
-            hubble.html(make_tooltip(p[2][0], p[2].map(proj2)))
-                .dir("b").near(hovers.node());
+            hubble = hubble || make_bubble("", {color: "graphtip", "pointer-events": "none"});
+            hubble.html(make_tooltip(p[2][0], p[2]))
+                .dir("b")
+                .near(hovers.node());
         } else if (hubble)
             hubble = hubble.remove() && null;
     }
@@ -817,6 +958,27 @@ hotcrp_graphs.scatter = function (args) {
 
     function mouseclick() {
         clicker(hovered_data ? hovered_data[2].map(proj2) : null);
+    }
+
+    function highlight(event) {
+        if (event.ids) {
+            mouseout();
+            var myd = [];
+            if (event.ids.length)
+                myd = data.data.filter(function (d) {
+                    var pts = d[2];
+                    for (var i in pts) {
+                        var p = pts[i][2];
+                        if (typeof p === "string")
+                            p = parseInt(p, 10);
+                        if (event.ids.indexOf(p) >= 0)
+                            return true;
+                    }
+                    return false;
+                });
+            scatter_highlight(svg, myd);
+        } else if (event.q && event.ok)
+            $.getJSON(hoturl("api/search", {q: event.q}), null, highlight);
     }
 };
 
@@ -834,7 +996,7 @@ function data_quantize_x(data) {
     return data;
 }
 
-function data_to_barchart(data, isfraction) {
+function data_to_barchart(data, yaxis) {
     data = data_quantize_x(data);
     data.sort(function (a, b) {
         return d3.ascending(a[0], b[0])
@@ -842,17 +1004,22 @@ function data_to_barchart(data, isfraction) {
             || (a[3] || "").localeCompare(b[3] || "");
     });
 
-    for (var i = 0; i != data.length; ++i)
-        if (i && data[i-1][0] == data[i][0] && data[i-1][4] == data[i][4])
+    for (var i = 0; i != data.length; ++i) {
+        if (i && data[i-1][0] == data[i][0] && data[i-1][4] == data[i][4]) {
             data[i].yoff = data[i-1].yoff + data[i-1][1];
-        else
+            if (data[i-1].i0 == null)
+                data[i-1].i0 = i - 1;
+            data[i].i0 = data[i-1].i0;
+        } else {
             data[i].yoff = 0;
+        }
+    }
 
-    if (isfraction && data.some(function (d) { return d[4] != data[0][4]; })) {
+    if (yaxis.fraction && data.some(function (d) { return d[4] != data[0][4]; })) {
         var maxy = {};
         data.forEach(function (d) { maxy[d[0]] = d[1] + d.yoff; });
         data.forEach(function (d) { d.yoff /= maxy[d[0]]; d[1] /= maxy[d[0]]; });
-    } else if (isfraction) {
+    } else if (yaxis.fraction) {
         var maxy = 0;
         data.forEach(function (d) { maxy += d[1]; });
         data.forEach(function (d) { d.yoff /= maxy; d[1] /= maxy; });
@@ -861,13 +1028,14 @@ function data_to_barchart(data, isfraction) {
     return data;
 }
 
-hotcrp_graphs.barchart = function (args) {
-    args = make_args(args);
-    var data = data_to_barchart(args.data, !!args.y.fraction);
+function graph_bars(selector, args) {
+    var data = data_to_barchart(args.data, args.y),
+        ystart = args.y.ticks.type === "score" ? 0.75 : 0,
+        svg = this;
 
     var xe = d3.extent(data, proj0),
         ge = d3.extent(data, function (d) { return d[4] || 0; }),
-        ye = [d3.min(data, function (d) { return d.yoff; }),
+        ye = [d3.min(data, function (d) { return Math.max(d.yoff, ystart); }),
               d3.max(data, function (d) { return d.yoff + d[1]; })],
         deltae = d3.extent(data, function (d, i) {
             var delta = i ? d[0] - data[i-1][0] : 0;
@@ -888,21 +1056,16 @@ hotcrp_graphs.barchart = function (args) {
     var gdelta = -(ge[1] + 1) * barwidth / 2;
 
     var xAxis = d3.axisBottom(x);
-    args.x.ticks.ticks.call(xAxis, xe);
+    args.x.ticks.prepare.call(xAxis, xe, x.range());
     var yAxis = d3.axisLeft(y);
-    args.y.ticks.ticks.call(yAxis, ye);
-
-    var svg = d3.select(args.selector).append("svg")
-        .attr("width", args.width + args.left + args.right)
-        .attr("height", args.height + args.top + args.bottom)
-      .append("g")
-        .attr("transform", "translate(" + args.left + "," + args.top + ")");
+    args.y.ticks.prepare.call(yAxis, ye, y.range());
 
     function place(sel, close) {
         return sel.attr("d", function (d) {
-            return ["M", x(d[0]) + gdelta + (d[4] ? barwidth * d[4] : 0), y(d.yoff),
+            var yoff = Math.max(d.yoff, ystart);
+            return ["M", x(d[0]) + gdelta + (d[4] ? barwidth * d[4] : 0), y(yoff),
                     "V", y(d.yoff + d[1]), "h", barwidth,
-                    "V", y(d.yoff)].join(" ") + (close || "");
+                    "V", y(yoff)].join(" ") + (close || "");
         });
     }
 
@@ -915,23 +1078,39 @@ hotcrp_graphs.barchart = function (args) {
 
     make_axes(svg, xAxis, yAxis, args);
 
-    svg.append("path").attr("class", "gbar gbar_hover0");
-    svg.append("path").attr("class", "gbar gbar_hover1");
-    var hovers = svg.selectAll(".gbar_hover0, .gbar_hover1")
+    svg.append("path").attr("class", "gbar gbar-hover0");
+    svg.append("path").attr("class", "gbar gbar-hover1");
+    var hovers = svg.selectAll(".gbar-hover0, .gbar-hover1")
         .style("display", "none").style("pointer-events", "none");
 
     svg.selectAll(".gbar").on("mouseover", mouseover).on("mouseout", mouseout)
         .on("click", mouseclick);
 
     function make_tooltip(p) {
-        p[2].sort(pid_sorter);
         return '<p>' + position_label(xAxis, p[0]) + ', ' +
-            position_label(yAxis, p[1]) + '</p><p>#' + p[2].join(', #') + '</p>';
+            position_label(yAxis, p[1]) + '</p><p>' +
+            pid_renderer(p[2], p[3]) + '</p>';
+    }
+
+    function make_mouseover(d) {
+        if (!d || d.i0 == null)
+            return d;
+        if (!d.ia) {
+            d.ia = [d[0], 0, [], "", d[4]];
+            d.ia.yoff = 0;
+            for (var i = d.i0; i !== data.length && data[i].i0 === d.i0; ++i) {
+                d.ia[1] = data[i][1] + data[i].yoff;
+                var pids = data[i][2], cc = data[i][3];
+                for (var j = 0; j !== pids.length; ++j)
+                    d.ia[2].push(cc ? {id: pids[j], color_classes: cc} : pids[j]);
+            }
+        }
+        return d.ia;
     }
 
     var hovered_data, hubble;
     function mouseover() {
-        var p = d3.select(this).data()[0];
+        var p = make_mouseover(d3.select(this).data()[0]);
         if (p != hovered_data) {
             if (p)
                 place(hovers.datum(p), "Z").style("display", null);
@@ -941,8 +1120,8 @@ hotcrp_graphs.barchart = function (args) {
             hovered_data = p;
         }
         if (p) {
-            hubble = hubble || make_bubble("", {color: "graphtip dark", "pointer-events": "none"});
-            hubble.html(make_tooltip(p)).dir("h").near(this);
+            hubble = hubble || make_bubble("", {color: "graphtip", "pointer-events": "none"});
+            hubble.html(make_tooltip(p)).dir("h").near(hovers.node());
         }
     }
 
@@ -983,11 +1162,14 @@ function data_to_boxplot(data, septags) {
     }, []);
 
     data.map(function (d) {
-        d.q = [d.d[0], d3.quantile(d.d, 0.25), d3.quantile(d.d, 0.5),
-               d3.quantile(d.d, 0.75), d.d[d.d.length - 1]];
-        if (d.d.length > 20) {
-            d.q[0] = d3.quantile(d.d, 0.05);
-            d.q[4] = d3.quantile(d.d, 0.95);
+        var l = d.d.length, med = d3.quantile(d.d, 0.5);
+        if (l < 4)
+            d.q = [d.d[0], d.d[0], med, d.d[l-1], d.d[l-1]];
+        else {
+            var q1 = d3.quantile(d.d, 0.25), q3 = d3.quantile(d.d, 0.75),
+                iqr = q3 - q1;
+            d.q = [Math.max(d.d[0], q1 - 1.5 * iqr), q1, med,
+                   q3, Math.min(d.d[l-1], q3 + 1.5 * iqr)];
         }
         d.m = d3.sum(d.d) / d.d.length;
     });
@@ -995,9 +1177,10 @@ function data_to_boxplot(data, septags) {
     return data;
 }
 
-hotcrp_graphs.boxplot = function (args) {
-    args = make_args(args);
-    var data = data_to_boxplot(args.data, !!args.y.fraction, true);
+function graph_boxplot(selector, args) {
+    var data = data_to_boxplot(args.data, !!args.y.fraction, true),
+        $sel = $(selector),
+        svg = this;
 
     var xe = d3.extent(data, proj0),
         ye = [d3.min(data, function (d) { return d.ymin; }),
@@ -1016,15 +1199,9 @@ hotcrp_graphs.boxplot = function (args) {
         barwidth = Math.max(Math.min(barwidth, Math.abs(x(xe[0] + deltae[0]) - x(xe[0])) * 0.5), 6);
 
     var xAxis = d3.axisBottom(x);
-    args.x.ticks.ticks.call(xAxis, xe);
+    args.x.ticks.prepare.call(xAxis, xe, x.range());
     var yAxis = d3.axisLeft(y);
-    args.y.ticks.ticks.call(yAxis, ye);
-
-    var svg = d3.select(args.selector).append("svg")
-        .attr("width", args.width + args.left + args.right)
-        .attr("height", args.height + args.top + args.bottom)
-      .append("g")
-        .attr("transform", "translate(" + args.left + "," + args.top + ")");
+    args.y.ticks.prepare.call(yAxis, ye, y.range());
 
     function place_whisker(l, sel) {
         sel.attr("x1", function (d) { return x(d[0]); })
@@ -1093,7 +1270,7 @@ hotcrp_graphs.boxplot = function (args) {
     var outliers = d3.merge(data.map(function (d) {
         var nd = [], len = d.d.length;
         for (var i = 0; i < len; ++i)
-            if (d.d[i] < d.q[0] || d.d[i] > d.q[4] || len == 1)
+            if (d.d[i] < d.q[0] || d.d[i] > d.q[4] || len <= 1)
                 nd.push([d[0], d.d[i], d.p[i], d.c]);
         return nd;
     }));
@@ -1104,38 +1281,50 @@ hotcrp_graphs.boxplot = function (args) {
 
     make_axes(svg, xAxis, yAxis, args);
 
-    svg.append("line").attr("class", "gbox whiskerl gbox_hover0");
-    svg.append("line").attr("class", "gbox whiskerh gbox_hover0");
-    svg.append("path").attr("class", "gbox box gbox_hover0");
-    svg.append("line").attr("class", "gbox median gbox_hover0");
-    svg.append("circle").attr("class", "gbox outlier gbox_hover0");
-    svg.append("path").attr("class", "gbox mean gbox_hover0");
-    svg.append("line").attr("class", "gbox whiskerl gbox_hover1");
-    svg.append("line").attr("class", "gbox whiskerh gbox_hover1");
-    svg.append("path").attr("class", "gbox box gbox_hover1");
-    svg.append("line").attr("class", "gbox median gbox_hover1");
-    svg.append("circle").attr("class", "gbox outlier gbox_hover1");
-    svg.append("path").attr("class", "gbox mean gbox_hover1");
-    var hovers = svg.selectAll(".gbox_hover0, .gbox_hover1")
+    svg.append("line").attr("class", "gbox whiskerl gbox-hover");
+    svg.append("line").attr("class", "gbox whiskerh gbox-hover");
+    svg.append("path").attr("class", "gbox box gbox-hover");
+    svg.append("line").attr("class", "gbox median gbox-hover");
+    svg.append("circle").attr("class", "gbox outlier gbox-hover");
+    svg.append("path").attr("class", "gbox mean gbox-hover");
+    var hovers = svg.selectAll(".gbox-hover")
         .style("display", "none").style("ponter-events", "none");
 
-    svg.selectAll(".gbox").on("mouseout", mouseout).on("click", mouseclick);
-    svg.selectAll(".gbox").filter(":not(.outlier)").on("mouseover", mouseover);
-    svg.selectAll(".gbox.outlier").on("mouseover", mouseover_outlier);
+    $sel.on("hotgraphhighlight", highlight);
 
-    function make_tooltip(p, ps, ds) {
+    $sel[0].addEventListener("mouseout", function (event) {
+        if (hasClass(event.target, "gbox")
+            || hasClass(event.target, "gscatter"))
+            mouseout.call(event.target);
+    }, false);
+
+    $sel[0].addEventListener("mouseover", function (event) {
+        if (hasClass(event.target, "outlier")
+            || hasClass(event.target, "gscatter"))
+            mouseover_outlier.call(event.target);
+        else if (hasClass(event.target, "gbox"))
+            mouseover.call(event.target);
+    }, false);
+
+    $sel[0].addEventListener("click", function (event) {
+        if (hasClass(event.target, "gbox")
+            || hasClass(event.target, "gscatter"))
+            mouseclick.call(event.target, event);
+    }, false);
+
+    function make_tooltip(p, ps, ds, cc) {
         var yformat = args.y.ticks.unparse_html, t, x = [];
         t = '<p>' + position_label(xAxis, p[0]);
         if (p.q) {
             t += ", " + position_label(yAxis, p.q[2], "median ");
             for (var i = 0; i < ps.length; ++i)
-                x.push(ps[i] + " (" + yformat.call(yAxis, ds[i]) + ")");
+                x.push({id: ps[i], rest: " (" + yformat.call(yAxis, ds[i]) + ")"});
         } else {
             t += ", " + position_label(yAxis, ds[0]);
             x = ps;
         }
         x.sort(pid_sorter);
-        return t + '</p><p><span class="nw">#' + x.join(',</span> <span class="nw">#') + '</span></p>';
+        return t + '</p><p>' + pid_renderer(x, cc) + '</p>';
     }
 
     var hovered_data, hubble;
@@ -1155,9 +1344,9 @@ hotcrp_graphs.boxplot = function (args) {
             hovered_data = p;
         }
         if (p) {
-            hubble = hubble || make_bubble("", {color: "graphtip dark", "pointer-events": "none"});
+            hubble = hubble || make_bubble("", {color: "graphtip", "pointer-events": "none"});
             if (!p.th)
-                p.th = make_tooltip(p, p.p, p.d);
+                p.th = make_tooltip(p, p.p, p.d, p.c);
             hubble.html(p.th).dir("h").near(hovers.filter(".box").node());
         }
     }
@@ -1172,9 +1361,9 @@ hotcrp_graphs.boxplot = function (args) {
             hovered_data = p;
         }
         if (p) {
-            hubble = hubble || make_bubble("", {color: "graphtip dark", "pointer-events": "none"});
+            hubble = hubble || make_bubble("", {color: "graphtip", "pointer-events": "none"});
             if (!p.th)
-                p.th = make_tooltip(p[2][0], p[2].map(proj2), p[2].map(proj1));
+                p.th = make_tooltip(p[2][0], p[2].map(proj2), p[2].map(proj1), p[3]);
             hubble.html(p.th).dir("h").near(hovers.filter(".outlier").node());
         }
     }
@@ -1185,7 +1374,8 @@ hotcrp_graphs.boxplot = function (args) {
         hovered_data = hubble = null;
     }
 
-    function mouseclick() {
+    function mouseclick(event) {
+        d3.event = event;
         var s;
         if (!hovered_data)
             clicker(null);
@@ -1195,34 +1385,100 @@ hotcrp_graphs.boxplot = function (args) {
             clicker_go(hoturl("search", {q: s}));
         else
             clicker(hovered_data.p);
+        d3.event = null;
+    }
+
+    function highlight(event) {
+        mouseout();
+        if (event.ids && !event.ids.length)
+            svg.selectAll(".gscatter").remove();
+        else {
+            var $g = $(selector);
+            $.getJSON(hoturl("api/graphdata"), {
+                x: $g.attr("data-graph-fx"), y: $g.attr("data-graph-fy"),
+                q: event.q
+            }, function (rv) {
+                if (rv.ok) {
+                    var data = data_to_scatter(rv.data);
+                    if (args.x.reordered && args.x.ticks.map)
+                        remap_scatter_data(data, rv, args.x.ticks.map);
+                    data = grouped_quadtree(data, x, y, 4);
+                    var sel = scatter_create(svg, data.data, "gscatter");
+                    scatter_highlight(svg, data.data, "gscatter");
+                }
+            });
+        }
     }
 };
 
-function option_letter_ticks(n, c, sv) {
+function score_ticks(n, c, sv) {
     var info = make_score_info(n, c, sv), split = 2;
-    function format(extent) {
-        var count = Math.floor(extent[1] * 2) - Math.ceil(extent[0] * 2) + 1;
-        if (count > 11)
-            split = 1, count = Math.floor(extent[1]) - Math.ceil(extent[0]) + 1;
-        if (c)
-            this.ticks(count);
-    }
-    function rewrite() {
-        this.selectAll("g.tick text").each(function () {
-            var d = d3.select(this), value = +d.text();
-            d.style("fill", info.rgb(value));
+    return {
+        prepare: function (extent) {
+            var count = Math.floor(extent[1] * 2) - Math.ceil(extent[0] * 2) + 1;
+            if (count > 11) {
+                split = 1;
+                count = Math.floor(extent[1]) - Math.ceil(extent[0]) + 1;
+            }
             if (c)
-                d.text(info.unparse(value, split));
-        });
+                this.ticks(count);
+        },
+        rewrite: function () {
+            this.selectAll("g.tick text").each(function () {
+                var d = d3.select(this), value = +d.text();
+                d.attr("fill", info.rgb(value));
+                if (c && value)
+                    d.text(info.unparse(value, split));
+            });
+        },
+        unparse_html: function (value, include_numeric) {
+            var t = info.unparse_html(value);
+            if (include_numeric
+                && c
+                && t.charAt(0) === "<"
+                && value !== Math.round(value * 2) / 2)
+                t += " (" + value.toFixed(2).replace(/\.00$/, "") + ")";
+            return t;
+        },
+        type: "score"
+    };
+}
+
+function time_ticks() {
+    function format(value) {
+        if (value < 1000000000) {
+            value = Math.round(value / 8640) / 10;
+            return value + "d";
+        } else {
+            var d = new Date(value * 1000);
+            if (d.getHours() || d.getMinutes())
+                return strftime("%Y-%m-%dT%R", d);
+            else
+                return strftime("%Y-%m-%d", d);
+        }
     }
-    function unparse_html(value, include_numeric) {
-        var t = info.unparse_html(value);
-        if (include_numeric && t.charAt(0) === "<")
-            t += " (" + value.toFixed(2).replace(/\.00$/, "") + ")";
-        return t;
-    }
-    return { ticks: format, rewrite: rewrite, unparse_html: unparse_html };
-};
+    return {
+        prepare: function (domain, range) {
+            var ddomain, scale;
+            if (domain[0] < 1000000000 || domain[1] < 1000000000) {
+                ddomain = [domain[0] / 86400, domain[1] / 86400];
+                scale = d3.scaleLinear().domain(ddomain).range(range);
+                this.tickValues(scale.ticks().map(function (value) {
+                    return value * 86400;
+                }));
+            } else {
+                ddomain = [new Date(domain[0] * 1000), new Date(domain[1] * 1000)];
+                scale = d3.scaleTime().domain(ddomain).range(range);
+                this.tickValues(scale.ticks().map(function (value) {
+                    return value.getTime() / 1000;
+                }));
+            }
+            this.tickFormat(format);
+        },
+        unparse_html: format,
+        type: "time"
+    };
+}
 
 function get_max_tick_width(axis) {
     return d3.max($(axis.selectAll("g.tick text").nodes()).map(function () {
@@ -1245,6 +1501,10 @@ function get_sample_tick_height(axis) {
 }
 
 function named_integer_ticks(map) {
+    var want_tilt = d3.values(map).length > 30
+        || d3.max(d3.keys(map).map(function (k) { return mtext(k).length; })) > 4;
+    var want_mclasses = d3.keys(map).some(function (k) { return mclasses(k); });
+
     function mtext(value) {
         var m = map[value];
         return m && typeof m === "object" ? m.text : m;
@@ -1253,26 +1513,7 @@ function named_integer_ticks(map) {
         var m = map[value];
         return (m && typeof m === "object" && m.color_classes) || "";
     }
-    function format(extent) {
-        var count = Math.floor(extent[1]) - Math.ceil(extent[0]) + 1;
-        this.ticks(count).tickFormat(mtext);
-    }
-    function unparse_html(value, include_numeric) {
-        var fvalue = Math.round(value);
-        if (Math.abs(value - fvalue) <= 0.05 && map[fvalue]) {
-            var t = text_to_html(mtext(fvalue));
-            if (value !== fvalue && include_numeric)
-                t += " (" + value.toFixed(2) + ")";
-            return t;
-        } else
-            return value.toFixed(2);
-    }
-    function search(value) {
-        var m = map[value];
-        return (m && typeof m === "object" && m.search) || null;
-    }
 
-    var want_tilt, want_mclasses;
     function rewrite() {
         if (!want_tilt && !want_mclasses)
             return;
@@ -1329,12 +1570,31 @@ function named_integer_ticks(map) {
                 });
         }
     }
-    want_tilt = d3.values(map).length > 30
-        || d3.max(d3.keys(map).map(function (k) { return mtext(k).length; })) > 4;
-    want_mclasses = d3.keys(map).some(function (k) { return mclasses(k); });
 
-    return { ticks: format, rewrite: rewrite, unparse_html: unparse_html,
-             search: search };
+    return {
+        prepare: function (domain) {
+            var count = Math.floor(domain[1]) - Math.ceil(domain[0]) + 1;
+            this.ticks(count).tickFormat(mtext);
+        },
+        rewrite: rewrite,
+        unparse_html: function (value, include_numeric) {
+            var fvalue = Math.round(value);
+            if (Math.abs(value - fvalue) <= 0.05 && map[fvalue]) {
+                var t = text_to_html(mtext(fvalue));
+                // NB `value` might be a bool
+                if (value !== fvalue && include_numeric && typeof value === "number")
+                    t += " (" + value.toFixed(2) + ")";
+                return t;
+            } else
+                return value.toFixed(2);
+        },
+        search: function (value) {
+            var m = map[value];
+            return (m && typeof m === "object" && m.search) || null;
+        },
+        type: "named_integer",
+        map: map
+    };
 };
 
 function make_rotate_ticks(angle) {
@@ -1349,5 +1609,45 @@ function make_rotate_ticks(angle) {
         };
 };
 
-return hotcrp_graphs;
+handle_ui.on("js-hotgraph-highlight", function () {
+    var s = $.trim(this.value), pids = null;
+    if (s === "")
+        pids = [];
+    else if (/^[1-9][0-9]*$/.test(s))
+        pids = [+s];
+    var e = $.Event("hotgraphhighlight");
+    e.ok = true;
+    e.q = s;
+    e.ids = pids;
+    $(this).closest(".has-hotgraph").find(".hotgraph").trigger(e);
+});
+
+var graphers = {
+    procrastination: {filter: true, callback: procrastination_filter},
+    scatter: {callback: graph_scatter},
+    cdf: {callback: graph_cdf},
+    "cumulative-count": {callback: graph_cdf},
+    bar: {callback: graph_bars},
+    "full-stack": {callback: graph_bars},
+    box: {callback: graph_boxplot}
+};
+
+return function (selector, args) {
+    while (true) {
+        var g = graphers[args.type];
+        if (!g)
+            return null;
+        else if (g.filter)
+            args = g.callback(args);
+        else {
+            args = make_args(selector, args);
+            var svg = d3.select(selector).append("svg")
+                .attr("width", args.width + args.left + args.right)
+                .attr("height", args.height + args.top + args.bottom)
+              .append("g")
+                .attr("transform", "translate(" + args.left + "," + args.top + ")");
+            return g.callback.call(svg, selector, args);
+        }
+    }
+};
 })(jQuery, d3);

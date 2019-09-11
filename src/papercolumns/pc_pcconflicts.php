@@ -1,13 +1,13 @@
 <?php
 // pc_pcconflicts.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class PCConflicts_PaperColumn extends PaperColumn {
     function __construct(Conf $conf, $cj) {
         parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
-        if (!$pl->user->privChair)
+        if (!$pl->user->can_view_some_conflicts())
             return false;
         if ($visible)
             $pl->qopts["allConflictType"] = 1;
@@ -15,6 +15,9 @@ class PCConflicts_PaperColumn extends PaperColumn {
     }
     function header(PaperList $pl, $is_text) {
         return "PC conflicts";
+    }
+    function content_empty(PaperList $pl, PaperInfo $row) {
+        return !$pl->user->can_view_conflicts($row);
     }
     function content(PaperList $pl, PaperInfo $row) {
         $y = [];

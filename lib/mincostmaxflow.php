@@ -1,6 +1,6 @@
 <?php
 // mincostmaxflow.php -- HotCRP min-cost max-flow
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class MinCostMaxFlow_Node {
     public $name;
@@ -115,7 +115,7 @@ class MinCostMaxFlow {
     private $source;
     private $sink;
     private $e = array();
-    private $maxflow = null;
+    private $maxflow;
     private $maxcap;
     private $mincost;
     private $maxcost;
@@ -123,15 +123,16 @@ class MinCostMaxFlow {
     private $hasrun;
     private $debug;
     // times
-    public $maxflow_start_at = null;
-    public $maxflow_end_at = null;
-    public $mincost_start_at = null;
-    public $mincost_end_at = null;
+    public $maxflow_start_at;
+    public $maxflow_end_at;
+    public $mincost_start_at;
+    public $mincost_end_at;
     // pushrelabel/cspushrelabel state
     private $epsilon;
     private $ltail;
     public $npush;
     public $nrelabel;
+    public $infeasible;
 
     const PMAXFLOW = 0;
     const PMAXFLOW_DONE = 1;
@@ -303,7 +304,7 @@ class MinCostMaxFlow {
     private function pushrelabel_discharge($v) {
         $ne = count($v->e);
         $relabeled = false;
-        while ($v->excess > 0) {
+        while ($v->excess > 0 && $v->distance < INF) {
             if ($v->npos == $ne) {
                 $this->pushrelabel_relabel($v);
                 $relabeled = true;
@@ -358,6 +359,11 @@ class MinCostMaxFlow {
 
             // discharge current vertex
             if ($this->pushrelabel_discharge($l)) {
+                // check for infeasible problem
+                if ($l->distance >= INF) {
+                    $this->infeasible = true;
+                    break;
+                }
                 // global relabeling heuristic is quite useful
                 ++$this->nrelabel;
                 if ($this->nrelabel % count($this->v) == 0)
@@ -646,15 +652,40 @@ class MinCostMaxFlow {
         shuffle($this->e);
     }
 
+    private function make_debug_file() {
+        global $Conf, $Now;
+        if (!($dir = $Conf->opt("minCostMaxFlowDebug")))
+            return null;
+        $f = null;
+        $time = time();
+        while (!$f && $time < $Now + 20) {
+            $f = @fopen($dir . "/mcmf-{$Conf->dbname}-{$time}.txt", "xb");
+            ++$time;
+        }
+        return $f;
+    }
+
     function run() {
+        global $Conf, $Now;
         assert(!$this->hasrun);
         $this->hasrun = true;
+        $this->infeasible = false;
         $this->initialize_edges();
+        if (($f = $this->make_debug_file())) {
+            fwrite($f, $this->mincost_dimacs_input());
+            fwrite($f, "\nc begintime " . microtime(true) . "\n");
+        }
         $this->pushrelabel_run();
-        if ($this->mincost != 0 || $this->maxcost != 0) {
+        if ($f)
+            fwrite($f, "\nc pushrelabeltime " . microtime(true) . "\n");
+        if (!$this->infeasible && ($this->mincost != 0 || $this->maxcost != 0)) {
             $this->epsilon = max(abs($this->mincost), $this->maxcost);
             $this->cspushrelabel_finish();
+            if ($f)
+                fwrite($f, "\nc cspushrelabeltime " . microtime(true) . "\n");
         }
+        if ($f)
+            fclose($f);
     }
 
 

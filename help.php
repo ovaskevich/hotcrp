@@ -1,11 +1,11 @@
 <?php
 // help.php -- HotCRP help page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
 $help_topics = new GroupedExtensions($Me, [
-    '{"name":"topics","title":"Help topics","position":-1000000,"priority":1000000,"callback":"show_help_topics"}',
+    '{"name":"topics","title":"Help topics","position":-1000000,"priority":1000000,"render_callback":"show_help_topics"}',
     "etc/helptopics.json"
 ], $Conf->opt("helpTopics"));
 
@@ -16,10 +16,10 @@ $want_topic = $help_topics->canonical_group($topic);
 if (!$want_topic)
     $want_topic = "topics";
 if ($want_topic !== $topic)
-    SelfHref::redirect($Qreq, ["t" => $want_topic]);
+    $Conf->self_redirect($Qreq, ["t" => $want_topic]);
 $topicj = $help_topics->get($topic);
 
-$Conf->header_head($topic === "topics" ? "Help" : "Help - {$topicj->title}");
+$Conf->header_head($topic === "topics" ? "Help" : ["Help", $topicj->title, true]);
 $Conf->header_body("Help", "help");
 
 class HtHead extends Ht {
@@ -29,6 +29,7 @@ class HtHead extends Ht {
     private $_rowidx;
     private $_help_topics;
     private $_renderers = [];
+    private $_sv;
     function __construct($help_topics, Contact $user) {
         $this->conf = $user->conf;
         $this->user = $user;
@@ -77,13 +78,17 @@ class HtHead extends Ht {
     function end_table() {
         return $this->_tabletype ? "" : "</tbody></table>\n";
     }
+    function hotlink($html, $page, $options = null, $js = []) {
+        if (!isset($js["rel"]))
+            $js["rel"] = "nofollow";
+        return $this->conf->hotlink($html, $page, $options, $js);
+    }
     function search_link($html, $q = null) {
         if ($q === null)
             $q = $html;
         if (is_string($q))
             $q = ["q" => $q];
-        return '<a href="' . hoturl("search", $q) . '">'
-            . ($html ? : htmlspecialchars($q["q"])) . '</a>';
+        return $this->hotlink($html ? : htmlspecialchars($q["q"]), "search", $q);
     }
     function help_link($html, $topic = null) {
         if ($topic === null) {
@@ -96,33 +101,41 @@ class HtHead extends Ht {
             $topic = ["t" => $topic];
         if (isset($topic["t"]) && ($group = $this->_help_topics->canonical_group($topic["t"])))
             $topic["t"] = $group;
-        return '<a href="' . hoturl("help", $topic) . '">' . $html . '</a>';
+        return $this->hotlink($html, "help", $topic);
     }
-    function settings_link($html, $group = null) {
-        if ($this->user->privChair) {
+    function setting_link($html, $siname = null) {
+        if ($this->user->privChair || $siname !== null) {
             $pre = $post = "";
-            if ($group === null) {
-                $group = $html;
+            if ($this->_sv === null) {
+                $this->_sv = new SettingValues($this->user);
+            }
+            if ($siname === null) {
+                $siname = $html;
                 $html = "Change this setting";
                 $pre = " (";
                 $post = ")";
             }
-            if (is_string($group) && ($hash = strpos($group, "#")) !== false)
-                $group = ["group" => substr($group, 0, $hash), "anchor" => substr($group, $hash + 1)];
-            else if (is_string($group))
-                $group = ["group" => $group];
-            return $pre . '<a href="' . hoturl("settings", $group) . '">' . $html . '</a>' . $post;
+            if (($si = Si::get($this->conf, $siname))) {
+                $param = $si->hoturl_param($this->conf);
+            } else if (($g = $this->_sv->canonical_group($siname))) {
+                $param = ["group" => $g];
+            } else {
+                error_log("missing setting information for $siname");
+                $param = [];
+            }
+            $t = $pre . '<a href="' . $this->conf->hoturl("settings", $param);
+            if (!$this->user->privChair) {
+                $t .= '" class="u need-tooltip" aria-label="This link to a settings page only works for administrators.';
+            }
+            return $t . '" rel="nofollow">' . $html . '</a>' . $post;
         } else {
-            if ($group === null)
-                return '';
-            else
-                return $html;
+            return '';
         }
     }
     function search_form($q, $size = 20) {
         if (is_string($q))
             $q = ["q" => $q];
-        $t = Ht::form(hoturl("search"), ["method" => "get", "class" => "nw"])
+        $t = Ht::form($this->conf->hoturl("search"), ["method" => "get", "class" => "nw"])
             . Ht::entry("q", $q["q"], ["size" => $size])
             . " &nbsp;"
             . Ht::submit("go", "Search");
@@ -153,23 +166,16 @@ class HtHead extends Ht {
             }, $vt)) . ")";
     }
     function render_group($topic) {
-        foreach ($this->_help_topics->members($topic) as $gj) {
-            Conf::xt_resolve_require($gj);
-            if (isset($gj->callback)) {
-                $cb = $gj->callback;
-                if ($cb[0] === "*") {
-                    $colons = strpos($cb, ":");
-                    $klass = substr($cb, 1, $colons - 1);
-                    if (!isset($this->_renderers[$klass]))
-                        $this->_renderers[$klass] = new $klass($this, $gj);
-                    $cb = [$this->_renderers[$klass], substr($cb, $colons + 2)];
-                }
-                call_user_func($cb, $this, $gj);
-            }
-        }
+        $this->_help_topics->start_render(3, "helppage");
+        foreach ($this->_help_topics->members($topic) as $gj)
+            $this->_help_topics->render($gj, [$this, $gj]);
+        $this->_help_topics->end_render();
     }
     function groups() {
         return $this->_help_topics->groups();
+    }
+    function member($name) {
+        return $this->_help_topics->get($name);
     }
 }
 
@@ -180,7 +186,7 @@ function show_help_topics($hth) {
     echo "<dl>\n";
     foreach ($hth->groups() as $ht) {
         if ($ht->name !== "topics" && isset($ht->title)) {
-            echo '<dt><strong><a href="', hoturl("help", "t=$ht->name"), '">', $ht->title, '</a></strong></dt>';
+            echo '<dt><strong><a href="', $hth->conf->hoturl("help", "t=$ht->name"), '">', $ht->title, '</a></strong></dt>';
             if (isset($ht->description))
                 echo '<dd>', get($ht, "description", ""), '</dd>';
             echo "\n";
@@ -191,10 +197,9 @@ function show_help_topics($hth) {
 
 
 function meaningful_pc_tag(Contact $user) {
-    if ($user->isPC)
-        foreach ($user->conf->pc_tags() as $tag)
-            if ($tag !== "pc")
-                return $tag;
+    foreach ($user->viewable_user_tags() as $tag)
+        if ($tag !== "pc")
+            return $tag;
     return false;
 }
 
@@ -212,7 +217,7 @@ function meaningful_round_name(Contact $user) {
 echo '<div class="leftmenu-menu-container"><div class="leftmenu-list">';
 foreach ($help_topics->groups() as $gj) {
     if ($gj->name === $topic)
-        echo '<div class="leftmenu-item-on">', $gj->title, '</div>';
+        echo '<div class="leftmenu-item active">', $gj->title, '</div>';
     else if (isset($gj->title))
         echo '<div class="leftmenu-item ui js-click-child">',
             '<a href="', hoturl("help", "t=$gj->name"), '">', $gj->title, '</a></div>';

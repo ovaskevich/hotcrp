@@ -1,6 +1,6 @@
 <?php
 // resetpassword.php -- HotCRP password reset page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
@@ -32,23 +32,20 @@ $Me = new Contact;
 if (isset($Qreq->go) && $Qreq->post_ok()) {
     $Qreq->password = trim((string) $Qreq->password);
     $Qreq->password2 = trim((string) $Qreq->password2);
-    if ($Qreq->password == "") {
+    if ($Qreq->password === "") {
         Conf::msg_error("You must enter a password.");
     } else if (!Contact::valid_password($Qreq->password)) {
         Conf::msg_error("Invalid password.");
     } else if ($Qreq->password !== $Qreq->password2) {
         Conf::msg_error("The two passwords you entered did not match.");
     } else {
-        $flags = 0;
-        if ($Qreq->password === $Qreq->autopassword)
-            $flags |= Contact::CHANGE_PASSWORD_PLAINTEXT;
-        $Acct->change_password($Qreq->password, $flags);
+        $Acct->change_password($Qreq->password, 0);
         if (!$iscdb || !($log_acct = $Conf->user_by_email($Acct->email)))
             $log_acct = $Acct;
         $log_acct->log_activity("Password reset via " . substr($resetcap, 0, 8) . "...");
         $Conf->confirmMsg("Your password has been changed. You may now sign in to the conference site.");
         $capmgr->delete($capdata);
-        $Conf->save_session("password_reset", (object) array("time" => $Now, "email" => $Acct->email, "password" => $Qreq->password));
+        $Me->save_session("password_reset", (object) array("time" => $Now, "email" => $Acct->email, "password" => $Qreq->password));
         go(hoturl("index"));
     }
     Ht::error_at("password");
@@ -62,14 +59,13 @@ if (!isset($Qreq->autopassword)
     || !preg_match("/\\A[-0-9A-Za-z@_+=]*\\z/", $Qreq->autopassword))
     $Qreq->autopassword = Contact::random_password();
 
-echo "<div class='homegrp'>
-Welcome to the ", htmlspecialchars($Conf->full_name()), " submissions site.";
+echo '<div class="homegrp">
+Welcome to the ', htmlspecialchars($Conf->full_name()), " submissions site.";
 if ($Conf->opt("conferenceSite"))
     echo " For general information about ", htmlspecialchars($Conf->short_name), ", see <a href=\"", htmlspecialchars($Conf->opt("conferenceSite")), "\">the conference site</a>.";
 
 echo "</div>
-<hr class='home' />
-<div class='homegrp' id='homereset'>\n",
+<div class=\"homegrp\" id=\"homereset\">\n",
     Ht::form(hoturl_post("resetpassword")),
     '<div class="f-contain">',
     Ht::hidden("resetcap", $resetcap),
@@ -85,11 +81,9 @@ echo '<div class="', Ht::control_class("password", "f-i"), '">
   <label for="reset_password2">New password (again)</label>',
     Ht::password("password2", "", ["tabindex" => 1, "size" => 36, "id" => "reset_password2", "autocomplete" => "new-password"]), '</div>
 <div class="f-i" style="margin-top:2em">',
-    Ht::submit("go", "Reset password", ["class" => "btn btn-primary"]),
+    Ht::submit("go", "Reset password", ["class" => "btn-primary"]),
     "</div>
-</div></form>
-<hr class='home' /></div>\n";
+</div></form></div>\n";
 Ht::stash_script("focus_within(\$(\"#homereset\"));window.scroll(0,0)");
 
-echo '<hr class="c" />', "\n";
 $Conf->footer();

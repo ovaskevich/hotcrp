@@ -1,17 +1,16 @@
 <?php
 // settings.php -- HotCRP chair-only conference settings management page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 if (!$Me->privChair)
     $Me->escape();
 
-require_once("src/settingvalues.php");
 $Sv = SettingValues::make_request($Me, $Qreq);
 $Sv->session_highlight();
 
 function choose_setting_group($qreq, SettingValues $sv) {
-    global $Me;
+    global $Conf, $Me;
     $req_group = $qreq->group;
     if (!$req_group && preg_match(',\A/\w+\z,', Navigation::path()))
         $req_group = substr(Navigation::path(), 1);
@@ -30,7 +29,7 @@ function choose_setting_group($qreq, SettingValues $sv) {
     if (!$want_group)
         $Me->escape();
     if ($want_group !== $req_group && !$qreq->post && $qreq->post_empty())
-        SelfHref::redirect($qreq, ["group" => $want_group]);
+        $Conf->self_redirect($qreq, ["group" => $want_group, "anchor" => $sv->group_anchorid($req_group)]);
     $sv->mark_interesting_group($want_group);
     return $want_group;
 }
@@ -39,31 +38,32 @@ $_SESSION["sg"] = $Group;
 
 if (isset($Qreq->update) && $Qreq->post_ok()) {
     if ($Sv->execute()) {
-        $Sv->conf->save_session("settings_highlight", $Sv->message_field_map());
+        $Me->save_session("settings_highlight", $Sv->message_field_map());
         if (!empty($Sv->changes))
             $Sv->conf->confirmMsg("Changes saved.");
         else
             $Sv->conf->warnMsg("No changes.");
         $Sv->report();
-        SelfHref::redirect($Qreq);
+        $Conf->self_redirect($Qreq);
     }
 }
 if (isset($Qreq->cancel) && $Qreq->post_ok())
-    SelfHref::redirect($Qreq);
+    $Conf->self_redirect($Qreq);
 
 $Sv->crosscheck();
 
 $group_titles = $Sv->group_titles();
-$Conf->header("Settings &nbsp;&#x2215;&nbsp; <strong>" . $group_titles[$Group] . "</strong>", "settings");
+$Conf->header(["Settings", $group_titles[$Group], true], "settings");
 echo Ht::unstash(); // clear out other script references
 echo $Conf->make_script_file("scripts/settings.js"), "\n";
 
-echo Ht::form(hoturl_post("settings", "group=$Group"), array("id" => "settingsform"));
+echo Ht::form(hoturl_post("settings", "group=$Group"),
+              ["id" => "settingsform", "class" => "need-unload-protection"]);
 
 echo '<div class="leftmenu-menu-container"><div class="leftmenu-list">';
 foreach ($group_titles as $name => $title) {
     if ($name === $Group)
-        echo '<div class="leftmenu-item-on">', $title, '</div>';
+        echo '<div class="leftmenu-item active">', $title, '</div>';
     else
         echo '<div class="leftmenu-item ui js-click-child">',
             '<a href="', hoturl("settings", "group={$name}"), '">', $title, '</a></div>';
@@ -73,7 +73,7 @@ echo "</div></div>\n",
 
 function doActionArea($top) {
     echo '<div class="aab aabr aabig">',
-        '<div class="aabut">', Ht::submit("update", "Save changes", ["class" => "btn btn-primary"]), '</div>',
+        '<div class="aabut">', Ht::submit("update", "Save changes", ["class" => "btn-primary"]), '</div>',
         '<div class="aabut">', Ht::submit("cancel", "Cancel"), '</div>',
         '<hr class="c" /></div>';
 }
@@ -86,5 +86,5 @@ $Sv->render_group($Group);
 doActionArea(false);
 echo "</div></div></form>\n";
 
-Ht::stash_script('hiliter_children("#settingsform", true)');
+Ht::stash_script('hiliter_children("#settingsform")');
 $Conf->footer();

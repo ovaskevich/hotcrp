@@ -1,6 +1,6 @@
 <?php
 // api_alltags.php -- HotCRP tag completion API call
-// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
 
 class AllTags_API {
     static function run(Contact $user) {
@@ -10,7 +10,7 @@ class AllTags_API {
                  || (!$user->conf->tag_seeall
                      && ($user->privChair
                          ? $user->conf->has_any_manager()
-                         : $user->is_explicit_manager()
+                         : $user->is_manager()
                            || $user->conf->check_track_sensitivity(Track::HIDDENTAG))))
             return self::hard_alltags_api($user);
         else
@@ -35,7 +35,7 @@ class AllTags_API {
         if (!$user->privChair) {
             if (!$user->conf->tag_seeall) {
                 $q .= " left join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId={$user->contactId})";
-                $qwhere[] = "conflictType is null";
+                $qwhere[] = "coalesce(conflictType,0)<=0";
             }
             $tagmap = $user->conf->tags();
             $hidden = $tagmap->has_hidden;
@@ -54,7 +54,7 @@ class AllTags_API {
 
     static private function hard_alltags_api(Contact $user) {
         $tags = [];
-        foreach ($user->paper_set(["minimal" => true, "finalized" => true, "tags" => "required"]) as $prow) {
+        foreach ($user->paper_set(["minimal" => true, "finalized" => true, "tags" => "require"]) as $prow) {
             if ($user->can_view_paper($prow)) {
                 foreach (TagInfo::split_unpack($prow->all_tags_text()) as $ti) {
                     $lt = strtolower($ti[0]);

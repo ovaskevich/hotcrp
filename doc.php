@@ -1,6 +1,6 @@
 <?php // -*- mode: php -*-
 // doc -- HotCRP paper download page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
@@ -9,150 +9,19 @@ function document_error($status, $msg) {
     if (str_starts_with($status, "403") && $Me->is_empty()) {
         $Me->escape();
         exit;
+    } else if (str_starts_with($status, "5")) {
+        $navpath = Navigation::path();
+        error_log($Conf->dbname . ": bad doc $status $msg " . json_encode($Qreq) . ($navpath ? " @$navpath" : "") . ($Me ? " {$Me->email}" : "") . (empty($_SERVER["HTTP_REFERER"]) ? "" : " R[" . $_SERVER["HTTP_REFERER"] . "]"));
     }
 
-    $navpath = Navigation::path();
-    error_log($Conf->dbname . ": bad doc $status $msg " . json_encode($Qreq) . ($navpath ? " @$navpath" : "") . ($Me ? " {$Me->email}" : "") . (empty($_SERVER["HTTP_REFERER"]) ? "" : " R[" . $_SERVER["HTTP_REFERER"] . "]"));
     header("HTTP/1.1 $status");
-    if (isset($Qreq->fn))
+    if (isset($Qreq->fn)) {
         json_exit(["ok" => false, "error" => $msg ? : "Internal error."]);
-    else {
+    } else {
         $Conf->header("Download", null);
         $msg && Conf::msg_error($msg);
         $Conf->footer();
         exit;
-    }
-}
-
-// Determine the intended paper
-class DocumentRequest {
-    public $paperId;
-    public $dtype;
-    public $opt;
-    public $attachment;
-    public $filters = [];
-    public $req_filename;
-
-    private function set_paperid($pid) {
-        if (preg_match('/\A[-+]?\d+\z/', $pid))
-            $this->paperId = intval($pid);
-        else
-            document_error("404 Not Found", "No such document [paper " . htmlspecialchars($pid) . "].");
-    }
-
-    function parse($req, $path, Conf $conf) {
-        $want_path = false;
-        if (isset($req["p"]))
-            $this->set_paperid($req["p"]);
-        else if (isset($req["paperId"]))
-            $this->set_paperid($req["paperId"]);
-        else
-            $want_path = true;
-
-        $dtname = null;
-        $base_dtname = "paper";
-        if (isset($req["dt"]))
-            $dtname = $req["dt"];
-        else if (isset($req["final"]))
-            $base_dtname = "final";
-
-        if (isset($req["attachment"]))
-            $this->attachment = $req["attachment"];
-
-        if ($want_path) {
-            $s = $this->req_filename = preg_replace(',\A/*,', "", $path);
-            $dtname = null;
-            if (str_starts_with($s, $conf->download_prefix))
-                $s = substr($s, strlen($conf->download_prefix));
-            if (preg_match(',\A(?:p|paper|)(\d+)/+(.*)\z,', $s, $m)) {
-                $this->paperId = intval($m[1]);
-                if (preg_match(',\A([^/]+)\.[^/]+\z,', $m[2], $mm))
-                    $dtname = urldecode($mm[1]);
-                else if (preg_match(',\A([^/]+)/+(.*)\z,', $m[2], $mm)) {
-                    $dtname = urldecode($mm[1]);
-                    $this->attachment = urldecode($mm[2]);
-                } else if (isset($req["dt"]))
-                    $dtname = $req["dt"];
-            } else if (preg_match(',\A(p|paper|final|)(\d+)-?([-A-Za-z0-9_]*)(?:|\.[^/]+|/+(.*))\z,', $s, $m)) {
-                $this->paperId = intval($m[2]);
-                $dtname = $m[3];
-                if ($dtname === "" && $m[1] === "" && isset($req["dt"]))
-                    $dtname = $req["dt"];
-                if (isset($m[4]))
-                    $this->attachment = urldecode($m[4]);
-                if ($m[1] !== "")
-                    $base_dtname = $m[1] === "final" ? "final" : "paper";
-            } else if (preg_match(',\A([A-Za-z_][-A-Za-z0-9_]*?)?-?(\d+)(?:|\.[^/]+|/+(.*))\z,', $s, $m)) {
-                $this->paperId = intval($m[2]);
-                $dtname = $m[1];
-                if (isset($m[3]))
-                    $this->attachment = urldecode($m[3]);
-            } else if (preg_match(',\A([^/]+?)(?:|\.[^/]+|/+(.*)|)\z,', $s, $m)) {
-                $this->paperId = -2;
-                $dtname = $m[1];
-                if (isset($m[2]))
-                    $this->attachment = urldecode($m[2]);
-            } else
-                document_error("404 Not Found", "No such document " . htmlspecialchars($this->req_filename) . ".");
-        }
-
-        $this->opt = null;
-        while ((string) $dtname !== "" && $this->opt === null) {
-            if (($dtnum = cvtint($dtname, null)) !== null)
-                $this->opt = $conf->paper_opts->get($dtnum);
-            else if ($this->paperId >= 0)
-                $this->opt = $conf->paper_opts->find($dtname);
-            else
-                $this->opt = $conf->paper_opts->find_nonpaper($dtname);
-            if ($this->opt !== null) {
-                $dtname = "";
-                break;
-            }
-            $filter = null;
-            foreach (FileFilter::all_by_name($conf) as $ff)
-                if (str_ends_with($dtname, "-" . $ff->name) || $dtname === $ff->name) {
-                    $filter = $ff;
-                    break;
-                }
-            if (!$filter)
-                break;
-            array_unshift($this->filters, $filter);
-            $dtname = substr($dtname, 0, strlen($dtname) - strlen($ff->name));
-            if (str_ends_with($dtname, "-"))
-                $dtname = substr($dtname, 0, strlen($dtname) - 1);
-        }
-        if ((string) $dtname !== "")
-            document_error("404 Not Found", "No such document type “" . htmlspecialchars($dtname) . "”.");
-        else if ($this->opt === null)
-            $this->opt = $conf->paper_opts->find($base_dtname);
-        $this->dtype = $this->opt->id;
-
-        if (isset($req["filter"])) {
-            foreach (explode(" ", $req["filter"]) as $filtername)
-                if ($filtername !== "") {
-                    if (($filter = FileFilter::find_by_name($filtername)))
-                        $this->filters[] = $filter;
-                    else
-                        document_error("404 Not Found", "No such filter “" . htmlspecialchars($filter) . "”.");
-                }
-        }
-
-        if (!$want_path) {
-            $dtype_name = $this->opt->dtype_name();
-            if ($this->paperId < 0)
-                $this->req_filename = "[$dtype_name";
-            else if ($this->dtype === DTYPE_SUBMISSION)
-                $this->req_filename = "[paper #{$this->paperId}";
-            else if ($this->dtype === DTYPE_FINAL)
-                $this->req_filename = "[paper #{$this->paperId} final version";
-            else
-                $this->req_filename = "[#{$this->paperId} $dtype_name";
-            if ($this->attachment)
-                $this->req_filename .= " attachment " . $this->attachment;
-            $this->req_filename .= "]";
-        }
-
-        return true;
     }
 }
 
@@ -177,8 +46,9 @@ function document_history(PaperInfo $prow, $dtype) {
         $pjs[] = $pj;
     }
 
-    if ($Me->can_view_document_history($prow)) {
-        $result = $prow->conf->qe("select paperStorageId, paperId, timestamp, mimetype, sha1, filename, infoJson, size from PaperStorage where paperId=? and documentType=? and filterType is null order by paperStorageId desc", $prow->paperId, $dtype);
+    if ($Me->can_view_document_history($prow)
+        && $dtype >= DTYPE_FINAL) {
+        $result = $prow->conf->qe("select paperId, paperStorageId, timestamp, mimetype, sha1, filename, infoJson, size from PaperStorage where paperId=? and documentType=? and filterType is null order by paperStorageId desc", $prow->paperId, $dtype);
         while (($doc = DocumentInfo::fetch($result, $prow->conf, $prow))) {
             if (!get($actives, $doc->paperStorageId))
                 $pjs[] = document_history_element($doc);
@@ -192,27 +62,16 @@ function document_history(PaperInfo $prow, $dtype) {
 function document_download($qreq) {
     global $Conf, $Me;
 
-    $dr = new DocumentRequest;
-    $dr->parse($qreq, Navigation::path(), $Conf);
-
-    $docid = null;
-
-    if ($dr->dtype === null
-        || $dr->opt->nonpaper !== ($dr->paperId < 0))
-        document_error("404 Not Found", "No such document “" . htmlspecialchars($dr->req_filename) . "”.");
-
-    if ($dr->opt->nonpaper) {
-        $prow = new PaperInfo(["paperId" => -2], null, $Conf);
-        if (($dr->opt->visibility === "admin" && !$Me->privChair)
-            || ($dr->opt->visibility !== "all" && !$Me->isPC))
-            document_error("403 Forbidden", "You aren’t allowed to view this document.");
-    } else {
-        $prow = $Conf->paperRow($dr->paperId, $Me, $whyNot);
-        if (!$prow)
-            document_error(isset($whyNot["permission"]) ? "403 Forbidden" : "404 Not Found", whyNotText($whyNot));
-        else if (($whyNot = $Me->perm_view_paper_option($prow, $dr->dtype)))
-            document_error("403 Forbidden", whyNotText($whyNot));
+    try {
+        $dr = new DocumentRequest($qreq, Navigation::path(), $Conf);
+    } catch (Exception $e) {
+        document_error("404 Not Found", htmlspecialchars($e->getMessage()));
     }
+
+    if (($whyNot = $dr->perm_view_document($Me)))
+        document_error(isset($whyNot["permission"]) ? "403 Forbidden" : "404 Not Found", whyNotText($whyNot));
+    $prow = $dr->prow;
+    $want_docid = $request_docid = (int) $dr->docid;
 
     // history
     if ($qreq->fn === "history")
@@ -222,7 +81,7 @@ function document_download($qreq) {
         $qreq->version = $qreq->hash;
 
     // time
-    if (isset($qreq->at) && !isset($qreq->version)) {
+    if (isset($qreq->at) && !isset($qreq->version) && $dr->dtype >= DTYPE_FINAL) {
         if (ctype_digit($qreq->at))
             $time = intval($qreq->at);
         else if (!($time = $Conf->parse_time($qreq->at)))
@@ -239,8 +98,7 @@ function document_download($qreq) {
     }
 
     // version
-    $want_docid = $request_docid = 0;
-    if (isset($qreq->version)) {
+    if (isset($qreq->version) && $dr->dtype >= DTYPE_FINAL) {
         $version_hash = Filer::hash_as_binary(trim($qreq->version));
         if (!$version_hash)
             document_error("404 Not Found", "No such version.");

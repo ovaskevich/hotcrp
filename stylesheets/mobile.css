@@ -1,11 +1,28 @@
 /* -*- mode: css; indent-tabs-mode: t; css-indent-offset: 8 -*- */
 /* mobile.css -- HotCRP mobile CSS styles */
-/* Copyright (c) 2006-2018 Eddie Kohler; see LICENSE. */
+/* Copyright (c) 2006-2019 Eddie Kohler; see LICENSE. */
 
-#header_site, #header_page, h1.paptitle, div.submission_modes {
+@media screen and (max-width: 1024px) {
+.paperinfo {
+	display: block;
+}
+.paperinfo-c {
+	display: block;
+	padding-right: 0;
+	margin-top: 1em;
+}
+.paperinfo-c:first-child {
+	margin-top: 0;
+}
+}
+@media screen and (max-width: 768px) {
+html {
+	font-size: 14px;
+}
+#header-site, #header-page, h1.paptitle, div.submission_modes {
 	padding-left: 12px;
 }
-#header_right, h1.paptitle, div#footer {
+#header-right, h1.paptitle, div#footer {
 	padding-right: 12px;
 }
 table.vbar {
@@ -23,7 +40,7 @@ div#body > .demargin .remargin-left {
 div#body > .demargin .remargin-right {
 	padding-right: 12px;
 }
-div#initialmsgs {
+#msg-initial {
 	padding: 0 12px;
 }
 div.paptitle {
@@ -33,7 +50,7 @@ h2.paptitle {
 	text-indent: -1.5em;
 	margin-left: 1.5em;
 }
-.pspcard_container, .leftmenu-menu-container {
+.pspcard, .leftmenu-menu-container {
 	float: none;
 	position: static;
 	width: auto;
@@ -55,15 +72,9 @@ h2.paptitle {
 .pspcard_open {
 	display: none;
 }
-.paperinfo, .paperinfo-row, .paperinfo-cl, .paperinfo-cr, .paperinfo-cb {
-	display: block;
-	width: auto;
-}
-.paperinfo-cr {
-	padding-top: 1em;
-}
-.papcard, .pedcard, .notecard, .revcard, .cmtcard {
+.pcard, .pcontainer-nostrip > .pcard {
 	margin-left: 0;
+	margin-right: 0;
 }
 .leftmenu-content-container {
 	margin: 0 -12px;
@@ -105,4 +116,5 @@ table.pltable {
 	margin-top: 8px;
 	border-top: 1px solid #ffecef;
 	padding: 8px 0 0;
+}
 }

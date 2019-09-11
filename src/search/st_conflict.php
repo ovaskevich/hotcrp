@@ -1,21 +1,23 @@
 <?php
 // search/st_conflict.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Conflict_SearchTerm extends SearchTerm {
     private $csm;
+    private $ispc;
 
-    function __construct($countexpr, $contacts, Contact $user) {
+    function __construct($countexpr, $contacts, $ispc) {
         parent::__construct("conflict");
         $this->csm = new ContactCountMatcher($countexpr, $contacts);
+        $this->ispc = $ispc;
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
         $m = PaperSearch::unpack_comparison($word, $sword->quoted);
         if (($qr = PaperSearch::check_tautology($m[1])))
             return $qr;
         else {
-            $contacts = $srch->matching_users($m[0], $sword->quoted, $sword->kwdef->pc_only);
-            return new Conflict_SearchTerm($m[1], $contacts, $srch->user);
+            $contacts = $srch->matching_uids($m[0], $sword->quoted, $sword->kwdef->pc_only);
+            return new Conflict_SearchTerm($m[1], $contacts, $sword->kwdef->pc_only);
         }
     }
     function trivial_rights(Contact $user, PaperSearch $srch) {
@@ -46,5 +48,12 @@ class Conflict_SearchTerm extends SearchTerm {
                 ++$n;
         }
         return $this->csm->test($n);
+    }
+    function compile_condition(PaperInfo $row, PaperSearch $srch) {
+        if (!$this->ispc)
+            return null;
+        if (!$srch->conf->setting("sub_pcconf"))
+            return $this->exec($row, $srch);
+        return (object) ["type" => "pc_conflict", "cids" => $this->csm->contact_set(), "compar" => $this->csm->compar(), "value" => $this->csm->value()];
     }
 }

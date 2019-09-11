@@ -1,6 +1,6 @@
 <?php
 // autoassigner.php -- HotCRP helper classes for autoassignment
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class AutoassignerCosts implements JsonSerializable {
     public $assignment = 100;
@@ -17,7 +17,7 @@ class Autoassigner {
     private $pcm;
     private $badpairs = array();
     private $papersel;
-    private $ass = null;
+    private $ass;
     private $load;
     private $prefs;
     private $eass;
@@ -105,8 +105,8 @@ class Autoassigner {
 
     function run_prefconflict($papertype) {
         $papers = array_fill_keys($this->papersel, 1);
-        $result = $this->conf->qe_raw($this->conf->preferenceConflictQuery($papertype, ""));
-        $this->ass = array("paper,action,email");
+        $result = $this->conf->preference_conflict_result($papertype, "");
+        $this->ass = ["paper,action,email"];
         while (($row = edb_row($result))) {
             if (!isset($papers[$row[0]]) || !isset($this->pcm[$row[1]]))
                 continue;
@@ -132,7 +132,7 @@ class Autoassigner {
             $action = "no" . $reviewtype;
         } else
             return false;
-        $this->ass = array("paper,action,email");
+        $this->ass = ["paper,action,email"];
         $result = $this->conf->qe_raw($q);
         while (($row = edb_row($result))) {
             if (!isset($papers[$row[0]]) || !isset($this->pcm[$row[1]]))
@@ -181,7 +181,7 @@ class Autoassigner {
             $this->eass[(int) $row[1]][(int) $row[0]] = self::ENOASSIGN;
 
         // then load preferences
-        $result = $this->conf->paper_result(null, ["paperId" => $this->papersel, "topics" => true, "allReviewerPreference" => true, "allConflictType" => true, "reviewSignatures" => true, "tags" => $this->conf->check_track_sensitivity(Track::ASSREV)]);
+        $result = $this->conf->paper_result(["paperId" => $this->papersel, "topics" => true, "allReviewerPreference" => true, "allConflictType" => true, "reviewSignatures" => true, "tags" => $this->conf->check_track_sensitivity(Track::ASSREV)]);
         $nmade = 0;
         while (($row = PaperInfo::fetch($result, null, $this->conf))) {
             $pid = $row->paperId;
@@ -242,7 +242,7 @@ class Autoassigner {
             $scoredir = substr($scoreinfo, 0, 1) === "-" ? -1 : 1;
         }
 
-        $set = $this->conf->paper_set(null, ["paperId" => $this->papersel, "allConflictType" => true, "reviewSignatures" => true, "scores" => $score ? [$score] : []]);
+        $set = $this->conf->paper_set(["paperId" => $this->papersel, "allConflictType" => true, "reviewSignatures" => true, "scores" => $score ? [$score] : []]);
 
         $scorearr = [];
         foreach ($set as $prow) {
@@ -297,7 +297,7 @@ class Autoassigner {
 
     private function make_assignment($action, $round, $cid, $pid, &$papers) {
         if (!$this->ass)
-            $this->ass = array("paper,action,email,round");
+            $this->ass = ["paper,action,email,round"];
         $this->ass[] = "$pid,$action," . $this->pcm[$cid]->email . $round;
         $this->eass[$cid][$pid] = self::ENEWASSIGN;
         $papers[$pid]--;
@@ -504,7 +504,7 @@ class Autoassigner {
             }
         }
         // figure out badpairs class for each user
-        $bpclass = array();
+        $bpclass = $bpmembers = [];
         if ($this->action_takes_badpairs($action)) {
             foreach ($this->badpairs as $cid1 => $bp) {
                 foreach ($bp as $cid2 => $x)
@@ -514,6 +514,8 @@ class Autoassigner {
             foreach ($bpclass as $cid => &$x)
                 $x = min(array_keys($x));
             unset($x);
+            foreach ($bpclass as $cid => $class)
+                $bpmembers[$class][] = $cid;
         }
         // paper <-> contact map
         $bpdone = array();
@@ -529,8 +531,17 @@ class Autoassigner {
                 if (isset($bpclass[$cid])) {
                     $dst = "b{$pid}." . $bpclass[$cid];
                     if (!$m->node_exists($dst)) {
+                        // Existing assignments might invalidate the badpair
+                        // requirement.
+                        $capacity = 0;
+                        foreach ($bpmembers[$bpclass[$cid]] as $cid2) {
+                            $eass2 = $this->eass[$cid2][$pid];
+                            if ($eass2 > self::ENOASSIGN
+                                && ($eass2 >= self::ENEWASSIGN || $this->balance != self::BALANCE_NEW))
+                                ++$capacity;
+                        }
                         $m->add_node($dst, "b");
-                        $m->add_edge($dst, "p$pid", 1, 0);
+                        $m->add_edge($dst, "p$pid", max($capacity, 1), 0);
                     }
                 } else if ($this->review_gadget == self::REVIEW_GADGET_EXPERTISE
                            && isset($this->prefinfo[$cid][$pid])
@@ -555,12 +566,14 @@ class Autoassigner {
         $this->set_progress("Completing assignment" . $this->mcmf_round_descriptor);
         $time = microtime(true);
         $nassigned = 0;
-        foreach ($this->pcm as $cid => $p) {
-            foreach ($m->reachable("u$cid", "p") as $v) {
-                $pid = substr($v->name, 1);
-                if (!$this->eass[$cid][$pid]) {
-                    $this->make_assignment($action, $round, $cid, $pid, $papers);
-                    ++$nassigned;
+        if (!$m->infeasible) {
+            foreach ($this->pcm as $cid => $p) {
+                foreach ($m->reachable("u$cid", "p") as $v) {
+                    $pid = substr($v->name, 1);
+                    if (!$this->eass[$cid][$pid]) {
+                        $this->make_assignment($action, $round, $cid, $pid, $papers);
+                        ++$nassigned;
+                    }
                 }
             }
         }
@@ -615,14 +628,14 @@ class Autoassigner {
         $b = array();
         $pidx = join("+", $badpids);
         foreach ($badpids as $pid)
-            $b[] = "<a href='" . hoturl("assign", "p=$pid&amp;ls=$pidx") . "'>$pid</a>";
+            $b[] = $this->conf->hotlink($pid, "assign", "p=$pid&amp;ls=$pidx");
         $x = "";
         if ($action === "rev" || $action === "revadd")
             $x = ", possibly because of conflicts or previously declined reviews in the PC members you selected";
         else
-            $x = ", possibly because the selected PC members didn’t review these papers";
-        $y = (count($b) > 1 ? " (<a class='nw' href='" . hoturl("search", "q=$pidx") . "'>list them</a>)" : "");
-        $this->conf->warnMsg("I wasn’t able to complete the assignment$x.  The following papers got fewer than the required number of assignments: " . join(", ", $b) . $y . ".");
+            $x = ", possibly because the selected PC members didn’t review these submissions";
+        $y = (count($b) > 1 ? ' (' . $this->conf->hotlink("list them", "search", "q=$pidx", ["class" => "nw"]) . ')' : '');
+        $this->conf->warnMsg("I wasn’t able to complete the assignment$x. The following submissions got fewer than the required number of assignments: " . join(", ", $b) . $y . ".");
     }
 
     function run_paperpc($action, $preference) {
@@ -646,7 +659,8 @@ class Autoassigner {
 
     function run_reviews_per_pc($reviewtype, $round, $nass) {
         $this->preferences_review($reviewtype);
-        $papers = array_fill_keys($this->papersel, ceil((count($this->pcm) * ($nass + 2)) / count($this->papersel)));
+        $papers = array_fill_keys($this->papersel,
+            ceil((count($this->pcm) * ($nass + 2)) / max(count($this->papersel), 1)));
         list($action, $round) = $this->analyze_reviewtype($reviewtype, $round);
         $this->assign_method($papers, $action, $round, $nass);
     }
@@ -713,7 +727,7 @@ class Autoassigner {
         // extract next roots
         $roots = array_keys($plist);
         $result = array();
-        while (count($roots)) {
+        while (!$m->infeasible && !empty($roots)) {
             $source = ".source";
             if (count($roots) !== count($plist))
                 $source = "p" . $roots[mt_rand(0, count($roots) - 1)];
@@ -786,7 +800,10 @@ class Autoassigner {
 
 
     function assignments() {
-        return count($this->ass) > 1 ? $this->ass : null;
+        if (!empty($this->ass) && count($this->ass) > 1)
+            return $this->ass;
+        else
+            return null;
     }
 
     function pc_unhappiness() {

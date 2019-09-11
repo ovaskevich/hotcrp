@@ -1,6 +1,6 @@
 <?php
 // useractions.php -- HotCRP helpers for user actions
-// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
 
 class UserActions {
     static function disable(Contact $user, $ids) {
@@ -70,7 +70,7 @@ class UserActions {
         $done = $disabled = [];
         $result = $user->conf->qe("select * from ContactInfo where contactId?a", $ids);
         while (($xuser = Contact::fetch($result, $user->conf))) {
-            if (!$xuser->disabled) {
+            if (!$xuser->is_disabled()) {
                 $xuser->sendAccountInfo("send", false);
                 $done[] = $xuser->email;
             } else

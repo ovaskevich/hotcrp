@@ -1,6 +1,6 @@
 <?php
 // reviewprefs.php -- HotCRP review preference global settings page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 require_once("src/papersearch.php");
@@ -24,7 +24,7 @@ if ($Qreq->reviewer
         }
 } else if (!$Qreq->reviewer && !($Me->roles & Contact::ROLE_PC)) {
     foreach ($Conf->pc_members() as $pcm) {
-        SelfHref::redirect($Qreq, ["reviewer" => $pcm->email]);
+        $Conf->self_redirect($Qreq, ["reviewer" => $pcm->email]);
         // in case redirection fails:
         $reviewer = $pcm;
         break;
@@ -96,9 +96,10 @@ function savePreferences($Qreq, $reset_p) {
         Conf::msg_confirm("Preferences saved.");
         if ($reset_p)
             unset($Qreq->p, $Qreq->pap);
-        SelfHref::redirect($Qreq);
-    } else
+        $Conf->self_redirect($Qreq);
+    } else {
         Conf::msg_error(join("<br />", $aset->errors_html()));
+    }
 }
 if ($Qreq->fn === "saveprefs" && $Qreq->post_ok())
     savePreferences($Qreq, true);
@@ -130,7 +131,7 @@ function pref_xmsgc($msg) {
     if (!$Conf->headerPrinted)
         $Conf->warnMsg($msg);
     else
-        echo '<div class="msgs-wide">', Ht::xmsg(1, $msg), '</div>';
+        echo '<div class="msgs-wide">', Ht::msg($msg, 1), '</div>';
 }
 
 function parseUploadedPreferences($text, $filename, $apply) {
@@ -140,14 +141,10 @@ function parseUploadedPreferences($text, $filename, $apply) {
     $text = preg_replace('/^==-== /m', '#', $text);
     $csv = new CsvParser($text, CsvParser::TYPE_GUESS);
     $csv->set_comment_chars("#");
-    $line = $csv->next();
-    // “CSV” downloads use “ID” and “Preference” columns; adjust header
-    if ($line && array_search("paper", $line) === false)
-        $line = array_map(function ($x) { return $x === "ID" ? "paper" : $x; }, $line);
-    if ($line && array_search("preference", $line) === false)
-        $line = array_map(function ($x) { return $x === "Preference" ? "preference" : $x; }, $line);
+    $line = $csv->next_array();
+
     // Parse header
-    if ($line && array_search("paper", $line) !== false)
+    if ($line && preg_grep('{\A(?:paper|pid|paper[\s_]*id|id)\z}i', $line))
         $csv->set_header($line);
     else {
         if (count($line) >= 2 && ctype_digit($line[0])) {
@@ -173,22 +170,23 @@ function parseUploadedPreferences($text, $filename, $apply) {
             pref_xmsgc("Preferences unchanged.\n" . $assignset->errors_div_html(true));
     } else if ($apply) {
         if ($assignset->execute(true))
-            SelfHref::redirect($Qreq);
+            $Conf->self_redirect($Qreq);
     } else {
         $Conf->header("Review preferences", "revpref");
         if ($assignset->has_error())
             pref_xmsgc($assignset->errors_div_html(true));
 
-        echo Ht::form(hoturl_post("reviewprefs", prefs_hoturl_args() + ["fn" => "saveuploadpref"]));
+        echo Ht::form(hoturl_post("reviewprefs", prefs_hoturl_args() + ["fn" => "saveuploadpref"]), ["class" => "alert need-unload-protection"]);
 
-        $actions = '<div class="aab aabr aabig">'
-            . Ht::submit("Save changes", ["class" => "aabut btn btn-primary"])
-            . Ht::submit("cancel", "Cancel", ["class" => "aabut btn"])
-            . '</div>';
+        $actions = Ht::actions([
+            Ht::submit("Apply changes", ["class" => "btn-success"]),
+            Ht::submit("cancel", "Cancel")
+        ], ["class" => "aab aabig"]);
         if (count($assignset->assigned_pids()) >= 4)
             echo $actions;
 
         echo '<h3>Proposed preference assignment</h3>';
+        echo '<p>The uploaded file requests the following preference changes.</p>';
         $assignset->echo_unparse_display();
 
         echo '<div class="g"></div>', $actions,
@@ -209,10 +207,9 @@ else if ($Qreq->fn === "uploadpref")
 
 
 // Prepare search
-$Qreq->urlbase = hoturl_site_relative_raw("reviewprefs");
+$Qreq->urlbase = $Conf->hoturl_site_relative_raw("reviewprefs");
 $Qreq->q = get($Qreq, "q", "");
 $Qreq->t = "editpref";
-$Qreq->display = PaperList::change_display($Me, "pf");
 
 // Search actions
 if ($Qreq->fn === "get" && $SSel && !$SSel->is_empty()
@@ -226,39 +223,36 @@ if (isset($Qreq->redisplay)) {
     foreach ($Qreq as $k => $v)
         if (substr($k, 0, 4) == "show" && $v)
             $pfd .= substr($k, 4) . " ";
-    $Conf->save_session("pfdisplay", $pfd);
-    SelfHref::redirect($Qreq);
+    $Me->save_session("pfdisplay", $pfd);
+    $Conf->self_redirect($Qreq);
 }
 
 
 // Header and body
 $Conf->header("Review preferences", "revpref");
-$Conf->infoMsg($Conf->message_html("revprefdescription"));
+$Conf->infoMsg($Conf->_i("revprefdescription", false, $Conf->has_topics()));
 
 
 // search
 $search = new PaperSearch($Me, ["t" => $Qreq->t, "urlbase" => $Qreq->urlbase, "q" => $Qreq->q, "reviewer" => $reviewer]);
 $pl = new PaperList($search, ["sort" => true, "report" => "pf"], $Qreq);
-$pl->set_table_id_class("foldpl", "pltable_full", "p#");
+$pl->set_table_id_class("foldpl", "pltable-fullw", "p#");
 $pl_text = $pl->table_html("editpref",
                 array("fold_session_prefix" => "pfdisplay.",
-                      "footer_extra" => "<div id='plactr'>" . Ht::submit("fn", "Save changes", ["class" => "btn", "data-default-submit-all" => 1, "value" => "saveprefs"]) . "</div>",
+                      "footer_extra" => "<div id=\"plactr\">" . Ht::submit("fn", "Save changes", ["data-default-submit-all" => 1, "value" => "saveprefs"]) . "</div>",
                       "list" => true));
 
 
 // DISPLAY OPTIONS
-echo "<table id='searchform' class='tablinks1'>
-<tr><td>"; // <div class='tlx'><div class='tld1'>";
-
 $showing_au = !$Conf->subBlindAlways() && !$pl->is_folded("au");
 $showing_anonau = (!$Conf->subBlindNever() || $Me->privChair) && !$pl->is_folded("anonau");
 
-echo Ht::form(hoturl("reviewprefs"), ["method" => "get", "id" => "redisplayform",
+echo Ht::form(hoturl("reviewprefs"), ["method" => "get", "id" => "searchform",
                                       "class" => "has-fold " . ($showing_au || ($showing_anonau && $Conf->subBlindAlways()) ? "fold10o" : "fold10c")]),
-    "<table>";
+    '<div class="d-inline-block">';
 
 if ($Me->privChair) {
-    echo "<tr><td class='lxcaption'><strong>Preferences:</strong> &nbsp;</td><td class='lentry'>";
+    echo '<div class="entryi"><label for="htctl-prefs-user">User</label>';
 
     $prefcount = array();
     $result = $Conf->qe_raw("select contactId, count(*) from PaperReviewPreference where preference!=0 or expertise is not null group by contactId");
@@ -272,56 +266,56 @@ if ($Me->privChair) {
     if (!isset($sel[$reviewer->email]))
         $sel[$reviewer->email] = Text::name_html($reviewer) . " &nbsp; [" . get($prefcount, $reviewer->contactId, 0) . "; not on PC]";
 
-    echo Ht::select("reviewer", $sel, $reviewer->email),
-        "<div class='g'></div></td><td></td></tr>\n";
-    Ht::stash_script('$("#redisplayform select[name=reviewer]").on("change", function () { $$("redisplayform").submit() })');
+    echo Ht::select("reviewer", $sel, $reviewer->email, ["id" => "htctl-prefs-user"]), '</div>';
+    Ht::stash_script('$("#searchform select[name=reviewer]").on("change", function () { $$("searchform").submit() })');
 }
 
-echo "<tr><td class='lxcaption'><strong>Search:</strong></td><td class='lentry'><input type='text' size='32' name='q' value=\"", htmlspecialchars($Qreq->q), "\" /><span class='sep'></span></td>",
-    "<td>", Ht::submit("redisplay", "Redisplay"), "</td>",
-    "</tr>\n";
+echo '<div class="entryi"><label for="htctl-prefs-q">Search</label><div class="entry">',
+    Ht::entry("q", $Qreq->q, ["id" => "htctl-prefs-q", "size" => 32]),
+    '  ', Ht::submit("redisplay", "Redisplay"), '</div></div>';
 
 $show_data = array();
+if ($pl->has("abstract")) {
+    $show_data[] = '<span class="sep">'
+        . Ht::checkbox("showabstract", 1, !$pl->is_folded("abstract"), ["class" => "uich js-plinfo"])
+        . "&nbsp;" . Ht::label("Abstracts") . '</span>';
+}
 if (!$Conf->subBlindAlways()) {
     $show_data[] = '<span class="sep">'
         . Ht::checkbox("showau", 1, !$pl->is_folded("au"),
-                ["id" => "showau", "class" => "paperlist-display"])
+                ["id" => "showau", "class" => "uich js-plinfo"])
         . "&nbsp;" . Ht::label("Authors") . "</span>";
 } else if ($Me->privChair && $Conf->subBlindAlways()) {
     $show_data[] = '<span class="sep">'
         . Ht::checkbox("showanonau", 1, !$pl->is_folded("anonau"),
-                ["id" => "showau", "class" => "paperlist-display"])
+                ["id" => "showau", "class" => "uich js-plinfo"])
         . "&nbsp;" . Ht::label("Authors (deblinded)") . "</span>"
         . Ht::checkbox("showau", 1, !$pl->is_folded("anonau") !== false,
-                ["id" => "showau_hidden", "class" => "paperlist-display hidden"]);
+                ["id" => "showau_hidden", "class" => "uich js-plinfo hidden"]);
 }
 if (!$Conf->subBlindAlways() || $Me->privChair) {
     $show_data[] = '<span class="sep fx10">'
         . Ht::checkbox("showaufull", 1, !$pl->is_folded("aufull"),
-                ["id" => "showaufull", "class" => "paperlist-display"])
+                ["id" => "showaufull", "class" => "uich js-plinfo"])
         . "&nbsp;" . Ht::label("Full author info") . "</span>";
 }
 if ($Me->privChair && !$Conf->subBlindAlways() && !$Conf->subBlindNever()) {
     $show_data[] = '<span class="sep fx10">'
         . Ht::checkbox("showanonau", 1, !$pl->is_folded("anonau"),
-                ["id" => "showanonau", "class" => "paperlist-display"])
+                ["id" => "showanonau", "class" => "uich js-plinfo"])
         . "&nbsp;" . Ht::label("Deblinded authors") . "</span>";
 }
-if ($pl->has("abstract"))
+if ($Conf->has_topics()) {
     $show_data[] = '<span class="sep">'
-        . Ht::checkbox("showabstract", 1, !$pl->is_folded("abstract"), ["class" => "paperlist-display"])
-        . "&nbsp;" . Ht::label("Abstracts") . '</span>';
-if ($pl->has("topics"))
-    $show_data[] = '<span class="sep">'
-        . Ht::checkbox("showtopics", 1, !$pl->is_folded("topics"), ["class" => "paperlist-display"])
+        . Ht::checkbox("showtopics", 1, !$pl->is_folded("topics"), ["class" => "uich js-plinfo"])
         . "&nbsp;" . Ht::label("Topics") . '</span>';
-if (!empty($show_data) && $pl->count)
-    echo '<tr><td class="lxcaption"><strong>Show:</strong> &nbsp;',
-        '</td><td colspan="2" class="lentry">',
-        join('', $show_data), '</td></tr>';
-echo "</table></form>"; // </div></div>
-echo "</td></tr></table>\n";
-Ht::stash_script("$(document).on(\"change\",\"input.paperlist-display\",plinfo.checkbox_change);$(\"#showau\").on(\"change\", function () { foldup.call(this, null, {n:10}) })");
+}
+if (!empty($show_data) && $pl->count) {
+    echo '<div class="entryi"><label>Show</label>',
+        '<div class="entry">', join('', $show_data), '</div></div>';
+}
+echo "</div></form>";
+Ht::stash_script("$(\"#showau\").on(\"change\", function () { foldup.call(this, null, {n:10}) })");
 
 
 // main form
@@ -334,7 +328,7 @@ echo Ht::form(hoturl_post("reviewprefs", $hoturl_args), ["id" => "sel", "class" 
     Ht::hidden("defaultact", "", array("id" => "defaultact")),
     Ht::hidden_default_submit("default", 1);
 Ht::stash_script('$("#sel").on("submit", paperlist_ui)');
-echo "<div class='pltable_full_ctr'>\n",
+echo "<div class=\"pltable-fullw-container\">\n",
     '<noscript><div style="text-align:center">', Ht::submit("fn", "Save changes", ["value" => "saveprefs"]), '</div></noscript>',
     $pl_text,
     "</div></form>\n";

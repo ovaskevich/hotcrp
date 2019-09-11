@@ -1,6 +1,6 @@
 <?php
 // mimetype.php -- HotCRP helper file for MIME types
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Mimetype {
     const TXT_TYPE = "text/plain";
@@ -48,7 +48,7 @@ class Mimetype {
         $this->mimetype = $mimetype;
         $this->extension = $extension;
         $this->description = $description;
-        $this->flags = !!$flags;
+        $this->flags = $flags;
     }
 
     static function lookup($type, $nocreate = false) {

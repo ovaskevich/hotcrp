@@ -1,6 +1,6 @@
 <?php
 // pc_conflict.php -- HotCRP conflict list column
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Conflict_PaperColumn extends PaperColumn {
     private $contact;
@@ -39,8 +39,8 @@ class Conflict_PaperColumn extends PaperColumn {
             return 0;
     }
     function compare(PaperInfo $a, PaperInfo $b, ListSorter $sorter) {
-        $act = $this->conflict_type($pl, $a);
-        $bct = $this->conflict_type($pl, $b);
+        $act = $this->conflict_type($sorter->pl, $a);
+        $bct = $this->conflict_type($sorter->pl, $b);
         if ($this->show_description)
             return $bct - $act;
         else
@@ -59,9 +59,7 @@ class Conflict_PaperColumn extends PaperColumn {
         return $pl->is_selected($row->paperId, $row->conflict_type($this->contact) > 0);
     }
     function content_empty(PaperList $pl, PaperInfo $row) {
-        return $this->not_me
-            && !$pl->user->can_administer($row)
-            && !$pl->user->can_view_conflicts($row);
+        return $this->not_me && !$pl->user->can_view_conflicts($row);
     }
     function content(PaperList $pl, PaperInfo $row) {
         if ($this->editable
@@ -72,10 +70,8 @@ class Conflict_PaperColumn extends PaperColumn {
             return "";
         else if (!$this->show_description || $ct == 1)
             return review_type_icon(-1);
-        else if ($ct >= CONFLICT_AUTHOR)
-            return "Author";
         else
-            return get(Conflict::$type_descriptions, $ct, "Other");
+            return $pl->conf->conflict_types()->unparse_html(min($ct, CONFLICT_AUTHOR));
     }
     function edit_content(PaperList $pl, PaperInfo $row) {
         if (!$pl->user->allow_administer($row))
@@ -83,10 +79,13 @@ class Conflict_PaperColumn extends PaperColumn {
         $ct = $row->conflict_type($this->contact);
         if ($ct >= CONFLICT_AUTHOR)
             return "Author";
-        return '<input type="checkbox" class="uix uikd js-range-click uich js-assign-review" '
-            . 'data-range-type="assrevu' . ($this->show_user ? $this->contact->contactId : "")
+        $t = '<input type="checkbox" class="uix uikd uich js-assign-review js-range-click" '
+            . 'data-range-type="assrevu' . $this->contact->contactId
             . '" name="assrev' . $row->paperId . 'u' . $this->contact->contactId
-            . '" value="-1"' . ($ct ? " checked" : "") . ' />';
+            . '" value="-1"' . ($ct ? " checked" : "");
+        if ($this->show_user)
+            $t .= ' title="' . $pl->user->name_text_for($this->contact) . ' conflict"';
+        return $t . '>';
     }
     function text(PaperList $pl, PaperInfo $row) {
         $ct = $this->conflict_type($pl, $row);
@@ -94,25 +93,24 @@ class Conflict_PaperColumn extends PaperColumn {
             return "N";
         else if (!$this->show_description || $ct == 1)
             return "Y";
-        else if ($ct >= CONFLICT_AUTHOR)
-            return "Author";
         else
-            return get(Conflict::$type_descriptions, $ct, "Other");
+            return $pl->conf->conflict_types()->unparse_text(min($ct, CONFLICT_AUTHOR));
     }
 
-    static function expand($name, Conf $conf, $xfj, $m) {
-        if (!($fj = (array) $conf->basic_paper_column($m[1], $conf->xt_user)))
+    static function expand($name, $user, $xfj, $m) {
+        if (!($fj = (array) $user->conf->basic_paper_column($m[1], $user)))
             return null;
         $rs = [];
-        $cs = new ContactSearch(ContactSearch::F_PC | ContactSearch::F_TAG | ContactSearch::F_USER, $m[2], $conf->xt_user);
+        $cs = new ContactSearch(ContactSearch::F_PC | ContactSearch::F_TAG | ContactSearch::F_USER, $m[2], $user);
         foreach ($cs->ids as $cid) {
-            $u = $conf->pc_member_by_id($cid);
-            $fj["name"] = $m[1] . ":" . $u->email;
-            $fj["user"] = $u->email;
-            $rs[] = (object) $fj;
+            if (($u = $user->conf->pc_member_by_id($cid))) {
+                $fj["name"] = $m[1] . ":" . $u->email;
+                $fj["user"] = $u->email;
+                $rs[] = (object) $fj;
+            }
         }
         if (empty($rs))
-            $conf->xt_factory_error("No PC member matches “" . htmlspecialchars($m[2]) . "”.");
+            $user->conf->xt_factory_error("No PC member matches “" . htmlspecialchars($m[2]) . "”.");
         return $rs;
     }
 }

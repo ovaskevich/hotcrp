@@ -102,34 +102,27 @@ $Opt["emailSender"] = null;
 //                   string is "Basic realm="HotCRP"".
 //   defaultEmailDomain Set to the default domain for account email addresses
 //                   when using httpAuthLogin.
+//   disableNewUsers Don’t allow new users to register.
 
 
-// USER PASSWORDS
+// PASSWORD SECURITY
 //
 //   safePasswords   Controls how passwords are stored in the database. If
 //                   false, passwords are stored in plaintext; if true, user-
 //                   chosen passwords are stored as cryptographic hashes with
 //                   random salts, which are less vulnerable to cracking.
-//                   True is the default. Randomly-generated passwords, such
-//                   as those generated for new accounts, are stored in
-//                   plaintext for usability reasons. Set safePasswords to 2
-//                   to opportunistically upgrade these passwords to hashes.
+//                   Randomly-generated passwords, such as those generated
+//                   for new accounts, are stored in plaintext for usability
+//                   reasons; set safePasswords to 2 to opportunistically
+//                   upgrade these passwords to cryptographic hashes.
 //   chairHidePasswords  If true, then chairs cannot view or modify other
 //                   users' passwords. Defaults to false.
-//
-//   In PHP versions below 5.5, password hashing uses these settings:
-//   passwordHmacKey  Secret key used for password HMAC.
-//   passwordHmacKeyid  If a secret key is compromised, change
-//                   passwordHmacKeyid to switch keys. Defaults to 0.
-//   passwordHmacKey.ID  Secret key for passwordHmacKeyid==ID.
 
-$Opt["safePasswords"] = true;
-$Opt["passwordHmacKey"] = null;
+$Opt["safePasswords"] = 2;
 
 
 // PAPER STORAGE
 //
-//   noPapers        Set to true to collect abstracts only, not papers.
 //   docstore        Set to true to serve papers and other downloads from a
 //                   cache on the local filesystem. By default this cache is
 //                   created in the "docs" directory. You can also set
@@ -181,11 +174,8 @@ $Opt["passwordHmacKey"] = null;
 //                   it defaults to the conference installation.
 //   jqueryUrl       URL for jQuery. Defaults to the local minified jquery.
 //   jqueryCdn       If true, use the jQuery CDN.
-//   redirectToHttps If set to true, then HotCRP will redirect all http
-//                   connections to https.
-//   allowLocalHttp  Only meaningful if redirectToHttps is set. If true, then
-//                   HotCRP will *not* redirect http connections that
-//                   originate from localhost.
+//   phpSuffix       The suffix for generated HotCRP URLs. Usually empty; for
+//                   some configurations, you may want to set it to ".php".
 
 
 // BEHAVIOR OPTIONS
@@ -203,25 +193,34 @@ $Opt["passwordHmacKey"] = null;
 $Opt["smartScoreCompare"] = true;
 
 
+// SESSIONS AND SECURITY
+//
+//   sessionName     Internal name used to distinguish conference sessions
+//                   running on the same server. NO SPACES ALLOWED. Defaults
+//                   to $Opt["dbName"].
+//   sessionSecure   If true, then set cookies and session cookies only on
+//                   secure connections. Defaults to false.
+//   sessionDomain   The domain scope for the session cookie. Defaults to the
+//                   server's domain. To share a cookie across subdomains,
+//                   prefix it with a dot: ".hotcrp.com".
+//   sessionLifetime Number of seconds a user may be idle before their session
+//                   is garbage collected and they must log in again. Defaults
+//                   to 86400 (24 hours). Should be less than or equal to the
+//                   system-wide setting for `session.gc_maxlifetime` in
+//                   the PHP initialization file, `php.ini`.
+//   redirectToHttps If set to true, then HotCRP will redirect all HTTP
+//                   connections to HTTPS.
+//   allowLocalHttp  Only meaningful if redirectToHttps is set. If true, then
+//                   HotCRP will *not* redirect HTTP connections that
+//                   originate from localhost.
+
+
 // EXTERNAL SOFTWARE CONFIGURATION
 //
 //   dbHost          Database host. Defaults to localhost.
 //   dsn             Database configuration string in the format
 //                   "mysql://DBUSER:DBPASSWORD@DBHOST/DBNAME".
 //                   The default is derived from $Opt["dbName"], etc.
-//   sessionName     Internal name used to distinguish conference sessions
-//                   running on the same server. NO SPACES ALLOWED. Defaults
-//                   to $Opt["dbName"].
-//   sessionLifetime Number of seconds a user may be idle before their session
-//                   is garbage collected and they must log in again. Defaults
-//                   to 86400 (24 hours). Should be less than or equal to the
-//                   system-wide setting for `session.gc_maxlifetime` in
-//                   the PHP initialization file, `php.ini`.
-//   sessionSecure   If true, then set the session cookie only on secure
-//                   connections. Defaults to false.
-//   sessionDomain   The domain scope for the session cookie. Defaults to the
-//                   server's domain. To share a cookie across subdomains,
-//                   prefix it with a dot: ".hotcrp.com".
 //   memoryLimit     Maximum amount of memory a PHP script can use. Defaults
 //                   to 128MB.
 //   pdftohtml       Pathname to pdftohtml executable (used only by the "banal"

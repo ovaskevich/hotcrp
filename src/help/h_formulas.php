@@ -1,6 +1,6 @@
 <?php
 // src/help/h_formulas.php -- HotCRP help functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Formulas_HelpTopic {
     static function render($hth) {
@@ -12,7 +12,7 @@ merit among reviewers with high Reviewer expertise.</p>
 <p>To display a formula, use a search term such as “",
 $hth->search_link("show:var(OveMer)"), "” (show
 the variance in Overall merit scores, along with statistics for all papers).
-You can also <a href=\"" . hoturl("graph", "g=formula") . "\">graph formulas</a>.
+You can also ", $hth->hotlink("graph formulas", "graph", "g=formula"), ".
 To search for a formula, use a search term such as “",
 $hth->search_link("formula:var(OveMer)>0.5"), "”
 (select papers with variance in Overall merit greater than 0.5).
@@ -69,6 +69,10 @@ scores A, B, and D is A. For instance:</p>
         echo $hth->trow("au", "Number of authors");
         echo $hth->trow("au:pc", "Number of PC authors");
         echo $hth->trow("au:<em>text</em>", "Number of authors matching <em>text</em>");
+        if ($hth->conf->has_topics()) {
+            echo $hth->trow("topics", "Number of topics");
+            echo $hth->trow("topics:<em>text</em>", "Number of topics matching <em>text</em>");
+        }
         echo $hth->tgroup("Tags");
         echo $hth->trow("#<em>tagname</em>", "True if this paper has tag <em>tagname</em>");
         echo $hth->trow("tagval:<em>tagname</em>", "The value of tag <em>tagname</em>, or null if this paper doesn’t have that tag");

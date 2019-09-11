@@ -6,11 +6,13 @@ DROP TABLE IF EXISTS `ActionLog`;
 CREATE TABLE `ActionLog` (
   `logId` int(11) NOT NULL AUTO_INCREMENT,
   `contactId` int(11) NOT NULL,
-  `destContactId` int(11) NOT NULL DEFAULT '0',
+  `destContactId` int(11) DEFAULT NULL,
+  `trueContactId` int(11) DEFAULT NULL,
   `paperId` int(11) DEFAULT NULL,
-  `time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `timestamp` bigint(11) NOT NULL,
   `ipaddr` varbinary(39) DEFAULT NULL,
   `action` varbinary(4096) NOT NULL,
+  `data` varbinary(8192) DEFAULT NULL,
   PRIMARY KEY (`logId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
@@ -148,6 +150,7 @@ CREATE TABLE `MailLog` (
   `subject` blob,
   `emailBody` blob,
   `fromNonChair` tinyint(1) NOT NULL DEFAULT '0',
+  `status` tinyint(1) NOT NULL DEFAULT '0',
   PRIMARY KEY (`mailId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
@@ -208,7 +211,6 @@ CREATE TABLE `PaperComment` (
   `comment` varbinary(32767) DEFAULT NULL,
   `commentType` int(11) NOT NULL DEFAULT '0',
   `replyTo` int(11) NOT NULL,
-  `paperStorageId` int(11) NOT NULL DEFAULT '0',
   `ordinal` int(11) NOT NULL DEFAULT '0',
   `authorOrdinal` int(11) NOT NULL DEFAULT '0',
   `commentTags` varbinary(1024) DEFAULT NULL,
@@ -298,6 +300,7 @@ CREATE TABLE `PaperReview` (
 
   `tfields` longblob,
   `sfields` varbinary(2048) DEFAULT NULL,
+  `data` varbinary(8192) DEFAULT NULL,
 
   PRIMARY KEY (`paperId`,`reviewId`),
   UNIQUE KEY `reviewId` (`reviewId`),
@@ -331,10 +334,20 @@ CREATE TABLE `PaperReviewPreference` (
 DROP TABLE IF EXISTS `PaperReviewRefused`;
 CREATE TABLE `PaperReviewRefused` (
   `paperId` int(11) NOT NULL,
+  `email` varchar(120) NOT NULL,
+  `firstName` varbinary(120) DEFAULT NULL,
+  `lastName` varbinary(120) DEFAULT NULL,
+  `affiliation` varbinary(2048) DEFAULT NULL,
   `contactId` int(11) NOT NULL,
   `requestedBy` int(11) NOT NULL,
+  `timeRequested` bigint(11) DEFAULT NULL,
+  `refusedBy` int(11) DEFAULT NULL,
+  `timeRefused` bigint(11) DEFAULT NULL,
+  `reviewType` tinyint(1) NOT NULL DEFAULT '0',
+  `reviewRound` int(1) DEFAULT NULL,
+  `data` varbinary(8192) DEFAULT NULL,
   `reason` varbinary(32767) DEFAULT NULL,
-  PRIMARY KEY (`paperId`,`contactId`)
+  PRIMARY KEY (`paperId`,`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 
@@ -451,6 +464,7 @@ CREATE TABLE `ReviewRequest` (
   `affiliation` varbinary(2048) DEFAULT NULL,
   `reason` varbinary(32767) DEFAULT NULL,
   `requestedBy` int(11) NOT NULL,
+  `timeRequested` bigint(11) NOT NULL,
   `reviewRound` int(1) DEFAULT NULL,
   PRIMARY KEY (`paperId`,`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
@@ -499,7 +513,7 @@ CREATE TABLE `TopicInterest` (
 
 
 
-insert into Settings (name, value) values ('allowPaperOption', 199);
+insert into Settings (name, value) values ('allowPaperOption', 224);
 insert into Settings (name, value) values ('setupPhase', 1);
 -- there are no submissions yet
 insert into Settings (name, value) values ('no_papersub', 1);
@@ -507,10 +521,12 @@ insert into Settings (name, value) values ('no_papersub', 1);
 insert into Settings (name, value) values ('sub_pcconf', 1);
 -- default chair-only tags
 insert into Settings (name, value, data) values ('tag_chair', 1, 'accept reject pcpaper');
--- allow PC members to review any paper by default
+-- default: allow PC members to review any paper
 insert into Settings (name, value) values ('pcrev_any', 1);
--- allow external reviewers to see the other reviews by default
+-- default: allow external reviewers to see the other reviews
 insert into Settings (name, value) values ('extrev_view', 2);
+-- default: administrators must approve potentially-conflicted external reviews
+insert into Settings (name, value) values ('extrev_chairreq', 2);
 -- default outcome map
 insert into Settings (name, value, data) values ('outcome_map', 1, '{"0":"Unspecified","-1":"Rejected","1":"Accepted"}');
 -- default review form

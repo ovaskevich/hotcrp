@@ -1,6 +1,6 @@
 <?php
 // pc_formula.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Formula_PaperColumn extends PaperColumn {
     public $formula;
@@ -13,6 +13,7 @@ class Formula_PaperColumn extends PaperColumn {
     function __construct(Conf $conf, $cj) {
         parent::__construct($conf, $cj);
         $this->formula = $cj->formula;
+        $this->statistics = new ScoreInfo;
     }
     function completion_name() {
         if (strpos($this->formula->name, " ") !== false)
@@ -20,7 +21,7 @@ class Formula_PaperColumn extends PaperColumn {
         else
             return $this->formula->name;
     }
-    function sort_name($score_sort) {
+    function sort_name(PaperList $pl, ListSorter $sorter = null) {
         return $this->formula->name ? : $this->formula->expression;
     }
     function prepare(PaperList $pl, $visible) {
@@ -31,11 +32,6 @@ class Formula_PaperColumn extends PaperColumn {
         if ($visible)
             $this->formula->add_query_options($pl->qopts);
         return true;
-    }
-    function realize(PaperList $pl) {
-        $f = clone $this;
-        $f->statistics = new ScoreInfo;
-        return $f;
     }
     function analyze_sort(PaperList $pl, &$rows, ListSorter $sorter) {
         $formulaf = $this->formula->compile_sortable_function();
@@ -97,6 +93,9 @@ class Formula_PaperColumn extends PaperColumn {
     private function unparse($x) {
         return $this->formula->unparse_html($x, $this->real_format);
     }
+    private function unparse_diff($x) {
+        return $this->formula->unparse_diff_html($x, $this->real_format);
+    }
     function content(PaperList $pl, PaperInfo $row) {
         $v = $vv = $this->results[$row->paperId];
         $t = $this->unparse($v);
@@ -120,10 +119,13 @@ class Formula_PaperColumn extends PaperColumn {
     function has_statistics() {
         return true;
     }
-    private function unparse_stat($x, $stat) {
-        if ($stat == ScoreInfo::MEAN || $stat == ScoreInfo::MEDIAN)
+    private function unparse_statistic($statistics, $stat) {
+        $x = $statistics->statistic($stat);
+        if ($stat === ScoreInfo::MEAN || $stat === ScoreInfo::MEDIAN)
             return $this->unparse($x);
-        else if ($stat == ScoreInfo::COUNT && is_int($x))
+        else if ($stat === ScoreInfo::STDDEV_P || $stat === ScoreInfo::VARIANCE_P)
+            return $this->unparse_diff($x);
+        else if ($stat === ScoreInfo::COUNT && is_int($x))
             return $x;
         else if ($this->real_format)
             return sprintf($this->real_format, $x);
@@ -131,11 +133,12 @@ class Formula_PaperColumn extends PaperColumn {
             return is_int($x) ? $x : sprintf("%.2f", $x);
     }
     function statistic($pl, $stat) {
-        if ($stat == ScoreInfo::SUM && !$this->formula->result_format_is_real())
-            return "";
-        $t = $this->unparse_stat($this->statistics->statistic($stat), $stat);
+        if ($stat === ScoreInfo::SUM
+            && !$this->formula->result_format_is_real())
+            return "—";
+        $t = $this->unparse_statistic($this->statistics, $stat);
         if ($this->override_statistics) {
-            $tt = $this->unparse_stat($this->override_statistics->statistic($stat), $stat);
+            $tt = $this->unparse_statistic($this->override_statistics, $stat);
             if ($t !== $tt)
                 $t = '<span class="fn5">' . $t . '</span><span class="fx5">' . $tt . '</span>';
         }
@@ -146,25 +149,25 @@ class Formula_PaperColumn extends PaperColumn {
 class Formula_PaperColumnFactory {
     static function make(Formula $f, $xfj) {
         $cj = (array) $xfj;
-        $cj["name"] = "formula:" . ($f->formulaId ? $f->name : $f->expression);
+        $cj["name"] = "formula:" . ($f->formulaId ? $f->abbreviation() : $f->expression);
         $cj["formula"] = $f;
         return new Formula_PaperColumn($f->conf, (object) $cj);
     }
-    static function expand($name, Conf $conf, $xfj, $m) {
-        $vsbound = $conf->xt_user->permissive_view_score_bound();
+    static function expand($name, $user, $xfj, $m) {
+        $vsbound = $user->permissive_view_score_bound();
         if ($name === "formulas") {
             return array_map(function ($f) use ($xfj) {
                 return Formula_PaperColumnFactory::make($f, $xfj);
-            }, array_filter($conf->named_formulas(),
-                function ($f) use ($conf, $vsbound) {
-                    return $f->view_score($conf->xt_user) > $vsbound;
+            }, array_filter($user->conf->named_formulas(),
+                function ($f) use ($user, $vsbound) {
+                    return $f->view_score($user) > $vsbound;
                 }));
         }
 
         $ff = null;
         if (str_starts_with($name, "formula")
             && ctype_digit(substr($name, 7)))
-            $ff = get($conf->named_formulas(), substr($name, 7));
+            $ff = get($user->conf->named_formulas(), substr($name, 7));
 
         $want_error = strpos($name, "(") !== false;
         if (!$ff && str_starts_with($name, "f:")) {
@@ -176,17 +179,17 @@ class Formula_PaperColumnFactory {
         }
 
         if (!$ff)
-            $ff = $conf->find_named_formula($name);
+            $ff = $user->conf->find_named_formula($name);
         if (!$ff && str_starts_with($name, "\"") && strpos($name, "\"", 1) === strlen($name) - 1)
-            $ff = $conf->find_named_formula(substr($name, 1, -1));
+            $ff = $user->conf->find_named_formula(substr($name, 1, -1));
         if (!$ff && $name !== "" && ($want_error || !is_numeric($name)))
             $ff = new Formula($name);
 
-        if ($ff && $ff->check($conf->xt_user)) {
-            if ($ff->view_score($conf->xt_user) > $vsbound)
+        if ($ff && $ff->check($user)) {
+            if ($ff->view_score($user) > $vsbound)
                 return [Formula_PaperColumnFactory::make($ff, $xfj)];
         } else if ($ff && $want_error)
-            $conf->xt_factory_error($ff->error_html());
+            $user->conf->xt_factory_error($ff->error_html());
         return null;
     }
     static function completions(Contact $user, $fxt) {

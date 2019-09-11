@@ -1,6 +1,6 @@
 <?php
 // a_preference.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Preference_AssignmentParser extends AssignmentParser {
     function __construct() {
@@ -17,26 +17,26 @@ class Preference_AssignmentParser extends AssignmentParser {
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
         return true;
     }
-    function expand_any_user(PaperInfo $prow, &$req, AssignmentState $state) {
+    function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
         return array_filter($state->pc_users(),
             function ($u) use ($prow) {
-                return $u->can_become_reviewer_ignore_conflict($prow);
+                return $u->can_enter_preference($prow);
             });
     }
-    function expand_missing_user(PaperInfo $prow, &$req, AssignmentState $state) {
+    function expand_missing_user(PaperInfo $prow, $req, AssignmentState $state) {
         return $state->reviewer->isPC ? [$state->reviewer] : false;
     }
-    function allow_contact(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function allow_user(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         if (!$contact->contactId)
             return false;
         else if ($contact->contactId !== $state->user->contactId
                  && !$state->user->can_administer($prow))
             return "Can’t change other users’ preferences for #{$prow->paperId}.";
-        else if (!$contact->can_become_reviewer_ignore_conflict($prow)) {
+        else if (!$contact->can_enter_preference($prow)) {
             if ($contact->contactId !== $state->user->contactId)
-                return Text::user_html_nolink($contact) . " can’t enter preferences for #{$prow->paperId}.";
+                return Text::user_html_nolink($contact) . " can’t enter preference for #{$prow->paperId}.";
             else
-                return "Can’t enter preferences for #{$prow->paperId}.";
+                return "Can’t enter preference for #{$prow->paperId}.";
         } else
             return true;
     }
@@ -79,10 +79,8 @@ class Preference_AssignmentParser extends AssignmentParser {
             return $str === $str2 ? null : self::parse($str2);
         }
     }
-    function apply(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
-        foreach (array("preference", "pref", "revpref") as $k)
-            if (($pref = get($req, $k)) !== null)
-                break;
+    function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
+        $pref = $req["preference"];
         if ($pref === null)
             return "Missing preference.";
         $ppref = self::parse($pref);
@@ -95,10 +93,10 @@ class Preference_AssignmentParser extends AssignmentParser {
             $state->user_error($msg);
             return false;
         }
+        if ($prow->timeWithdrawn > 0)
+            $state->warning(whyNotText($prow->make_whynot(["withdrawn" => 1])));
 
-        foreach (array("expertise", "revexp") as $k)
-            if (($exp = get($req, $k)) !== null)
-                break;
+        $exp = $req["expertise"];
         if ($exp && ($exp = trim($exp)) !== "") {
             if (($pexp = self::parse($exp)) === null || $pexp[0])
                 return "Invalid expertise “" . htmlspecialchars($exp) . "”.";
@@ -143,7 +141,7 @@ class Preference_Assigner extends Assigner {
         $p = $this->preference_data(false);
         $pref = $p ? unparse_preference($p[0], $p[1]) : "none";
         return ["pid" => $this->pid, "action" => "preference",
-                "email" => $this->contact->email, "name" => $this->contact->name_text(),
+                "email" => $this->contact->email, "name" => $this->contact->name(),
                 "preference" => $pref];
     }
     function add_locks(AssignmentSet $aset, &$locks) {

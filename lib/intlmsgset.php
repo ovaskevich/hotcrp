@@ -1,52 +1,67 @@
 <?php
 // intlmsg.php -- HotCRP helper functions for message i18n
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class IntlMsg {
     public $context;
     public $otext;
     public $require;
     public $priority = 0.0;
+    public $format;
+    public $no_conversions;
+    public $template;
     public $next;
 
-    private function arg(IntlMsgSet $ms, $args, $which) {
-        if (ctype_digit($which))
-            return get($args, +$which);
-        else
-            return $ms->get($which);
+    private function resolve_arg(IntlMsgSet $ms, $args, $argname, &$val) {
+        if ($argname[0] === "\$") {
+            $which = substr($argname, 1);
+            if (ctype_digit($which)) {
+                $val = get($args, +$which);
+                return true;
+            } else
+                return false;
+        } else if (($ans = $ms->resolve_requirement_argument($argname))) {
+            $val = is_array($ans) ? $ans[0] : $ans;
+            return true;
+        } else
+            return false;
     }
     function check_require(IntlMsgSet $ms, $args) {
         if (!$this->require)
             return 0;
         $nreq = 0;
         foreach ($this->require as $req) {
-            if (preg_match('/\A\s*\$(\w+)\s*([=!<>]=?|≠|≤|≥)\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*\z/', $req, $m)) {
-                $arg = $this->arg($ms, $args, $m[1]);
-                if ((string) $arg === ""
-                    || !CountMatcher::compare((float) $arg, $m[2], (float) $m[3]))
+            if (preg_match('/\A\s*(\S+?)\s*([=!<>]=?|≠|≤|≥)\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*\z/', $req, $m)
+                && $this->resolve_arg($ms, $args, $m[1], $val)) {
+                if ((string) $val === ""
+                    || !CountMatcher::compare((float) $val, $m[2], (float) $m[3]))
                     return false;
                 ++$nreq;
-            } else if (preg_match('/\A\s*\$(\w+)\s*([=!]=?|≠|!?\^=)\s*(\S+)\s*\z/', $req, $m)) {
-                $arg = $this->arg($ms, $args, $m[1]);
-                if ((string) $arg === "")
+            } else if (preg_match('/\A\s*(\S+?)\s*([=!]=?|≠|!?\^=)\s*(\S+)\s*\z/', $req, $m)
+                       && $this->resolve_arg($ms, $args, $m[1], $val)) {
+                if ((string) $val === "")
                     return false;
                 if ($m[2] === "^=" || $m[2] === "!^=") {
-                    $have = str_starts_with($arg, $m[3]);
+                    $have = str_starts_with($val, $m[3]);
                     $weight = 0.9;
                 } else {
-                    $have = $arg === $m[3];
+                    $have = $val === $m[3];
                     $weight = 1;
                 }
                 $want = ($m[2] === "=" || $m[2] === "==" || $m[2] === "^=");
                 if ($have !== $want)
                     return false;
                 $nreq += $weight;
-            } else if (preg_match('/\A\s*(|!)\s*\$(\w+)\s*\z/', $req, $m)) {
-                $arg = $this->arg($ms, $args, $m[2]);
-                $bool_arg = (string) $arg !== "" && $arg !== 0;
-                if ($bool_arg !== ($m[1] === ""))
+            } else if (preg_match('/\A\s*(!*)\s*(\S+)\s*\z/', $req, $m)
+                       && $this->resolve_arg($ms, $args, $m[2], $val)) {
+                $bool_arg = $val !== null && $val !== false && $val !== "" && $val !== 0 && $val !== [];
+                if ($bool_arg !== (strlen($m[1]) % 2 === 0))
                     return false;
                 ++$nreq;
+            } else if (($weight = $ms->resolve_requirement($req)) !== null) {
+                if ($weight <= 0)
+                    return false;
+                $nreq += $weight;
             }
         }
         return $nreq;
@@ -55,9 +70,11 @@ class IntlMsg {
 
 class IntlMsgSet {
     private $ims = [];
-    private $defs = [];
+    private $require_resolvers = [];
     private $_ctx;
     private $_default_priority;
+
+    const PRIO_OVERRIDE = 1000.0;
 
     function set_default_priority($p) {
         $this->_default_priority = (float) $p;
@@ -137,6 +154,12 @@ class IntlMsgSet {
                 $im->priority = (float) $m->priority;
             if (isset($m->require) && is_array($m->require))
                 $im->require = $m->require;
+            if (isset($m->format) && (is_int($m->format) || is_string($m->format)))
+                $im->format = $m->format;
+            if (isset($m->no_conversions) && is_bool($m->no_conversions))
+                $im->no_conversions = $m->no_conversions;
+            if (isset($m->template) && is_bool($m->template))
+                $im->template = $m->template;
         } else
             return false;
         if ($this->_ctx)
@@ -146,33 +169,51 @@ class IntlMsgSet {
         return true;
     }
 
-    function set($name, $value) {
-        $this->defs[$name] = $value;
+    function add_override($id, $otext) {
+        $im = get($this->ims, $id);
+        return $this->addj(["id" => $id, "otext" => $otext, "priority" => self::PRIO_OVERRIDE, "no_conversions" => true, "template" => $im && $im->template]);
     }
 
-    function get($name) {
-        return get($this->defs, $name);
+    function add_requirement_resolver($function) {
+        $this->require_resolvers[] = $function;
+    }
+    function resolve_requirement($requirement) {
+        foreach ($this->require_resolvers as $fn)
+            if (($x = call_user_func($fn, $requirement, true)) !== null)
+                return $x;
+        return null;
+    }
+    function resolve_requirement_argument($argname) {
+        foreach ($this->require_resolvers as $fn)
+            if (($x = call_user_func($fn, $argname, false)) !== null)
+                return $x;
+        return null;
     }
 
-    private function find($context, $itext, $args) {
+    private function find($context, $itext, $args, $priobound) {
         $match = null;
         $matchnreq = $matchctxlen = 0;
+        if ($context === "")
+            $context = null;
         for ($im = get($this->ims, $itext); $im; $im = $im->next) {
             $ctxlen = $nreq = 0;
             if ($context !== null && $im->context !== null) {
                 if ($context === $im->context)
                     $ctxlen = 10000;
                 else {
-                    $ctxlen = (int) min(strlen($context), strlen($im->context));
-                    if (strncmp($context, $im->context, $ctxlen) !== 0
-                        || ($ctxlen < strlen($context) && $context[$ctxlen] !== "/")
-                        || ($ctxlen < strlen($im->context) && $im->context[$ctxlen] !== "/"))
+                    $ctxlen = strlen($im->context);
+                    if ($ctxlen > strlen($context)
+                        || strncmp($context, $im->context, $ctxlen) !== 0
+                        || $context[$ctxlen] !== "/")
                         continue;
                 }
             } else if ($context === null && $im->context !== null)
                 continue;
             if ($im->require
                 && ($nreq = $im->check_require($this, $args)) === false)
+                continue;
+            if ($priobound !== null
+                && $im->priority >= $priobound)
                 continue;
             if (!$match
                 || $im->priority > $match->priority
@@ -188,51 +229,96 @@ class IntlMsgSet {
         return $match;
     }
 
-    private function expand($args) {
-        $pos = 0;
-        while (($pos = strpos($args[0], "%", $pos)) !== false) {
-            if (preg_match('/\A(?!\d+)\w+(?=[$%])/', substr($args[0], $pos + 1), $m)
-                && isset($this->defs[$m[0]])) {
-                $args[] = $this->defs[$m[0]];
-                $t = substr($args[0], 0, $pos + 1) . (count($args) - 1);
-                $pos += 1 + strlen($m[0]);
-                if ($args[0][$pos] == "%") {
-                    $t .= "\$s";
-                    ++$pos;
-                }
-                $args[0] = $t . substr($args[0], $pos);
+    private function expand($s, $args, $context, $im) {
+        if ($s === null || $s === false || $s === "")
+            return $s;
+        $pos = strpos($s, "%");
+        $argnum = 0;
+        while ($pos !== false) {
+            ++$pos;
+            if (preg_match('{(?!\d+)\w+(?=%)}A', $s, $m, 0, $pos)
+                && ($imt = $this->find($context, strtolower($m[0]), [], null))
+                && $imt->template) {
+                $t = substr($s, 0, $pos - 1) . $this->expand($imt->otext, $args, null, null);
+                $s = $t . substr($s, $pos + strlen($m[0]) + 1);
                 $pos = strlen($t);
-            } else
-                $pos += 2;
+            } else if (($im && $im->no_conversions) || count($args) === 1) {
+                /* do nothing */
+            } else if ($pos < strlen($s) && $s[$pos] === "%") {
+                $s = substr($s, 0, $pos) . substr($s, $pos + 1);
+            } else if (preg_match('/(?:(\d+)\$)?(\d*(?:\.\d+)?)([deEifgosxX])/A', $s, $m, 0, $pos)) {
+                $argi = $m[1] ? +$m[1] : ++$argnum;
+                if (isset($args[$argi])) {
+                    $args[0] = "%{$argi}\${$m[2]}{$m[3]}";
+                    $x = call_user_func_array("sprintf", $args);
+                    $s = substr($s, 0, $pos - 1) . $x . substr($s, $pos + strlen($m[0]));
+                    $pos = $pos - 1 + strlen($x);
+                }
+            }
+            $pos = strpos($s, "%", $pos);
         }
-        return call_user_func_array("sprintf", $args);
+        return $s;
     }
 
     function x($itext) {
         $args = func_get_args();
-        if (($im = $this->find(null, $itext, $args)))
+        if (($im = $this->find(null, $itext, $args, null)))
             $args[0] = $im->otext;
-        return $this->expand($args);
+        return $this->expand($args[0], $args, null, $im);
     }
 
     function xc($context, $itext) {
         $args = array_slice(func_get_args(), 1);
-        if (($im = $this->find($context, $itext, $args)))
+        if (($im = $this->find($context, $itext, $args, null)))
             $args[0] = $im->otext;
-        return $this->expand($args);
+        return $this->expand($args[0], $args, $context, $im);
     }
 
-    function xi($id, $itext) {
+    function xi($id, $override = null) {
         $args = array_slice(func_get_args(), 1);
-        if (($im = $this->find(null, $id, $args)))
+        if (empty($args))
+            $args[] = "";
+        $im = null;
+        if ($override === null || $override === false)
+            $im = $this->find(null, $id, $args, null);
+        if ($im)
             $args[0] = $im->otext;
-        return $this->expand($args);
+        return $this->expand($args[0], $args, $id, $im);
     }
 
-    function xci($context, $id, $itext) {
+    function xci($context, $id, $override = null) {
         $args = array_slice(func_get_args(), 2);
-        if (($im = $this->find($context, $id, $args)))
+        if (empty($args))
+            $args[] = "";
+        $im = null;
+        if ($override === null || $override === false)
+            $im = $this->find($context, $id, $args, null);
+        if ($im)
             $args[0] = $im->otext;
-        return $this->expand($args);
+        $cid = (string) $context === "" ? $id : "$context/$id";
+        return $this->expand($args[0], $args, $cid, $im);
+    }
+
+    function render_xci($fr, $context, $id, $override = null) {
+        $args = array_slice(func_get_args(), 3);
+        if (empty($args))
+            $args[] = "";
+        $im = null;
+        if ($override === null || $override === false)
+            $im = $this->find($context, $id, $args, null);
+        if ($im) {
+            $args[0] = $im->otext;
+            if ($im->format !== null)
+                $fr->value_format = $im->format;
+        }
+        $cid = (string) $context === "" ? $id : "$context/$id";
+        $fr->value = $this->expand($args[0], $args, $cid, $im);
+    }
+
+    function default_itext($id, $itext) {
+        $args = array_slice(func_get_args(), 1);
+        if (($im = $this->find(null, $id, $args, self::PRIO_OVERRIDE)))
+            $args[0] = $im->otext;
+        return $args[0];
     }
 }

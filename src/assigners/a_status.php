@@ -1,6 +1,6 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Withdraw_AssignmentFinisher {
     // When withdrawing a paper, remove voting tags so people don't have
@@ -38,32 +38,47 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
         $this->xtype = $aj->type;
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
-        // XXX allow contact to do stuff
-        // XXX check permissions
-        return $state->user->can_administer($prow);
+        if (!$state->user->can_administer($prow)
+            && !$state->user->act_author($prow))
+            return "You can’t administer #{$prow->paperId}.";
+        else
+            return true;
+    }
+    static function load_status_state(AssignmentState $state) {
+        if ($state->mark_type("status", ["pid"], "Status_Assigner::make")) {
+            foreach ($state->prows() as $prow)
+                $state->load(["type" => "status", "pid" => $prow->paperId,
+                              "_submitted" => (int) $prow->timeSubmitted,
+                              "_withdrawn" => (int) $prow->timeWithdrawn,
+                              "_withdraw_reason" => $prow->withdrawReason]);
+        }
     }
     function load_state(AssignmentState $state) {
-        if (!$state->mark_type("status", ["pid"], "Status_Assigner::make"))
-            return;
-        foreach ($state->prows() as $prow)
-            $state->load(["type" => "status", "pid" => $prow->paperId,
-                          "_submitted" => (int) $prow->timeSubmitted,
-                          "_withdrawn" => (int) $prow->timeWithdrawn,
-                          "_withdraw_reason" => $prow->withdrawReason]);
+        Decision_AssignmentParser::load_decision_state($state);
+        Status_AssignmentParser::load_status_state($state);
     }
-    function apply(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         global $Now;
         $m = $state->remove(["type" => "status", "pid" => $prow->paperId]);
         $res = $m[0];
+        $ch = false;
         if ($this->xtype === "submit") {
-            if ($res["_submitted"] === 0)
+            if ($res["_submitted"] === 0) {
+                if (($whynot = $state->user->perm_finalize_paper($prow)))
+                    return whyNotText($whynot);
                 $res["_submitted"] = ($res["_withdrawn"] > 0 ? -$Now : $Now);
+            }
         } else if ($this->xtype === "unsubmit") {
-            if ($res["_submitted"] !== 0)
+            if ($res["_submitted"] !== 0) {
+                if (($whynot = $state->user->perm_update_paper($prow)))
+                    return whyNotText($whynot);
                 $res["_submitted"] = 0;
+            }
         } else if ($this->xtype === "withdraw") {
             if ($res["_withdrawn"] === 0) {
                 assert($res["_submitted"] >= 0);
+                if (($whynot = $state->user->perm_withdraw_paper($prow)))
+                    return whyNotText($whynot);
                 $res["_withdrawn"] = $Now;
                 $res["_submitted"] = -$res["_submitted"];
                 if ($state->conf->tags()->has_votish) {
@@ -71,12 +86,15 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                     $state->finishers[] = new Withdraw_AssignmentFinisher($prow->paperId);
                 }
             }
-            $r = (string) get($req, "withdraw_reason", get($req, "reason", null));
-            if ($r !== "")
+            $r = $req["withdraw_reason"];
+            if ((string) $r !== ""
+                && $state->user->can_withdraw_paper($prow))
                 $res["_withdraw_reason"] = $r;
         } else if ($this->xtype === "revive") {
             if ($res["_withdrawn"] !== 0) {
                 assert($res["_submitted"] <= 0);
+                if (($whynot = $state->user->perm_revive_paper($prow)))
+                    return whyNotText($whynot);
                 $res["_withdrawn"] = 0;
                 if ($res["_submitted"] === -100)
                     $res["_submitted"] = $Now;
@@ -129,10 +147,17 @@ class Status_Assigner extends Assigner {
     function execute(AssignmentSet $aset) {
         global $Now;
         $submitted = $this->item["_submitted"];
-        $aset->stage_qe("update Paper set timeSubmitted=?, timeWithdrawn=?, withdrawReason=? where paperId=?", $submitted, $this->item["_withdrawn"], $this->item["_withdraw_reason"], $this->pid);
-        if (($submitted > 0) !== ($this->item->get(true, "_submitted") > 0))
+        $withdrawn = $this->item["_withdrawn"];
+        $aset->stage_qe("update Paper set timeSubmitted=?, timeWithdrawn=?, withdrawReason=? where paperId=?", $submitted, $withdrawn, $this->item["_withdraw_reason"], $this->pid);
+        if (($withdrawn > 0) !== ($this->item->get(true, "_withdrawn") > 0))
+            $aset->user->log_activity($withdrawn > 0 ? "Withdrew" : "Revived", $this->pid);
+        if (($submitted > 0) !== ($this->item->get(true, "_submitted") > 0)) {
             $aset->cleanup_callback("papersub", function ($aset, $vals) {
                 $aset->conf->update_papersub_setting(min($vals));
             }, $submitted > 0 ? 1 : 0);
+            $aset->cleanup_callback("paperacc", function ($aset, $vals) {
+                $aset->conf->update_paperacc_setting(min($vals));
+            }, 0);
+        }
     }
 }

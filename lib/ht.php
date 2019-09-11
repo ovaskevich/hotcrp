@@ -1,24 +1,23 @@
 <?php
 // ht.php -- HotCRP HTML helper functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Ht {
-
     public static $img_base = "";
-    public static $default_button_class = "";
     private static $_script_open = "<script";
     private static $_controlid = 0;
     private static $_lastcontrolid = 0;
     private static $_stash = "";
     private static $_stash_inscript = false;
     private static $_stash_map = [];
-    private static $_control_classes = [];
+    private static $_msgset = null;
     const ATTR_SKIP = 1;
     const ATTR_BOOL = 2;
     const ATTR_BOOLTEXT = 3;
     const ATTR_NOEMPTY = 4;
     private static $_attr_type = array("accept-charset" => self::ATTR_SKIP,
                                        "action" => self::ATTR_SKIP,
+                                       "autofocus" => self::ATTR_BOOL,
                                        "checked" => self::ATTR_BOOL,
                                        "class" => self::ATTR_NOEMPTY,
                                        "disabled" => self::ATTR_BOOL,
@@ -99,7 +98,9 @@ class Ht {
             $action = substr($action, 0, $qpos) . (string) substr($action, $pos);
         }
 
-        $x = '<form method="' . $method . '" action="' . $action . '"';
+        $x = '<form';
+        if ((string) $action !== "")
+            $x .= ' method="' . $method . '" action="' . $action . '"';
         $enctype = get($extra, "enctype");
         if (!$enctype && $method !== "get")
             $enctype = "multipart/form-data";
@@ -143,14 +144,10 @@ class Ht {
         $disabled = get($js, "disabled");
         if (is_array($disabled))
             unset($js["disabled"]);
-        if ($selected === null || !isset($opt[$selected]))
-            $selected = key($opt);
-        $x = '<select name="' . $name . '"' . self::extra($js);
-        if (!isset($js["data-default-value"]))
-            $x .= ' data-default-value="' . htmlspecialchars($selected) . '"';
-        $x .= '>';
+
         $optionstyles = get($js, "optionstyles", null);
-        $optgroup = "";
+        $x = $optgroup = "";
+        $first_value = $has_selected = false;
         foreach ($opt as $value => $info) {
             if (is_array($info) && isset($info[0]) && $info[0] === "optgroup")
                 $info = (object) array("type" => "optgroup", "label" => get($info, 1));
@@ -167,7 +164,7 @@ class Ht {
                 $value = $info->value;
 
             if ($info === null)
-                $x .= '<option label=" " disabled="disabled"></option>';
+                $x .= '<option label=" " disabled></option>';
             else if (isset($info->type) && $info->type === "optgroup") {
                 $x .= $optgroup;
                 if ($info->label) {
@@ -180,10 +177,14 @@ class Ht {
                 if (get($info, "id"))
                     $x .= ' id="' . $info->id . '"';
                 $x .= ' value="' . htmlspecialchars($value) . '"';
-                if (strcmp($value, $selected) == 0)
-                    $x .= ' selected="selected"';
+                if ($first_value === false)
+                    $first_value = $value;
+                if (!strcmp($value, $selected) && !$has_selected) {
+                    $x .= ' selected';
+                    $has_selected = true;
+                }
                 if (get($info, "disabled"))
-                    $x .= ' disabled="disabled"';
+                    $x .= ' disabled';
                 if (get($info, "class"))
                     $x .= ' class="' . $info->class . '"';
                 if (get($info, "style"))
@@ -191,7 +192,13 @@ class Ht {
                 $x .= '>' . $info->label . '</option>';
             }
         }
-        return $x . $optgroup . "</select>";
+
+        if ($selected === null || !isset($opt[$selected]))
+            $selected = key($opt);
+        $t = '<span class="select"><select name="' . $name . '"' . self::extra($js);
+        if (!isset($js["data-default-value"]))
+            $t .= ' data-default-value="' . htmlspecialchars($has_selected ? $selected : $first_value) . '"';
+        return $t . '>' . $x . $optgroup . "</select></span>";
     }
 
     static function checkbox($name, $value = 1, $checked = false, $js = null) {
@@ -203,9 +210,10 @@ class Ht {
             $checked = false;
         }
         $js = $js ? : array();
-        if (!get($js, "id"))
+        if (!array_key_exists("id", $js) || $js["id"] === true)
             $js["id"] = "htctl" . ++self::$_controlid;
-        self::$_lastcontrolid = $js["id"];
+        if ($js["id"])
+            self::$_lastcontrolid = $js["id"];
         if (isset($js["data-default-checked"]) || isset($js["data-default-value"])) {
             $dc = get($js, "data-default-checked");
             if ($dc === null)
@@ -219,7 +227,7 @@ class Ht {
         if ($name)
             $t .= " name=\"$name\" value=\"" . htmlspecialchars($value) . "\"";
         if ($checked)
-            $t .= " checked=\"checked\"";
+            $t .= " checked";
         return $t . self::extra($js) . " />";
     }
 
@@ -244,18 +252,10 @@ class Ht {
             $html = null;
         } else if ($js === null)
             $js = array();
-        if (!isset($js["class"]) && self::$default_button_class)
-            $js["class"] = self::$default_button_class;
         $type = isset($js["type"]) ? $js["type"] : "button";
-        if ($type === "button" || preg_match("_[<>]_", $html) || isset($js["value"])) {
-            if (!isset($js["value"]))
-                $js["value"] = 1;
-            return "<button type=\"$type\"" . self::extra($js)
-                . ">" . $html . "</button>";
-        } else {
-            $js["value"] = $html;
-            return "<input type=\"$type\"" . self::extra($js) . " />";
-        }
+        if (!isset($js["value"]) && isset($js["name"]) && $type !== "button")
+            $js["value"] = "1";
+        return "<button type=\"$type\"" . self::extra($js) . ">" . $html . "</button>";
     }
 
     static function submit($name, $html = null, $js = null) {
@@ -328,7 +328,7 @@ class Ht {
             $t .= '">';
             if (is_array($a)) {
                 $t .= $a[0];
-                if (count($a) > 1)
+                if (count($a) > 1 && $a[1] !== "")
                     $t .= '<div class="hint">' . $a[1] . '</div>';
             } else
                 $t .= $a;
@@ -382,7 +382,7 @@ class Ht {
         if (isset($js["onclick"]) && !preg_match('/(?:^return|;)/', $js["onclick"]))
             $js["onclick"] = "return " . $js["onclick"];
         if (isset($js["onclick"])
-            && (!isset($js["class"]) || !preg_match('/(?:\A|\s)(?:ui|btn|tla)(?=\s|\z)/', $js["class"])))
+            && (!isset($js["class"]) || !preg_match('/(?:\A|\s)(?:ui|btn|lla|tla)(?=\s|\z)/', $js["class"])))
             error_log(caller_landmark(2) . ": JS Ht::link lacks class");
         return "<a" . self::extra($js) . ">" . $html . "</a>";
     }
@@ -456,41 +456,57 @@ class Ht {
     }
 
 
-    static function xmsg($type, $content) {
-        if (is_int($type))
-            $type = $type >= 2 ? "error" : ($type > 0 ? "warning" : "info");
-        if (substr($type, 0, 1) === "x")
-            $type = substr($type, 1);
-        if ($type === "merror")
-            $type = "error";
-        if (is_array($content)) {
-            $content = join("", array_map(function ($x) {
+    static function msg($msg, $status) {
+        if (is_int($status))
+            $status = $status >= 2 ? "error" : ($status > 0 ? "warning" : "info");
+        if (substr($status, 0, 1) === "x")
+            $status = substr($status, 1);
+        if ($status === "merror")
+            $status = "error";
+        if (is_array($msg)) {
+            $msg = join("", array_map(function ($x) {
                 if (str_starts_with($x, "<p") || str_starts_with($x, "<div"))
                     return $x;
                 else
                     return "<p>{$x}</p>";
-            }, $content));
-        }
-        if ($content === "")
+            }, $msg));
+        } else if ($msg !== ""
+                   && !str_starts_with($msg, "<p")
+                   && !str_starts_with($msg, "<div"))
+            $msg = "<p>{$msg}</p>";
+        if ($msg === "")
             return "";
-        return '<div class="msg msg-' . $type . '">' . $content . '</div>';
+        return '<div class="msg msg-' . $status . '">' . $msg . '</div>';
+    }
+
+    static function xmsg($status, $msg) {
+        return self::msg($msg, $status);
     }
 
 
-    static function control_class($name, $rest = false) {
-        if (isset(self::$_control_classes[$name])) {
-            $c = self::$_control_classes[$name];
-            if ($rest && $c && $c[0] !== " ")
-                $rest .= " ";
-            return $rest ? $rest . $c : $c;
-        } else {
+    static function control_class($field, $rest = "") {
+        if (self::$_msgset)
+            return self::$_msgset->control_class($field, $rest);
+        else
             return $rest;
+    }
+    static function error_at($field, $msg = "") {
+        self::$_msgset || (self::$_msgset = new MessageSet);
+        self::$_msgset->error_at($field, $msg);
+    }
+    static function warning_at($field, $msg = "") {
+        self::$_msgset || (self::$_msgset = new MessageSet);
+        self::$_msgset->warning_at($field, $msg);
+    }
+    static function problem_status_at($field) {
+        return self::$_msgset ? self::$_msgset->problem_status_at($field) : 0;
+    }
+    static function render_messages_at($field) {
+        $t = "";
+        if (self::$_msgset) {
+            foreach (self::$_msgset->messages_at($field, true) as $mx)
+                $t .= '<p class="' . MessageSet::status_class($mx[2], "f-h", "is-") . '">' . $mx[1] . '</p>';
         }
-    }
-    static function set_control_class($name, $class) {
-        self::$_control_classes[$name] = $class ? " " . $class : "";
-    }
-    static function error_at($name) {
-        self::$_control_classes[$name] = " has-error";
+        return $t;
     }
 }

@@ -1,6 +1,65 @@
 <?php
 // csv.php -- HotCRP CSV parsing functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+
+if (!function_exists("gmp_init")) {
+    global $ConfSitePATH;
+    require_once("$ConfSitePATH/lib/gmpshim.php");
+}
+
+class CsvRow implements ArrayAccess, IteratorAggregate, Countable, JsonSerializable {
+    private $a;
+    private $csvp;
+
+    function __construct(CsvParser $csvp, $a) {
+        $this->a = $a;
+        $this->csvp = $csvp;
+    }
+    function offsetExists($offset) {
+        if (!array_key_exists($offset, $this->a)) {
+            $offset = $this->csvp->column($offset);
+        }
+        return isset($this->a[$offset]);
+    }
+    function& offsetGet($offset) {
+        if (!array_key_exists($offset, $this->a)) {
+            $offset = $this->csvp->column($offset, true);
+        }
+        $x = null;
+        if (isset($this->a[$offset])) {
+            $x =& $this->a[$offset];
+        }
+        return $x;
+    }
+    function offsetSet($offset, $value) {
+        if (!array_key_exists($offset, $this->a)
+            && ($i = $this->csvp->column($offset, true)) >= 0) {
+            $offset = $i;
+        }
+        $this->a[$offset] = $value;
+    }
+    function offsetUnset($offset) {
+        if (!array_key_exists($offset, $this->a)) {
+            $offset = $this->csvp->column($offset);
+        }
+        unset($this->a[$offset]);
+    }
+    function getIterator() {
+        return new ArrayIterator($this->as_map());
+    }
+    function count() {
+        return count($this->a);
+    }
+    function jsonSerialize() {
+        return $this->as_map();
+    }
+    function as_array() {
+        return $this->a;
+    }
+    function as_map() {
+        return $this->csvp->as_map($this->a);
+    }
+}
 
 class CsvParser {
     private $lines;
@@ -8,8 +67,11 @@ class CsvParser {
     private $type;
     private $typefn;
     private $header = false;
+    private $hmap = [];
     private $comment_chars = false;
-    private $comment_function = null;
+    private $comment_function;
+    private $used;
+    private $nused = 0;
 
     const TYPE_COMMA = 1;
     const TYPE_PIPE = 2;
@@ -29,6 +91,7 @@ class CsvParser {
     function __construct($str, $type = self::TYPE_COMMA) {
         $this->lines = is_array($str) ? $str : self::split_lines($str);
         $this->set_type($type);
+        $this->used = gmp_init("0");
     }
 
     private function set_type($type) {
@@ -59,6 +122,118 @@ class CsvParser {
 
     function set_header($header) {
         $this->header = $header;
+
+        // The column map defaults to mapping header field names to field indexes.
+        // Exceptions:
+        // - Field names that could be mistaken for field indexes are ignored
+        //   (so “0” will never be used as a field name; “2019” might be).
+        // - If all field names are case-insensitive, then lower-case versions
+        //   are also available (“PaperID” -> “paperid”).
+        // - Field names that contain spaces are also available with underscores
+        //   when there’s no ambiguity (“paper ID” -> “paper_ID”).
+        if (is_array($header)) {
+            $hmap = $lchmap = [];
+            foreach ($header as $i => $s) {
+                $s = (string) $s;
+                if ($s !== ""
+                    && (!ctype_digit($s)
+                        || ($s[0] === "0" && $s !== "0")
+                        || (int) $s > count($header))) {
+                    if ($lchmap !== false) {
+                        $lcs = strtolower($s);
+                        if (!isset($lchmap[$lcs])) {
+                            $lchmap[$lcs] = $lchmap[$s] = $i;
+                        } else {
+                            $lchmap = false;
+                        }
+                    }
+                    $hmap[$s] = $i;
+                }
+                $hmap[$i] = $i;
+                if ($lchmap !== false) {
+                    $lchmap[$i] = $i;
+                }
+            }
+            if ($lchmap) {
+                $hmap = $lchmap;
+            }
+            $this->hmap = $hmap;
+            foreach ($hmap as $s => $i) {
+                if (strpos($s, " ") !== false) {
+                    $s = str_replace(" ", "_", simplify_whitespace($s));
+                    if ($s !== ""
+                        && !ctype_digit($s)
+                        && !isset($this->hmap[$s])) {
+                        $this->hmap[$s] = $i;
+                    }
+                }
+            }
+            $this->nused = max($this->nused, count($header));
+        } else {
+            $this->hmap = [];
+        }
+    }
+
+    function add_synonym($dst, $src) {
+        if (!isset($this->hmap[$dst]) && isset($this->hmap[$src])) {
+            $this->hmap[$dst] = $this->hmap[$src];
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    function column($offset, $mark_use = false) {
+        if (isset($this->hmap[$offset])) {
+            $offset = $this->hmap[$offset];
+        } else if (!is_int($offset) && $offset >= 0) {
+            $offset = -1;
+        }
+        if ($offset !== -1 && $mark_use) {
+            gmp_setbit($this->used, $offset);
+        }
+        return $offset;
+    }
+
+    function has_column($offset) {
+        $c = $this->column($offset);
+        return $c >= 0 && $c < count($this->header);
+    }
+
+    function column_used($offset) {
+        $c = $this->column($offset);
+        return $c >= 0 && gmp_testbit($this->used, $c);
+    }
+
+    function column_name($offset) {
+        $c = $this->column($offset);
+        if ($c >= 0 && $c < count($this->header)) {
+            $h = $this->header[$c];
+            if ((string) $h !== "") {
+                return (string) $h;
+            } else {
+                return (string) $c;
+            }
+        } else {
+            return $offset;
+        }
+    }
+
+    function column_count() {
+        return $this->nused;
+    }
+
+    function as_map($a) {
+        if ($this->header && is_array($a)) {
+            $b = [];
+            foreach ($a as $i => $v) {
+                $offset = get_s($this->header, $i);
+                $b[$offset === "" ? $i : $offset] = $v;
+            }
+            return $b;
+        } else {
+            return $a;
+        }
     }
 
     static function linelen($line) {
@@ -75,42 +250,53 @@ class CsvParser {
     }
 
     function next() {
-        while (($line = $this->shift()) === null)
-            /* loop */;
-        return $line;
+        return $this->next_map();
+    }
+
+    function next_array() {
+        while ($this->lpos < count($this->lines)) {
+            $line = $this->lines[$this->lpos];
+            ++$this->lpos;
+            if (is_array($line)) {
+                $a = $line;
+            } else if ($line === "" || $line[0] === "\n" || $line[0] === "\r") {
+                continue;
+            } else if ($this->comment_chars
+                       && strpos($this->comment_chars, $line[0]) !== false) {
+                if ($this->comment_function) {
+                    call_user_func($this->comment_function, $line, $this);
+                }
+                continue;
+            } else {
+                $fn = $this->typefn;
+                $a = $this->$fn($line);
+            }
+            $this->nused = max($this->nused, count($a));
+            return $a;
+        }
+        return false;
+    }
+
+    function next_row() {
+        $a = $this->next_array();
+        return $a === false ? false : new CsvRow($this, $a);
+    }
+
+    function next_map() {
+        return $this->as_map($this->next_array());
     }
 
     function unshift($line) {
-        if ($line === null || $line === false)
-            /* do nothing */;
-        else if ($this->lpos > 0) {
-            $this->lines[$this->lpos - 1] = $line;
-            --$this->lpos;
-        } else
-            array_unshift($this->lines, $line);
-    }
-
-    function shift() {
-        if ($this->lpos >= count($this->lines))
-            return false;
-        $line = $this->lines[$this->lpos];
-        ++$this->lpos;
-        if (is_array($line))
-            return self::reparse($line, $this->header);
-        // blank lines, comments
-        if ($line === "" || $line[0] === "\n" || $line[0] === "\r")
-            return null;
-        if ($this->comment_chars
-            && strpos($this->comment_chars, $line[0]) !== false) {
-            $this->comment_function && call_user_func($this->comment_function, $line);
-            return null;
+        if ($line !== null && $line !== false) {
+            if ($this->lpos > 0) {
+                $this->lines[$this->lpos - 1] = $line;
+                --$this->lpos;
+            } else
+                array_unshift($this->lines, $line);
         }
-        // split on type
-        $fn = $this->typefn;
-        return $this->$fn($line, $this->header);
     }
 
-    private function parse_guess($line, $header) {
+    private function parse_guess($line) {
         $pipe = $tab = $comma = $doublepipe = -1;
         if ($this->type & self::TYPE_BAR)
             $pipe = substr_count($line, "|");
@@ -132,24 +318,23 @@ class CsvParser {
             $this->set_type(self::TYPE_COMMA);
         $fn = $this->typefn;
         assert($fn !== "parse_guess");
-        return $this->$fn($line, $header);
+        return $this->$fn($line);
     }
 
-    function parse_comma($line, $header) {
-        $i = 0;
-        $a = array();
+    private function parse_comma($line) {
+        $a = [];
         $linelen = self::linelen($line);
         $pos = 0;
-        while ($pos != $linelen) {
-            if ($i && $line[$pos] === ",")
+        while ($pos !== $linelen) {
+            if ($line[$pos] === "," && !empty($a))
                 ++$pos;
             $bpos = $pos;
-            if ($pos != $linelen && $line[$pos] === "\"") {
+            if ($pos !== $linelen && $line[$pos] === "\"") {
                 while (1) {
                     $pos = strpos($line, "\"", $pos + 1);
                     if ($pos === false) {
                         $pos = $linelen;
-                        if ($this->lpos == count($this->lines))
+                        if ($this->lpos === count($this->lines))
                             break;
                         $line .= $this->lines[$this->lpos];
                         ++$this->lpos;
@@ -160,7 +345,7 @@ class CsvParser {
                         break;
                 }
                 $field = str_replace("\"\"", "\"", substr($line, $bpos + 1, $pos - $bpos - 1));
-                if ($pos != $linelen)
+                if ($pos !== $linelen)
                     ++$pos;
             } else {
                 $pos = strpos($line, ",", $pos);
@@ -168,90 +353,56 @@ class CsvParser {
                     $pos = $linelen;
                 $field = substr($line, $bpos, $pos - $bpos);
             }
-            if ($header && get_s($header, $i) !== "")
-                $a[$header[$i]] = $field;
-            else
-                $a[$i] = $field;
-            ++$i;
+            $a[] = $field;
         }
         return $a;
     }
 
-    function parse_bar($line, $header) {
-        $i = 0;
-        $a = array();
+    private function parse_bar($line) {
+        $a = [];
         $linelen = self::linelen($line);
         $pos = 0;
-        while ($pos != $linelen) {
+        while ($pos !== $linelen) {
             $bpos = $pos;
             $pos = strpos($line, "|", $pos);
             if ($pos === false)
                 $pos = $linelen;
-            $field = substr($line, $bpos, $pos - $bpos);
-            if ($header && get_s($header, $i) !== "")
-                $a[$header[$i]] = $field;
-            else
-                $a[$i] = $field;
-            ++$i;
-            if ($pos != $linelen && $line[$pos] === "|")
+            $a[] = substr($line, $bpos, $pos - $bpos);
+            if ($pos !== $linelen && $line[$pos] === "|")
                 ++$pos;
         }
         return $a;
     }
 
-    function parse_doublebar($line, $header) {
-        $i = 0;
-        $a = array();
+    private function parse_doublebar($line) {
+        $a = [];
         $linelen = self::linelen($line);
         $pos = 0;
-        while ($pos != $linelen) {
+        while ($pos !== $linelen) {
             $bpos = $pos;
             $pos = strpos($line, "||", $pos);
             if ($pos === false)
                 $pos = $linelen;
-            $field = substr($line, $bpos, $pos - $bpos);
-            if ($header && get_s($header, $i) !== "")
-                $a[$header[$i]] = $field;
-            else
-                $a[$i] = $field;
-            ++$i;
+            $a[] = substr($line, $bpos, $pos - $bpos);
             if ($pos + 1 <= $linelen && $line[$pos] === "|" && $line[$pos + 1] === "|")
                 $pos += 2;
         }
         return $a;
     }
 
-    function parse_tab($line, $header) {
-        $i = 0;
-        $a = array();
+    private function parse_tab($line, $header) {
+        $a = [];
         $linelen = self::linelen($line);
         $pos = 0;
-        while ($pos != $linelen) {
+        while ($pos !== $linelen) {
             $bpos = $pos;
             $pos = strpos($line, "\t", $pos);
             if ($pos === false)
                 $pos = $linelen;
             $field = substr($line, $bpos, $pos - $bpos);
-            if ($header && get_s($header, $i) !== "")
-                $a[$header[$i]] = $field;
-            else
-                $a[$i] = $field;
-            ++$i;
-            if ($pos != $linelen && $line[$pos] === "\t")
+            $a[] = $field;
+            if ($pos !== $linelen && $line[$pos] === "\t")
                 ++$pos;
-        }
-        return $a;
-    }
-
-    static function reparse($line, $header) {
-        $i = 0;
-        $a = array();
-        foreach ($line as $field) {
-            if ($header && get_s($header, $i) !== "")
-                $a[$header[$i]] = $field;
-            else
-                $a[$i] = $field;
-            ++$i;
         }
         return $a;
     }

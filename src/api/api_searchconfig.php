@@ -1,15 +1,15 @@
 <?php
 // api_searchconfig.php -- HotCRP search configuration API calls
-// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
 
 class SearchConfig_API {
     static function viewoptions(Contact $user, Qrequest $qreq) {
         $report = get($qreq, "report", "pl");
         if ($report !== "pl" && $report !== "pf")
-            return new JsonResult(400, "Parameter error.");
+            return new JsonResult(400, "Bad request.");
         if ($qreq->method() !== "GET" && $user->privChair) {
             if (!isset($qreq->display))
-                return new JsonResult(400, "Parameter error.");
+                return new JsonResult(400, "Bad request.");
             $base_display = "";
             if ($report === "pl")
                 $base_display = $user->conf->review_form()->default_display();
@@ -18,6 +18,7 @@ class SearchConfig_API {
                 $user->conf->save_setting("{$report}display_default", null);
             else
                 $user->conf->save_setting("{$report}display_default", 1, $display);
+            $user->save_session("{$report}display", null);
         }
         $s1 = new PaperSearch($user, get($qreq, "q", "NONE"));
         $l1 = new PaperList($s1, ["sort" => get($qreq, "sort", true), "report" => $report]);

@@ -1,6 +1,6 @@
 <?php
 // listactions/la_getallrevpref.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class GetAllRevpref_ListAction extends ListAction {
     function allow(Contact $user) {
@@ -19,7 +19,7 @@ class GetAllRevpref_ListAction extends ListAction {
                 $cflt = get($conflicts, $cid);
                 $tv = $prow->topicIds ? $prow->topic_interest_score($p) : 0;
                 if ($pref[0] !== 0 || $pref[1] !== null || $cflt || $tv) {
-                    $texts[$prow->paperId][] = array("paper" => $prow->paperId, "title" => $prow->title, "first" => $p->firstName, "last" => $p->lastName, "email" => $p->email,
+                    $texts[] = array("paper" => $prow->paperId, "title" => $prow->title, "first" => $p->firstName, "last" => $p->lastName, "email" => $p->email,
                                 "preference" => $pref[0] ? : "",
                                 "expertise" => unparse_expertise($pref[1]),
                                 "topic_score" => $tv ? : "",
@@ -38,7 +38,6 @@ class GetAllRevpref_ListAction extends ListAction {
             $headers[] = "topic_score";
         if ($has_conflict)
             $headers[] = "conflict";
-        return $user->conf->make_csvg("allprefs")->select($headers)
-            ->add($ssel->reorder($texts));
+        return $user->conf->make_csvg("allprefs")->select($headers)->add($texts);
     }
 }

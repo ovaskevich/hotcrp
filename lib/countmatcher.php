@@ -1,6 +1,6 @@
 <?php
 // countmatcher.php -- HotCRP helper class for textual comparators
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class CountMatcher {
     private $_countexpr;
@@ -38,9 +38,10 @@ class CountMatcher {
     static function compare($x, $compar, $y) {
         if (!is_int($compar))
             $compar = self::$opmap[$compar];
-        if ($x > $y)
+        $delta = $x - $y;
+        if ($delta > 0.000001)
             return ($compar & 4) !== 0;
-        else if ($x == $y)
+        else if ($delta > -0.000001)
             return ($compar & 2) !== 0;
         else
             return ($compar & 1) !== 0;
@@ -71,17 +72,24 @@ class CountMatcher {
         }
     }
     function test_explicit_zero() {
-        return $this->value == 0 && ($this->allowed & 2);
+        return $this->value === 0.0 && ($this->allowed & 2);
+    }
+    function compar() {
+        assert(!!$this->allowed);
+        return self::$oparray[$this->allowed];
+    }
+    function value() {
+        return $this->value;
     }
     function countexpr() {
         assert(!!$this->allowed);
         return self::$oparray[$this->allowed] . $this->value;
     }
     function simplified_nonnegative_countexpr() {
-        if ($this->value == 1 && $this->allowed === 6)
+        if ($this->value === 1.0 && $this->allowed === 6)
             return ">0";
-        else if (($this->value == 1 && $this->allowed === 1)
-                 || ($this->value == 0 && $this->allowed === 3))
+        else if (($this->value === 1.0 && $this->allowed === 1)
+                 || ($this->value === 0.0 && $this->allowed === 3))
             return "=0";
         else
             return $this->countexpr();

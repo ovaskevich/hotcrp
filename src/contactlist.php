@@ -1,6 +1,6 @@
 <?php
 // contactlist.php -- HotCRP helper class for producing lists of contacts
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ContactList {
 
@@ -154,11 +154,16 @@ class ContactList {
     }
 
     function _sortPapers($a, $b) {
-        if (!$a->paperIds != !$b->paperIds)
+        if (!$a->paperIds !== !$b->paperIds)
             return $a->paperIds ? -1 : 1;
-        $x = (int) $a->paperIds - (int) $b->paperIds;
-        $x = $x ? $x : strcmp($a->paperIds, $b->paperIds);
-        return $x ? $x : $this->_sortBase($a, $b);
+        $na = substr_count($a->paperIds, ",");
+        $nb = substr_count($b->paperIds, ",");
+        if ($na !== $nb)
+            return $na > $nb ? -1 : 1;
+        else if (($x = strnatcmp($a->paperIds, $b->paperIds)))
+            return $x;
+        else
+            return $this->_sortBase($a, $b);
     }
 
     function _sortScores($a, $b) {
@@ -202,8 +207,8 @@ class ContactList {
             if (($f = $this->conf->review_field($this->sortField))) {
                 $fieldId = $this->sortField;
                 $scoreMax = $this->scoreMax[$fieldId];
-                $scoresort = $this->conf->session("scoresort", "A");
-                if ($scoresort != "A" && $scoresort != "V" && $scoresort != "D")
+                $scoresort = $this->user->session("ulscoresort", "A");
+                if (!in_array($scoresort, ["A", "V", "D"], true))
                     $scoresort = "A";
                 Contact::$allow_nonexistent_properties = true;
                 foreach ($rows as $row) {
@@ -238,19 +243,19 @@ class ContactList {
         case self::FIELD_LOWTOPICS:
             return "Low-interest topics";
         case self::FIELD_REVIEWS:
-            return "<span class='hastitle' title='\"1/2\" means 1 complete review out of 2 assigned reviews'>Reviews</span>";
+            return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
         case self::FIELD_LEADS:
             return "Leads";
         case self::FIELD_SHEPHERDS:
             return "Shepherds";
         case self::FIELD_REVIEW_RATINGS:
-            return "<span class='hastitle' title='Ratings of reviews'>Rating</a>";
+            return '<span class="hastitle" title="Ratings of reviews">Rating</a>';
         case self::FIELD_SELECTOR:
             return "";
         case self::FIELD_PAPERS:
-            return "Papers";
+            return "Submissions";
         case self::FIELD_REVIEW_PAPERS:
-            return "Assigned papers";
+            return "Assigned submissions";
         case self::FIELD_TAGS:
             return "Tags";
         case self::FIELD_COLLABORATORS:
@@ -274,15 +279,17 @@ class ContactList {
                 $t = "[No name]";
             $t = '<span class="taghl">' . $t . '</span>';
             if ($this->user->privChair)
-                $t = "<a href=\"" . hoturl("profile", "u=" . urlencode($row->email) . $this->contactLinkArgs) . "\"" . ($row->disabled ? " class='uu'" : "") . ">$t</a>";
-            $role = $row->role_html();
-            if ($role !== "" && ($this->limit !== "pc" || ($row->roles & Contact::ROLE_PCLIKE) !== Contact::ROLE_PC))
-                $t .= " $role";
+                $t = "<a href=\"" . hoturl("profile", "u=" . urlencode($row->email) . $this->contactLinkArgs) . "\"" . ($row->is_disabled() ? ' class="uu"' : "") . ">$t</a>";
+            $roles = $row->viewable_pc_roles($this->user);
+            if ($roles === Contact::ROLE_PC && $this->limit === "pc")
+                $roles = 0;
+            if ($roles !== 0 && ($rolet = Contact::role_html_for($roles)))
+                $t .= " $rolet";
             if ($this->user->privChair && $row->email != $this->user->email)
                 $t .= " <a href=\"" . hoturl("index", "actas=" . urlencode($row->email)) . "\">"
                     . Ht::img("viewas.png", "[Act as]", array("title" => "Act as " . Text::name_text($row)))
                     . "</a>";
-            if ($row->disabled && $this->user->isPC)
+            if ($row->is_disabled() && $this->user->isPC)
                 $t .= ' <span class="hint">(disabled)</span>';
             return $t;
         case self::FIELD_EMAIL:
@@ -299,8 +306,6 @@ class ContactList {
         case self::FIELD_LASTVISIT:
             if (!$row->activity_at)
                 return "Never";
-            else if ($this->user->privChair)
-                return $this->conf->unparse_time_short($row->activity_at);
             else
                 return $this->conf->unparse_time_obscure($row->activity_at);
         case self::FIELD_SELECTOR:
@@ -318,7 +323,7 @@ class ContactList {
                 $nt = array_filter($topics, function ($i) { return $i > 0; });
             else
                 $nt = array_filter($topics, function ($i) { return $i < 0; });
-            return PaperInfo::unparse_topic_list_html($this->conf, $nt);
+            return $this->conf->topic_set()->unparse_list_html(array_keys($nt), $nt);
         case self::FIELD_REVIEWS:
             if (!$row->numReviews && !$row->numReviewsSubmitted)
                 return "";
@@ -349,7 +354,7 @@ class ContactList {
                 $a[] = $row->numBadRatings . " negative";
                 $b[] = "<a href=\"" . hoturl("search", "q=re:" . urlencode($row->email) . "+rate:bad") . "\">&minus;" . $row->numBadRatings . "</a>";
             }
-            return "<span class='hastitle' title='" . join(", ", $a) . "'>" . join(" ", $b) . "</span>";
+            return '<span class="hastitle" title="' . join(", ", $a) . '">' . join(" ", $b) . "</span>";
         case self::FIELD_PAPERS:
             if (!$row->paperIds)
                 return "";
@@ -419,9 +424,9 @@ class ContactList {
 
     function addScores($a) {
         if ($this->user->isPC) {
+            $uldisplay = $this->user->session("uldisplay", " tags overAllMerit ");
             foreach ($this->conf->all_review_fields() as $f)
-                if ($f->has_options
-                    && strpos(displayOptionsSet("uldisplay"), " {$f->id} ") !== false)
+                if ($f->has_options && strpos($uldisplay, " {$f->id} ") !== false)
                     array_push($a, $f->id);
             $this->scoreMax = array();
         }
@@ -485,7 +490,7 @@ class ContactList {
                 . "&nbsp; " . Ht::submit("modifygo", "Go")];
         }
 
-        return "  <tfoot class=\"pltable" . ($hascolors ? " pltable_colored" : "")
+        return "  <tfoot class=\"pltable" . ($hascolors ? " pltable-colored" : "")
             . "\">" . PaperList::render_footer_row(1, $ncol - 1,
                 "<b>Select people</b> (or <a class=\"ui js-select-all\" href=\"\">select all {$this->count}</a>), then&nbsp; ",
                 $lllgroups)
@@ -625,7 +630,7 @@ class ContactList {
         $queryOptions = array();
         if (str_starts_with($listname, "#")) {
             $queryOptions["where"] = "(u.contactTags like " . Dbl::utf8ci("'% " . sqlq_for_like(substr($listname, 1)) . "#%'") . ")";
-            $listquery = "pc";
+            $listquery = "pcadmin";
         }
 
         // get paper list
@@ -695,7 +700,7 @@ class ContactList {
                 } else
                     $trclass .= " " . $k;
             }
-            if ($row->disabled && $this->user->isPC)
+            if ($row->is_disabled() && $this->user->isPC)
                 $trclass .= " graytext";
             $this->count++;
             $ids[] = (int) $row->contactId;
@@ -722,7 +727,7 @@ class ContactList {
             }
 
             // Now the normal row
-            $t = "  <tr class=\"pl $trclass\">\n";
+            $t = "  <tr class=\"pl $trclass" . ($tt !== "" ? "" : " plnx") . "\">\n";
             $n = 0;
             foreach ($fieldDef as $fieldId => $fdef)
                 if ($fdef[1] == 1) {
@@ -740,14 +745,15 @@ class ContactList {
             $body .= $t . $tt;
         }
 
+        $uldisplay = $this->user->session("uldisplay", " tags overAllMerit ");
         $foldclasses = array();
         foreach (self::$folds as $k => $fold)
             if (get($this->have_folds, $fold) !== null) {
-                $this->have_folds[$fold] = strpos(displayOptionsSet("uldisplay"), " $fold ") !== false;
+                $this->have_folds[$fold] = strpos($uldisplay, " $fold ") !== false;
                 $foldclasses[] = "fold" . ($k + 1) . ($this->have_folds[$fold] ? "o" : "c");
             }
 
-        $x = "<table id=\"foldul\" class=\"pltable pltable_full plt_" . htmlspecialchars($listquery);
+        $x = "<table id=\"foldul\" class=\"pltable pltable-fullw";
         if ($foldclasses)
             $x .= " " . join(" ", $foldclasses);
         if ($foldclasses && $foldsession) {
@@ -800,10 +806,19 @@ class ContactList {
         if (key($fieldDef) == self::FIELD_SELECTOR)
             $x .= $this->footer($ncol, $hascolors);
 
-        $x .= "<tbody class=\"pltable" . ($hascolors ? " pltable_colored" : "");
+        $x .= "<tbody class=\"pltable" . ($hascolors ? " pltable-colored" : "");
         if ($this->user->privChair) {
-            $l = new SessionList("u/" . $listname, $ids, $listtitle ? : "Users",
-                                 hoturl_site_relative_raw("users", ["t" => $listname]));
+            $listlink = $listname;
+            if ($listlink === "pcadminx")
+                $listlink = "pcadmin";
+            if ($listtitle === "") {
+                if ($listlink === "pcadmin")
+                    $listtitle = "PC and admins";
+                else
+                    $listtitle = "Users";
+            }
+            $l = new SessionList("u/" . $listlink, $ids, $listtitle,
+                $this->conf->hoturl_site_relative_raw("users", ["t" => $listlink]));
             $x .= " has-hotlist\" data-hotlist=\"" . htmlspecialchars($l->info_string());
         }
         return $x . "\">" . $body . "</tbody></table>";

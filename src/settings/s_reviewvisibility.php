@@ -1,19 +1,19 @@
 <?php
 // src/settings/s_reviewvisibility.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ReviewVisibility_SettingParser extends SettingParser {
     static function render(SettingValues $sv) {
-        $opts = array(Conf::AUSEEREV_NO => "No, unless authors can edit responses",
-                      Conf::AUSEEREV_YES => "Yes");
-        if ($sv->newv("au_seerev") == Conf::AUSEEREV_UNLESSINCOMPLETE
+        $opts = [Conf::AUSEEREV_NO => "No, unless authors can edit responses",
+                 Conf::AUSEEREV_YES => "Yes"];
+        if ($sv->curv("au_seerev") == Conf::AUSEEREV_UNLESSINCOMPLETE
             && !$sv->conf->opt("allow_auseerev_unlessincomplete"))
             $sv->conf->save_setting("opt.allow_auseerev_unlessincomplete", 1);
         if ($sv->conf->opt("allow_auseerev_unlessincomplete"))
-            $opts[Conf::AUSEEREV_UNLESSINCOMPLETE] = "Yes, after completing any assigned reviews for other papers";
-        $opts[Conf::AUSEEREV_TAGS] = "Yes, for papers with any of these tags:&nbsp; " . $sv->render_entry("tag_au_seerev");
+            $opts[Conf::AUSEEREV_UNLESSINCOMPLETE] = "Yes, after completing any assigned reviews for other submissions";
+        $opts[Conf::AUSEEREV_TAGS] = "<label for=\"au_seerev_" . Conf::AUSEEREV_TAGS . "\">Yes, for submissions with any of these tags:</label>&nbsp; " . $sv->render_entry("tag_au_seerev") . $sv->render_messages_at("tag_au_seerev");
 
-        $hint = '<p class="settingtext f-h if-response-active';
+        $hint = '<div class="f-hx if-response-active';
         if (!$sv->conf->setting("resp_active"))
             $hint .= ' hidden';
         $hint .= '">';
@@ -21,14 +21,14 @@ class ReviewVisibility_SettingParser extends SettingParser {
             $hint .= 'Currently, <strong>some authors can edit responses and therefore see reviews</strong> independent of this setting.';
         else
             $hint .= 'Authors who can edit responses can see reviews independent of this setting.';
-        $hint .= '</p>';
+        $hint .= '</div>';
 
         $sv->echo_radio_table("au_seerev", $opts,
-            'Can <strong>authors see reviews and author-visible comments</strong> for their papers?' . $hint);
+            'Can <strong>authors see reviews and author-visible comments</strong> for their submissions?' . $hint);
         echo Ht::hidden("has_tag_au_seerev", 1);
         Ht::stash_script('$("#tag_au_seerev").on("input", function () { $("#au_seerev_' . Conf::AUSEEREV_TAGS . '").click(); })');
 
-        echo '<div class="settings-g has-fold fold', $sv->newv("cmt_author") ? "o" : "c", '">';
+        echo '<div class="settings-g has-fold fold', $sv->curv("cmt_author") ? "o" : "c", '">';
         $sv->echo_checkbox("cmt_author", "Authors can <strong>exchange comments</strong> with reviewers when reviews are visible", ["class" => "uich js-foldup", "hint_class" => "fx"], "Reviewers’ comments will be identified by “Reviewer A”, “Reviewer B”, etc.");
         echo "</div>\n";
     }
@@ -49,7 +49,7 @@ class ReviewVisibility_SettingParser extends SettingParser {
                 $ct[$ti[0]] = true;
             foreach (explode(" ", $sv->newv("tag_au_seerev")) as $t)
                 if ($t !== "" && !isset($ct[$t])) {
-                    $sv->warning_at("tag_au_seerev", "PC members can change the tag “" . htmlspecialchars($t) . "”, which affects whether authors can see reviews. Such tags should usually be <a href=\"" . hoturl("settings", "group=tags") . "\">read-only</a>.");
+                    $sv->warning_at("tag_au_seerev", "PC members can change the tag “" . htmlspecialchars($t) . "”, which affects whether authors can see reviews. Such tags should usually be " . $sv->setting_link("read-only", "tag_chair") . ".");
                     $sv->warning_at("tag_chair");
                 }
         }

@@ -8,6 +8,12 @@
     "&": {
         "stop": true
     },
+    "at": {
+        "stop": true
+    },
+    "for": {
+        "stop": true
+    },
     "of": {
         "stop": true
     },
@@ -164,6 +170,9 @@
     "capital": {
         "weak": true
     },
+    "catholic": {
+        "weak": true
+    },
     "center": {
         "weak": true
     },
@@ -174,6 +183,9 @@
         "weak": true
     },
     "chair": {
+        "weak": true
+    },
+    "com": {
         "weak": true
     },
     "commission": {
@@ -216,6 +228,9 @@
         "weak": true
     },
     "ecole": {
+        "weak": true
+    },
+    "economics": {
         "weak": true
     },
     "electronics": {
@@ -291,6 +306,9 @@
     "management": {
         "weak": true
     },
+    "mathematics": {
+        "weak": true
+    },
     "mobile": {
         "weak": true
     },
@@ -309,6 +327,9 @@
     "north": {
         "weak": true
     },
+    "org": {
+        "weak": true
+    },
     "phd": {
         "weak": true
     },
@@ -316,6 +337,9 @@
         "weak": true
     },
     "polytechnic": {
+        "weak": true
+    },
+    "polytechnique": {
         "weak": true
     },
     "project": {
@@ -439,6 +463,15 @@
     "berkeley": {
         "nameish": false
     },
+    "berlin": {
+        "weak": true
+    },
+    "boston": {
+        "sync": "college"
+    },
+    "birmingham": {
+        "sync": "alabama"
+    },
     "cal": {
         "weak": true,
         "alternate": [
@@ -469,6 +502,10 @@
         "alternate": [{"word": "ncsu", "if": "north state university"}],
         "sync": "state"
     },
+    "chicago": {
+        "weak": true,
+        "sync": "illinois"
+    },
     "china": {
         "weak": true, "nameish": true,
         "alternate": [{"word": "ustc", "if": "university science technology"}]
@@ -482,6 +519,9 @@
     "colorado": {
         "weak": true
     },
+    "columbia": {
+        "sync": "british"
+    },
     "csu": {
         "alternate": ["california state university", "cal state"]
     },
@@ -493,6 +533,9 @@
     },
     "data61": {
         "nameish": false
+    },
+    "delhi": {
+        "weak": true
     },
     "diego": {
         "nameish": true,
@@ -567,6 +610,11 @@
         "alternate": ["indian institute technology"]
     },
     "illinois": {
+        "weak": true,
+        "alternate": [{"word": "uiuc", "if": "university"}],
+        "sync": "chicago"
+    },
+    "india": {
         "weak": true
     },
     "indian": {
@@ -589,7 +637,11 @@
         "nameish": false
     },
     "irvine": {
-        "alternate": [{"word": "uci", "if": "university california"}]
+        "alternate": [{"word": "uci", "if": "university california"}],
+        "nameish": true
+    },
+    "israel": {
+        "weak": true
     },
     "italy": {
         "weak": true
@@ -598,11 +650,12 @@
         "alternate": ["indiana university"]
     },
     "jiao": {
-        "alternate": [{"word": "jiaotong", "if": "tong"}]
+        "alternate": [{"word": "jiaotong", "if": "tong"}],
+        "sync": ["beijing", "shanghai"]
     },
     "jiaotong": {
         "alternate": ["jiao tong"],
-        "sync": "beijing"
+        "sync": ["beijing", "shanghai"]
     },
     "kaist": {
         "alternate": ["korea advanced institute science technology"]
@@ -622,6 +675,9 @@
     "london": {
         "weak": true,
         "alternate": [{"word": "ucl", "if": "university college"}]
+    },
+    "maryland": {
+        "sync": ["loyola"]
     },
     "massachusetts": {
         "weak": true,
@@ -677,6 +733,9 @@
     },
     "rensselaer": {
         "alternate": [{"word": "rpi", "if": "polytechnic institute"}]
+    },
+    "rio": {
+        "weak": true
     },
     "rpi": {
         "alternate": ["rensselaer polytechnic institute"]
@@ -760,11 +819,12 @@
     "uhk": {
         "alternate": ["university hong kong"]
     },
+    "uic": {
+        "alternate": ["university illinois chicago"]
+    },
     "uiuc": {
-        "alternate": [
-            "university illinois urbana champaign",
-            {"word": "university illinois", "if_not": "chicago"}
-        ]
+        "alternate": ["university illinois urbana champaign", "university illinois"],
+        "sync": "chicago"
     },
     "umass": {
         "alternate": ["university massachusetts"]

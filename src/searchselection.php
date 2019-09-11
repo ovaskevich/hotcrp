@@ -1,6 +1,6 @@
 <?php
 // searchselection.php -- HotCRP helper class for paper selections
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class SearchSelection {
     private $sel = array();
@@ -75,6 +75,22 @@ class SearchSelection {
         $this->selmap = null;
     }
 
+    function order_compare($a, $b) {
+        if ($a instanceof PaperInfo)
+            $a = $a->paperId;
+        if ($b instanceof PaperInfo)
+            $b = $b->paperId;
+        if ($this->selmap === null)
+            $this->selection_map();
+        $as = isset($this->selmap[$a]) ? $this->selmap[$a] : PHP_INT_MAX;
+        $bs = isset($this->selmap[$b]) ? $this->selmap[$b] : PHP_INT_MAX;
+        if ($as === $bs) {
+            return $a < $b ? -1 : ($a == $b ? 0 : 1);
+        } else {
+            return $as < $bs ? -1 : 1;
+        }
+    }
+
     function equals_search($search) {
         if ($search instanceof PaperSearch)
             $search = $search->paper_ids();
@@ -92,13 +108,5 @@ class SearchSelection {
 
     function request_value() {
         return join(" ", $this->sel);
-    }
-
-    function reorder($a) {
-        $ax = array();
-        foreach ($this->sel as $pid)
-            if (array_key_exists($pid, $a))
-                $ax[$pid] = $a[$pid];
-        return $ax;
     }
 }

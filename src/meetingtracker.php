@@ -1,6 +1,6 @@
 <?php
 // meetingtracker.php -- HotCRP meeting tracker support
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class MeetingTracker {
     static function lookup(Conf $conf) {
@@ -14,69 +14,50 @@ class MeetingTracker {
         }
     }
 
-    static private function next_position_at(Conf $conf) {
-        $tracker = $conf->setting_json("tracker");
+    static function expand($tracker) {
+        global $Now;
+        if (isset($tracker->ts)) {
+            $ts = [];
+            foreach ($tracker->ts as $tr)
+                if ($tr->update_at >= $Now - 150)
+                    $ts[] = $tr;
+            return $ts;
+        } else if ($tracker->trackerid) {
+            return [$tracker];
+        } else {
+            return [];
+        }
+    }
+
+    static function tracker_status($tracker) {
+        if ($tracker->trackerid)
+            return $tracker->trackerid . "@" . $tracker->position_at;
+        else
+            return "off";
+    }
+
+    static private function tracker_next_position($tracker) {
         return max(microtime(true), $tracker ? $tracker->update_at + 0.2 : 0);
     }
 
-    static function is_paper_tracked(PaperInfo $prow) {
+    static function can_view_tracker_at(Contact $user, PaperInfo $prow) {
         $tracker = self::lookup($prow->conf);
-        return $tracker && $tracker->trackerid
-            && array_search($prow->paperId, $tracker->ids) !== false;
-    }
-
-    static function clear(Conf $conf) {
-        if ($conf->setting("tracker")) {
-            $when = self::next_position_at($conf);
-            $t = ["trackerid" => false, "position_at" => $when, "update_at" => $when];
-            $conf->save_setting("tracker", 0, (object) $t);
-            self::contact_tracker_comet($conf);
+        if ($tracker->trackerid) {
+            foreach (self::expand($tracker) as $tr)
+                if (array_search($prow->paperId, $tr->ids) !== false
+                    && $user->can_view_tracker($tr))
+                    return true;
         }
+        return false;
     }
 
-    static private function update(Contact $user, SessionList $list, $trackerid, $position) {
-        global $Now;
-        if (preg_match('/\A[1-9][0-9]*\z/', $trackerid))
-            $trackerid = (int) $trackerid;
-
-        // Default: start now, position now.
-        $start_at = $Now;
-        $position_at = 0;
-
-        // If update is to same list as old tracker, keep `start_at`.
-        // If update is off-list, keep old position.
-        // If update is to same position as old tracker, keep `position_at`.
-        $old_tracker = self::lookup($user->conf);
-        if ($old_tracker->trackerid == $trackerid) {
-            $start_at = $old_tracker->start_at;
-            if ($old_tracker->listid === $list->listid) {
-                if ($position === false)
-                    $position = $old_tracker->position;
-                if ($old_tracker->position == $position)
-                    $position_at = $old_tracker->position_at;
-            }
-        }
-
-        // Otherwise, choose a `position_at` definitely in the future.
-        if (!$position_at)
-            $position_at = self::next_position_at($user->conf);
-
-        ensure_session();
-        $tracker = (object) array("trackerid" => $trackerid,
-                                  "listid" => $list->listid,
-                                  "ids" => $list->ids,
-                                  "url" => $list->full_site_relative_url(),
-                                  "description" => $list->description,
-                                  "start_at" => $start_at,
-                                  "position_at" => $position_at,
-                                  "update_at" => max($Now, $position_at),
-                                  "owner" => $user->contactId,
-                                  "sessionid" => session_id(),
-                                  "position" => $position);
-        $user->conf->save_setting("tracker", 1, $tracker);
-        self::contact_tracker_comet($user->conf);
-        return $tracker;
+    static function session_owns_tracker(Conf $conf) {
+        foreach (self::expand(self::lookup($conf)) as $tr)
+            if ($tr->sessionid === session_id())
+                return true;
+        return false;
     }
+
 
     static function contact_tracker_comet(Conf $conf, $pids = null) {
         global $Now;
@@ -87,7 +68,7 @@ class MeetingTracker {
             return;
 
         // calculate status
-        $url = Navigation::site_absolute();
+        $url = Navigation::base_absolute();
         $tracker = self::lookup($conf);
 
         // first drop notification json in trackerCometUpdateDirectory
@@ -152,97 +133,16 @@ class MeetingTracker {
         fclose($stream);
     }
 
-    static private function status_papers($status, $tracker, Contact $acct) {
-        $pids = array_slice($tracker->ids, $tracker->position, 3);
 
-        $pc_conflicts = $acct->privChair || $acct->tracker_kiosk_state;
-        $col = $j = "";
-        if ($pc_conflicts) {
-            $col = ", allconfs.conflictIds";
-            $j = "left join (select paperId, group_concat(contactId) conflictIds from PaperConflict where paperId in (" . join(",", $pids) . ") group by paperId) allconfs on (allconfs.paperId=p.paperId)\n\t\t";
-            $pcm = $acct->conf->pc_members();
+    static function clear(Conf $conf) {
+        if ($conf->setting("tracker")) {
+            $when = self::tracker_next_position($conf->setting_json("tracker"));
+            $t = ["trackerid" => false, "position_at" => $when, "update_at" => $when];
+            $conf->save_setting("tracker", 0, (object) $t);
+            self::contact_tracker_comet($conf);
         }
-
-        $result = $acct->conf->qe_raw("select p.paperId, p.title, p.paperFormat, p.leadContactId, p.managerContactId, " . PaperInfo::my_review_permissions_sql("r.") . " myReviewPermissions, conf.conflictType{$col}
-            from Paper p
-            left join PaperReview r on (r.paperId=p.paperId and " . ($acct->contactId ? "r.contactId=$acct->contactId" : "false") . ")
-            left join PaperConflict conf on (conf.paperId=p.paperId and " . ($acct->contactId ? "conf.contactId=$acct->contactId" : "false") . ")
-            ${j}where p.paperId in (" . join(",", $pids) . ")
-            group by p.paperId");
-
-        $papers = array();
-        while (($row = PaperInfo::fetch($result, $acct))) {
-            $papers[$row->paperId] = $p = (object) array();
-            if (($acct->privChair
-                 || !$row->conflictType
-                 || !get($status, "hide_conflicts"))
-                && $acct->tracker_kiosk_state != 1) {
-                $p->pid = (int) $row->paperId;
-                $p->title = $row->title;
-                if (($format = $row->title_format()))
-                    $p->format = $format;
-            }
-            if ($acct->contactId > 0) {
-                if ($row->managerContactId == $acct->contactId)
-                    $p->is_manager = true;
-                if ($row->has_reviewer($acct))
-                    $p->is_reviewer = true;
-                if ($row->conflictType)
-                    $p->is_conflict = true;
-                if ($row->leadContactId == $acct->contactId)
-                    $p->is_lead = true;
-            }
-            if ($pc_conflicts) {
-                $p->pc_conflicts = array();
-                foreach (explode(",", (string) $row->conflictIds) as $cid)
-                    if (($pc = get($pcm, $cid)))
-                        $p->pc_conflicts[$pc->sort_position] = (object) array("email" => $pc->email, "name" => Text::name_text($pc));
-                ksort($p->pc_conflicts);
-                $p->pc_conflicts = array_values($p->pc_conflicts);
-            }
-        }
-
-        Dbl::free($result);
-        $status->papers = array();
-        foreach ($pids as $pid)
-            $status->papers[] = $papers[$pid];
     }
 
-    static function info_for(Contact $acct) {
-        global $Now;
-        $tracker = self::lookup($acct->conf);
-        if (!$tracker->trackerid || !$acct->can_view_tracker())
-            return false;
-        if (($status = $acct->conf->session("tracker"))
-            && $status->trackerid == $tracker->trackerid
-            && $status->position == $tracker->position
-            && $status->calculated_at >= $Now - 30
-            && !$acct->is_actas_user())
-            return $status;
-        $status = (object) array("trackerid" => $tracker->trackerid,
-                                 "listid" => $tracker->listid,
-                                 "position" => $tracker->position,
-                                 "start_at" => $tracker->start_at,
-                                 "position_at" => $tracker->position_at,
-                                 "url" => $tracker->url,
-                                 "calculated_at" => $Now);
-        if ($acct->privChair)
-            $status->listinfo = json_encode_browser(["listid" => $tracker->listid, "ids" => SessionList::encode_ids($tracker->ids), "description" => $tracker->description, "url" => $tracker->url]);
-        if ($acct->conf->opt("trackerHideConflicts"))
-            $status->hide_conflicts = true;
-        if ($status->position !== false)
-            self::status_papers($status, $tracker, $acct);
-        if (!$acct->is_actas_user() && false)
-            $acct->conf->save_session("tracker", $status);
-        return $status;
-    }
-
-    static function tracker_status($tracker) {
-        if ($tracker->trackerid)
-            return $tracker->trackerid . "@" . $tracker->position_at;
-        else
-            return "off";
-    }
 
     static function trackerstatus_api(Contact $user, $qreq = null, $prow = null) {
         $tracker = self::lookup($user->conf);
@@ -251,33 +151,547 @@ class MeetingTracker {
                    "tracker_status_at" => $tracker->position_at]);
     }
 
+    static private function tracker_search($trackerid, $trs) {
+        foreach ($trs as $i => $tr) {
+            if ($tr->trackerid === $trackerid)
+                return $i;
+        }
+        return false;
+    }
+
+    static private function compute_xlist_admin_perm(Conf $conf, $ids) {
+        $tags = $perms = [];
+        foreach ($conf->track_tags() as $tag) {
+            if (($perm = $conf->track_permission($tag, Track::ADMIN))) {
+                $tags[] = $tag;
+                $perms[strtolower($tag)] = $perm;
+            }
+        }
+        $result = $conf->qe("select (select group_concat(tag) from PaperTag where paperId=Paper.paperId and tag?a) tags from Paper where paperId?a", $tags, $ids);
+        $activeperms = array_values(array_unique($perms));
+        while (($row = $result->fetch_row())) {
+            $thisperms = [];
+            foreach (explode(",", (string) $row[0]) as $tag) {
+                if ($tag !== "")
+                    $thisperms[] = $perms[strtolower($tag)];
+            }
+            $activeperms = array_intersect($activeperms, $thisperms);
+            if (empty($activeperms))
+                break;
+        }
+        Dbl::free($result);
+        return $activeperms;
+    }
+
+    static private function check_tracker_admin_perm(Contact $user, $admin_perm) {
+        if (!empty($admin_perm)) {
+            foreach ($admin_perm as $perm)
+                if ($user->has_permission($perm))
+                    return true;
+        }
+        return false;
+    }
+
+    static private function compute_default_visibility(Contact $user, $admin_perm) {
+        foreach ($user->conf->track_tags() as $tag)
+            if (in_array($user->conf->track_permission($tag, Track::ADMIN), $admin_perm)) {
+                foreach ([Track::VIEW, Track::VIEWREV, Track::ASSREV] as $p)
+                    if (($perm = $user->conf->track_permission($tag, $p))
+                        && $perm !== "+none"
+                        && $user->has_permission($perm))
+                        return $perm;
+            }
+        return "";
+    }
+
+    static private function tracker_new(Contact $user, $trackerid, $xlist,
+                                        $start_at, $position, $position_at) {
+        global $Now;
+        if ($xlist instanceof SessionList)
+            $url = $xlist->full_site_relative_url();
+        else
+            $url = $xlist->url;
+        return (object) [
+            "trackerid" => $trackerid,
+            "listid" => $xlist->listid,
+            "ids" => $xlist->ids,
+            "url" => $url,
+            "description" => $xlist->description,
+            "start_at" => $start_at,
+            "position_at" => $position_at,
+            "update_at" => max($Now, $position_at),
+            "owner" => $user->contactId,
+            "sessionid" => session_id(),
+            "position" => $position
+        ];
+    }
+
+    static private function tracker_save(Conf $conf, $trs, $tracker, $position_at) {
+        global $Now;
+        if (empty($trs)) {
+            $tracker = (object) [
+                "trackerid" => false,
+                "position_at" => $position_at,
+                "update_at" => $position_at
+            ];
+        } else if (count($trs) === 1
+                   && (!$tracker->trackerid
+                       || ($trs[0]->trackerid === $tracker->trackerid
+                           && $trs[0]->position_at === $position_at))) {
+            $tracker = $trs[0];
+        } else {
+            $tracker = (object) [
+                "trackerid" => $tracker->trackerid,
+                "position_at" => $position_at,
+                "update_at" => max($Now, $position_at),
+                "ts" => $trs
+            ];
+        }
+        $conf->save_setting("tracker", 1, $tracker);
+        self::contact_tracker_comet($conf);
+    }
+
     static function track_api(Contact $user, $qreq) {
-        if (!$user->privChair || !$qreq->post_ok())
-            json_exit(["ok" => false]);
-        // argument: IDENTIFIER LISTNUM [POSITION] -OR- stop
+        // NB: This is a special API function; it should either return nothing
+        // (in which case the result of a `status` api call is returned),
+        // or call `json_exit` on error.
+        global $Now;
+
+        // track="IDENTIFIER POSITION" or track="IDENTIFIER stop" or track=stop
+        if (!$user->is_track_manager() || !$qreq->post_ok())
+            json_exit(403, "Permission error.");
+
         if ($qreq->track === "stop") {
-            self::clear($user->conf);
+            if ($user->privChair)
+                self::clear($user->conf);
             return;
         }
-        // check tracker_start_at to ignore concurrent updates
+
+        // check arguments
+        $args = preg_split('/\s+/', (string) $qreq->track);
+        if (empty($args)
+            || $args[0] === ""
+            || !ctype_alnum($args[0])
+            || !$qreq["hotlist-info"]
+            || !($xlist = SessionList::decode_info_string($qreq["hotlist-info"]))
+            || !str_starts_with($xlist->listid, "p/")) {
+            json_exit(400, "Parameter error.");
+        }
+
+        // look up trackers
         $tracker = self::lookup($user->conf);
-        if ($tracker && $qreq->tracker_start_at) {
-            $time = $tracker->position_at;
-            if (isset($tracker->start_at))
-                $time = $tracker->start_at;
-            if ($time > $qreq->tracker_start_at)
-                return;
+        $trs = self::expand($tracker);
+
+        // look up tracker id
+        $trackerid = $args[0];
+        if (ctype_digit($trackerid)) {
+            $trackerid = intval($trackerid);
+        } else if ($trackerid === "new") {
+            do {
+                $trackerid = mt_rand(1, 9999999);
+            } while (self::tracker_search($trackerid, $trs) !== false);
         }
-        // actually track
-        $args = preg_split('/\s+/', $qreq->track);
-        $xlist = null;
-        if ($qreq["hotlist-info"])
-            $xlist = SessionList::decode_info_string($qreq["hotlist-info"]);
-        if ($xlist && str_starts_with($xlist->listid, "p/")) {
+
+        // find matching tracker
+        $match = self::tracker_search($trackerid, $trs);
+
+        // use tracker_start_at to avoid recreating a tracker that was
+        // shut in another window
+        if ($qreq->tracker_start_at
+            && ($match === false
+                ? $qreq->tracker_start_at < $tracker->position_at
+                : $qreq->tracker_start_at < $trs[$match]->start_at)) {
+            return;
+        }
+
+        // check admin perms
+        if (!$user->privChair
+            && $match !== false
+            && !self::check_tracker_admin_perm($user, get($trs[$match], "admin_perm")))
+            json_exit(403, "Permission error: You can’t administer that tracker.");
+
+        $admin_perm = null;
+        if ($user->conf->check_track_admin_sensitivity()) {
+            if ($match !== false && $xlist->ids == $trs[$match]->ids)
+                $admin_perm = get($trs[$match], "admin_perm");
+            else {
+                $admin_perm = self::compute_xlist_admin_perm($user->conf, $xlist->ids);
+                if (!$user->privChair
+                    && !self::check_tracker_admin_perm($user, $admin_perm)) {
+                    if ($match === false)
+                        json_exit(403, "Permission error: You can’t administer all the submissions on that list.");
+                    else
+                        $xlist = $trs[$match];
+                }
+            }
+        }
+
+        // update tracker
+        $position = false;
+        $i = count($args) === 3 ? 2 : 1;
+        if (count($args) >= $i && isset($args[$i])) {
+            if (ctype_digit($args[$i]))
+                $position = array_search((int) $args[$i], $xlist->ids);
+            else if ($args[$i] === "stop")
+                $position = "stop";
+        }
+
+        $new_trackerid = false;
+        $position_at = self::tracker_next_position($tracker);
+        if ($position !== "stop") {
+            // Default: start now, position now.
+            // If update is to same list as old tracker, keep `start_at`.
+            // If update is off-list, keep old position.
+            // If update is to same position as old tracker, keep `position_at`.
+            if ($match !== false) {
+                $start_at = $trs[$match]->start_at;
+                if ($trs[$match]->listid !== $xlist->listid
+                    || $position === false)
+                    $position = $trs[$match]->position;
+                if ($trs[$match]->position == $position)
+                    $position_at = $trs[$match]->position_at;
+            } else
+                $start_at = $Now;
+
+            ensure_session();
+            $tr = self::tracker_new($user, $trackerid, $xlist, $start_at, $position, $position_at);
+            if ($match !== false) {
+                foreach (["name", "visibility", "logo"] as $k)
+                    if (isset($trs[$match]->$k))
+                        $tr->$k = $trs[$match]->$k;
+            }
+            if ($admin_perm)
+                $tr->admin_perm = $admin_perm;
+
+            if ($match === false) {
+                $trs[] = $tr;
+                $new_trackerid = $trackerid;
+            } else {
+                $trs[$match] = $tr;
+            }
+        } else if ($match !== false) {
+            array_splice($trs, $match, 1);
+        }
+
+        if (empty($trs) && !$tracker->trackerid)
+            return;
+
+        self::tracker_save($user->conf, $trs, $tracker, $position_at);
+        if ($new_trackerid !== false)
+            $qreq->set_annex("new_trackerid", $new_trackerid);
+    }
+
+    static function trackerconfig_api(Contact $user, $qreq) {
+        global $Now;
+
+        if (!$user->is_track_manager() || !$qreq->post_ok())
+            json_exit(403, "Permission error.");
+
+        $tracker = self::lookup($user->conf);
+        $trs = self::expand($tracker);
+        $position_at = self::tracker_next_position($tracker);
+        $errf = $error = [];
+        $changed = false;
+        $new_trackerid = false;
+        ensure_session();
+
+        for ($i = 1; isset($qreq["tr{$i}-id"]); ++$i) {
+            // Parse arguments
+            $trackerid = $qreq["tr{$i}-id"];
+            if (ctype_digit($trackerid))
+                $trackerid = intval($trackerid);
+            $name = trim($qreq["tr{$i}-name"]);
+            $logo = trim($qreq["tr{$i}-logo"]);
+            if ($logo === "☞")
+                $logo = "";
+
+            $vis = trim($qreq["tr{$i}-vis"]);
+            if ($vis !== ""
+                && ($vis[0] === "+" || $vis[0] === "-")
+                && !isset($qreq["tr{$i}-vistype"])) {
+                $vistype = $vis[0];
+                $vis = ltrim(substr($vis, 1));
+            } else
+                $vistype = trim($qreq["tr{$i}-vistype"]);
+            if ($vistype === "+" || $vistype === "-") {
+                if ($vis !== "" && str_starts_with($vis, "#"))
+                    $vis = substr($vis, 1);
+                if (strcasecmp($vis, "pc") === 0)
+                    $vistype = $vis = "";
+                if ($vis !== "" && !$user->conf->pc_tag_exists($vis)) {
+                    $errf["tr{$i}-vis"] = true;
+                    $error[] = "A PC tag is expected here.";
+                }
+                $vis = $vistype . $vis;
+            } else
+                $vis = "";
+            if ($vis !== ""
+                && !$user->privChair
+                && !$user->has_permission($vis)) {
+                $errf["tr{$i}-vis"] = true;
+                $error[] = "You aren’t allowed to configure a tracker that you can’t see. Try “Whole PC”.";
+            }
+
+            $xlist = $admin_perm = null;
+            if ($qreq["tr{$i}-listinfo"]) {
+                $xlist = SessionList::decode_info_string($qreq["tr{$i}-listinfo"]);
+                if ($xlist
+                    && $user->conf->check_track_admin_sensitivity())
+                    $admin_perm = self::compute_xlist_admin_perm($user->conf, $xlist->ids);
+            }
+
+            $p = trim($qreq["tr{$i}-p"]);
+            if ($p !== "" && !ctype_digit($p)) {
+                $errf["tr{$i}-p"] = true;
+                $error[] = "Bad paper number.";
+            }
             $position = false;
-            if (count($args) >= 3 && ctype_digit($args[2]))
-                $position = array_search((int) $args[2], $xlist->ids);
-            self::update($user, $xlist, $args[0], $position);
+            if ($p !== "" && $xlist)
+                $position = array_search((int) $p, $xlist->ids);
+
+            $stop = $qreq->stopall || !!$qreq["tr{$i}-stop"];
+
+            // Save tracker
+            if ($trackerid === "new") {
+                if ($stop) {
+                    /* ignore */
+                } else if (!$xlist || !str_starts_with($xlist->listid, "p/")) {
+                    $errf["tr{$i}-name"] = true;
+                    $error[] = "Internal error (xlist).";
+                } else if (!$user->privChair
+                           && !self::check_tracker_admin_perm($user, $admin_perm)) {
+                    $errf["tr{$i}-p"] = true;
+                    $my_tracks = [];
+                    foreach ($user->conf->track_tags() as $tag)
+                        if (($perm = $user->conf->track_permission($tag, Track::ADMIN))
+                            && $user->has_permission($perm))
+                            $my_tracks[] = "#{$tag}";
+                    $error[] = "You can’t start a tracker on this list because you don’t administer all of its submissions. (You administer " . pluralx($my_tracks, "track") . " " . commajoin($my_tracks) . ".)";
+                } else {
+                    do {
+                        $new_trackerid = mt_rand(1, 9999999);
+                    } while (self::tracker_search($new_trackerid, $trs) !== false);
+
+                    $tr = self::tracker_new($user, $new_trackerid, $xlist, $Now, $position, $position_at);
+                    if ($name !== "")
+                        $tr->name = $name;
+                    if ($vis === "" && $admin_perm && count($admin_perm) === 1)
+                        $vis = self::compute_default_visibility($user, $admin_perm);
+                    if ($vis !== "")
+                        $tr->visibility = $vis;
+                    if ($admin_perm)
+                        $tr->admin_perm = $admin_perm;
+                    if ($logo !== "")
+                        $tr->logo = $logo;
+                    $trs[] = $tr;
+                    $changed = true;
+                }
+            } else if (($match = self::tracker_search($trackerid, $trs)) !== false) {
+                $tr = $trs[$match];
+                if (!isset($qreq["tr{$i}-name"]))
+                    $name = (string) get($tr, "name");
+                if (!isset($qreq["tr{$i}-vis"]))
+                    $vis = (string) get($tr, "visibility");
+                if (!isset($qreq["tr{$i}-logo"]))
+                    $logo = (string) get($tr, "logo");
+                if ($name === (string) get($tr, "name")
+                    && $vis === (string) get($tr, "visibility")
+                    && $logo === (string) get($tr, "logo")
+                    && !$stop) {
+                    /* do nothing */
+                } else if (!$user->privChair
+                           && !self::check_tracker_admin_perm($user, get($tr, "admin_perm"))) {
+                    if ($qreq["tr{$i}-changed"]) {
+                        $errf["tr{$i}-name"] = true;
+                        $error[] = "You can’t administer that tracker.";
+                    }
+                } else {
+                    foreach (["name" => $name, "visibility" => $vis, "logo" => $logo] as $k => $v) {
+                        if ($v !== "")
+                            $tr->$k = $v;
+                        else
+                            unset($tr->$k);
+                    }
+
+                    if ($stop) {
+                        array_splice($trs, $match, 1);
+                    }
+
+                    $changed = true;
+                }
+            } else {
+                if (!$stop && $qreq["tr{$i}-changed"]) {
+                    $errf["tr{$i}-name"] = true;
+                    $error[] = "This tracker no longer exists.";
+                }
+            }
         }
+
+        if (empty($errf)) {
+            if ($changed)
+                self::tracker_save($user->conf, $trs, $tracker, $position_at);
+            $j = (object) ["ok" => true];
+            if ($new_trackerid !== false)
+                $j->new_trackerid = $new_trackerid;
+            self::my_deadlines($j, $user);
+            return $j;
+        } else {
+            json_exit(400, ["ok" => false, "errf" => $errf, "error" => $error]);
+        }
+    }
+
+
+    static private function trinfo($tr, Contact $user) {
+        global $Now;
+        $ti = (object) [
+            "trackerid" => $tr->trackerid,
+            "listid" => $tr->listid,
+            "position" => $tr->position,
+            "start_at" => $tr->start_at,
+            "position_at" => $tr->position_at,
+            "url" => $tr->url,
+            "calculated_at" => $Now,
+            "listinfo" => json_encode_browser([
+                "listid" => $tr->listid,
+                "ids" => SessionList::encode_ids($tr->ids),
+                "description" => $tr->description,
+                "url" => $tr->url
+            ])
+        ];
+        if ($user->privChair
+            || ($user->is_track_manager()
+                && self::check_tracker_admin_perm($user, get($tr, "admin_perm")))) {
+            $ti->allow_administer = true;
+        }
+        if ($user->conf->opt("trackerHideConflicts"))
+            $ti->hide_conflicts = true;
+        if ($tr->position !== false) {
+            $ti->paper_offset = $tr->position === 0 ? 0 : 1;
+            $ti->papers = array_slice($tr->ids, $tr->position - $ti->paper_offset, 3 + $ti->paper_offset);
+        }
+        if (isset($tr->name))
+            $ti->name = $tr->name;
+        if (isset($tr->logo))
+            $ti->logo = $tr->logo;
+        if (isset($tr->visibility)
+            && ($user->privChair || substr($tr->visibility, 1, 1) !== "~"))
+            $ti->visibility = $tr->visibility;
+        return $ti;
+    }
+
+    static private function trinfo_papers($tis, $trs, Contact $user) {
+        $pids = [];
+        foreach ($tis as $ti) {
+            if (isset($ti->papers))
+                $pids = array_merge($pids, $ti->papers);
+        }
+        if (empty($pids))
+            return;
+
+        $track_manager = $user->is_track_manager();
+        $show_pc_conflicts = $track_manager || $user->tracker_kiosk_state > 0;
+        $hide_conflicted_papers = $user->conf->opt("trackerHideConflicts");
+
+        $col = "";
+        if ($show_pc_conflicts) {
+            $col = ", (select group_concat(contactId) conflictIds from PaperConflict where paperId=p.paperId) conflictIds";
+            $pcm = $user->conf->pc_members();
+        }
+        if ($user->contactId) {
+            $cid_join = "contactId=" . $user->contactId;
+        } else {
+            $cid_join = "contactId=-2 and false";
+        }
+
+        $result = $user->conf->qe_raw("select p.paperId, p.title, p.paperFormat, p.leadContactId, p.managerContactId, " . PaperInfo::my_review_permissions_sql("r.") . " myReviewPermissions, conf.conflictType{$col}
+            from Paper p
+            left join PaperReview r on (r.paperId=p.paperId and r.$cid_join)
+            left join PaperConflict conf on (conf.paperId=p.paperId and conf.$cid_join)
+            where p.paperId in (" . join(",", $pids) . ")
+            group by p.paperId");
+        $prows = new PaperInfoSet;
+        while (($prow = PaperInfo::fetch($result, $user)))
+            $prows->add($prow);
+        Dbl::free($result);
+
+        foreach ($tis as $ti_index => $ti) {
+            $papers = [];
+            foreach (isset($ti->papers) ? $ti->papers : [] as $pid) {
+                $prow = $prows->get($pid);
+                $papers[] = $p = (object) [];
+                if (($track_manager
+                     || $prow->conflictType <= 0
+                     || !$hide_conflicted_papers)
+                    && $user->tracker_kiosk_state != 1) {
+                    $p->pid = $prow->paperId;
+                    $p->title = $prow->title;
+                    if (($format = $prow->title_format()))
+                        $p->format = $format;
+                }
+                if ($user->contactId > 0) {
+                    if ($prow->managerContactId == $user->contactId)
+                        $p->is_manager = true;
+                    if ($prow->has_reviewer($user))
+                        $p->is_reviewer = true;
+                    if ($prow->conflictType > 0)
+                        $p->is_conflict = true;
+                    if ($prow->leadContactId == $user->contactId)
+                        $p->is_lead = true;
+                }
+                if ($show_pc_conflicts) {
+                    $pcc = [];
+                    $more = false;
+                    foreach (explode(",", (string) $prow->conflictIds) as $cid) {
+                        if (($pc = get($pcm, $cid))) {
+                            if ($pc->include_tracker_conflict($trs[$ti_index]))
+                                $pcc[$pc->sort_position] = $pc->contactId;
+                            else
+                                $more = true;
+                        }
+                    }
+                    ksort($pcc);
+                    $p->pc_conflicts = array_values($pcc);
+                    if ($more)
+                        $p->other_pc_conflicts = $more;
+                }
+            }
+            if (isset($ti->papers))
+                $ti->papers = $papers;
+        }
+    }
+
+    static function my_deadlines($dl, Contact $user) {
+        global $Now;
+        $tracker = self::lookup($user->conf);
+        if ($tracker->trackerid && $user->can_view_tracker()) {
+            $tis = $trs = [];
+            foreach (self::expand($tracker) as $tr) {
+                if ($user->can_view_tracker($tr)) {
+                    $trs[] = $tr;
+                    $tis[] = self::trinfo($tr, $user);
+                }
+            }
+            if (!empty($tis))
+                self::trinfo_papers($tis, $trs, $user);
+
+            if (count($tis) === 1
+                && $tis[0]->trackerid === $tracker->trackerid) {
+                $dl->tracker = $tis[0];
+            } else {
+                $dl->tracker = (object) [
+                    "trackerid" => $tracker->trackerid,
+                    "position_at" => $tracker->position_at,
+                    "ts" => $tis
+                ];
+            }
+            if (($perm = $user->conf->track_permission("_", Track::VIEWTRACKER)))
+                $dl->tracker->global_visibility = $perm;
+            $dl->tracker_status = self::tracker_status($tracker);
+            $dl->now = microtime(true);
+        }
+        if ($tracker->position_at)
+            $dl->tracker_status_at = $tracker->position_at;
+        if (($tcs = $user->conf->opt("trackerCometSite")))
+            $dl->tracker_site = $tcs;
     }
 }

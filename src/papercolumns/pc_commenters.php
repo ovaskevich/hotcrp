@@ -1,6 +1,6 @@
 <?php
 // pc_commenters.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Commenters_PaperColumn extends PaperColumn {
     function __construct(Conf $conf, $cj) {
@@ -15,7 +15,7 @@ class Commenters_PaperColumn extends PaperColumn {
     function content(PaperList $pl, PaperInfo $row) {
         $crows = $row->viewable_comments($pl->user);
         $cnames = array_map(function ($cx) use ($pl) {
-            $n = $t = $cx[0]->unparse_user_html($pl->user);
+            $n = $t = $cx[0]->unparse_commenter_html($pl->user);
             if (($tags = $cx[0]->viewable_tags($pl->user))
                 && ($color = $cx[0]->conf->tags()->color_classes($tags)))
                 $t = '<span class="cmtlink ' . $color . ' taghh">' . $n . '</span>';
@@ -28,7 +28,7 @@ class Commenters_PaperColumn extends PaperColumn {
     function text(PaperList $pl, PaperInfo $row) {
         $crows = $row->viewable_comments($pl->user);
         $cnames = array_map(function ($cx) use ($pl) {
-            $t = $cx[0]->unparse_user_text($pl->user);
+            $t = $cx[0]->unparse_commenter_text($pl->user);
             if ($cx[1] > 1)
                 $t .= " ({$cx[1]})";
             return $t . $cx[2];

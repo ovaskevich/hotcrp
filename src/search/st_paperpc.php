@@ -1,6 +1,6 @@
 <?php
 // search/st_paperpc.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class PaperPC_SearchTerm extends SearchTerm {
     private $kind;
@@ -19,7 +19,7 @@ class PaperPC_SearchTerm extends SearchTerm {
         else if (($word === "none" || $word === "no") && !$sword->quoted)
             $match = "=0";
         else
-            $match = $srch->matching_users($word, $sword->quoted, true);
+            $match = $srch->matching_uids($word, $sword->quoted, true);
         // XXX what about track admin privilege?
         $qt = [new PaperPC_SearchTerm($sword->kwdef->pcfield, $match)];
         if ($sword->kwdef->pcfield === "manager"
@@ -35,7 +35,7 @@ class PaperPC_SearchTerm extends SearchTerm {
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
         $can_view = "can_view_{$this->kind}";
-        return $srch->user->$can_view($row, true)
+        return $srch->user->$can_view($row)
             && CountMatcher::compare_using($row->{$this->fieldname}, $this->match);
     }
 }

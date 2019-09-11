@@ -53,7 +53,6 @@ bulkassign.php
 buzzer.php
 cacheable.php
 checkupdates.php
-comment.php
 conflictassign.php
 deadlines.php
 doc.php
@@ -85,6 +84,7 @@ batch/s3test.php
 batch/s3transfer.php
 batch/s3verifyall.php
 batch/savepapers.php
+batch/search.php
 batch/updatecontactdb.php
 
 conf/.htaccess
@@ -93,20 +93,22 @@ etc/.htaccess
 etc/affiliationmatchers.json
 etc/apifunctions.json
 etc/assignmentparsers.json
-etc/emojicodes.json
+etc/capabilityhandlers.json
 etc/formulafunctions.json
 etc/helptopics.json
+etc/homepartials.json
+etc/intrinsicoptions.json
 etc/listactions.json
 etc/mailkeywords.json
+etc/mailtemplates.json
 etc/msgs.json
 etc/optiontypes.json
 etc/papercolumns.json
 etc/profilegroups.json
 etc/reviewformlibrary.json
 etc/searchkeywords.json
-etc/settings.json
+etc/settinginfo.json
 etc/settinggroups.json
-etc/submissioneditgroups.json
 
 lib/.htaccess
 lib/abbreviationmatcher.php
@@ -114,6 +116,7 @@ lib/archiveinfo.php
 lib/backupdb.sh
 lib/base.php
 lib/cleanhtml.php
+lib/collatorshim.php
 lib/column.php
 lib/countmatcher.php
 lib/countries.php
@@ -124,6 +127,7 @@ lib/dbhelper.sh
 lib/dbl.php
 lib/filer.php
 lib/getopt.php
+lib/gmpshim.php
 lib/ht.php
 lib/icons.php
 lib/intlmsgset.php
@@ -131,13 +135,11 @@ lib/json.php
 lib/ldaplogin.php
 lib/login.php
 lib/mailer.php
-lib/message.php
 lib/messageset.php
 lib/mime.types
 lib/mimetype.php
 lib/mincostmaxflow.php
 lib/navigation.php
-lib/qobject.php
 lib/qrequest.php
 lib/redirect.php
 lib/restoredb.sh
@@ -151,23 +153,33 @@ lib/xlsx.php
 lib/zipdocument.php
 
 pages/.htaccess
-pages/adminhome.php
 pages/home.php
 
 src/.htaccess
 src/api/api_alltags.php
+src/api/api_comment.php
+src/api/api_decision.php
 src/api/api_error.php
+src/api/api_formatcheck.php
+src/api/api_graphdata.php
+src/api/api_mail.php
+src/api/api_paperpc.php
+src/api/api_preference.php
 src/api/api_requestreview.php
 src/api/api_search.php
 src/api/api_searchconfig.php
+src/api/api_session.php
 src/api/api_taganno.php
 src/api/api_user.php
 src/assigners/a_conflict.php
 src/assigners/a_decision.php
+src/assigners/a_follow.php
 src/assigners/a_lead.php
 src/assigners/a_preference.php
+src/assigners/a_review.php
 src/assigners/a_status.php
 src/assigners/a_tag.php
+src/assigners/a_unsubmitreview.php
 src/assignmentset.php
 src/author.php
 src/authormatcher.php
@@ -182,12 +194,16 @@ src/contact.php
 src/contactlist.php
 src/contactsearch.php
 src/distoptions.php
+src/documentfiletree.php
 src/documentinfo.php
+src/documenthashmatcher.php
+src/documentrequest.php
 src/filefilter.php
 src/formatspec.php
 src/formula.php
 src/formulagraph.php
 src/groupedextensions.php
+src/help/h_bulkassign.php
 src/help/h_chairsguide.php
 src/help/h_formulas.php
 src/help/h_keywords.php
@@ -209,17 +225,19 @@ src/listactions/la_getallrevpref.php
 src/listactions/la_getdocument.php
 src/listactions/la_getjson.php
 src/listactions/la_getjsonrqc.php
+src/listactions/la_getlead.php
+src/listactions/la_getrank.php
+src/listactions/la_getreviewcsv.php
 src/listactions/la_getrevpref.php
+src/listactions/la_getscores.php
 src/listactions/la_get_rev.php
 src/listactions/la_get_sub.php
 src/listactions/la_mail.php
 src/listactions/la_tag.php
 src/listsorter.php
 src/mailclasses.php
-src/mailtemplate.php
 src/meetingtracker.php
 src/mergecontacts.php
-src/messages.csv
 src/multiconference.php
 src/paperapi.php
 src/papercolumn.php
@@ -250,6 +268,9 @@ src/papersearch.php
 src/paperstatus.php
 src/papertable.php
 src/paperrank.php
+src/partials/p_adminhome.php
+src/partials/p_home.php
+src/partials/p_reviewtoken.php
 src/review.php
 src/reviewdiffinfo.php
 src/reviewinfo.php
@@ -257,7 +278,9 @@ src/reviewtable.php
 src/reviewtimes.php
 src/sample.pdf
 src/schema.sql
+src/search/st_admin.php
 src/search/st_author.php
+src/search/st_authormatch.php
 src/search/st_comment.php
 src/search/st_conflict.php
 src/search/st_decision.php
@@ -292,6 +315,7 @@ src/settings/s_tracks.php
 src/settings/s_users.php
 src/settingvalues.php
 src/textformat.php
+src/topicset.php
 src/updateschema.php
 src/useractions.php
 src/userstatus.php
@@ -349,13 +373,12 @@ images/view48.png
 images/viewas.png
 
 scripts/.htaccess
-scripts/d3.min.js
 scripts/d3-hotcrp.min.js
 scripts/buzzer.js
+scripts/emojicodes.json
 scripts/graph.js
 scripts/jquery-1.12.4.min.js
-scripts/jquery-1.12.4.min.map
-scripts/jquery-3.3.1.min.js
+scripts/jquery-3.4.1.min.js
 scripts/script.js
 scripts/settings.js
 

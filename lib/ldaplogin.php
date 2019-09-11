@@ -1,6 +1,6 @@
 <?php
 // ldaplogin.php -- HotCRP helper function for LDAP login
-// Copyright (c) 2009-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2009-2019 Eddie Kohler; see LICENSE.
 
 function ldapLoginBindFailure(Qrequest $qreq, $ldapc) {
     global $Conf;
@@ -28,8 +28,8 @@ function ldapLoginBindFailure(Qrequest $qreq, $ldapc) {
 function ldapLoginAction(Qrequest $qreq) {
     global $Conf;
 
-    if (!preg_match('/\A\s*(\S+)\s+(\d+\s+)?([^*]+)\*(.*?)\s*\z/s', opt("ldapLogin"), $m))
-        return Conf::msg_error("Internal error: <code>" . htmlspecialchars(opt("ldapLogin")) . "</code> syntax error; expected &ldquo;<code><i>LDAP-URL</i> <i>distinguished-name</i></code>&rdquo;, where <code><i>distinguished-name</i></code> contains a <code>*</code> character to be replaced by the user's email address.  Logins will fail until this error is fixed.");
+    if (!preg_match('/\A\s*(\S+)\s+(\d+\s+)?([^*]+)\*(.*?)\s*\z/s', $Conf->opt("ldapLogin"), $m))
+        return Conf::msg_error("Internal error: <code>" . htmlspecialchars($Conf->opt("ldapLogin")) . "</code> syntax error; expected &ldquo;<code><i>LDAP-URL</i> <i>distinguished-name</i></code>&rdquo;, where <code><i>distinguished-name</i></code> contains a <code>*</code> character to be replaced by the user's email address.  Logins will fail until this error is fixed.");
 
     // connect to the LDAP server
     if ($m[2] == "")

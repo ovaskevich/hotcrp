@@ -1,6 +1,6 @@
 <?php
 // tagger.php -- HotCRP helper class for dealing with tags
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 // Note that tags MUST NOT contain HTML or URL special characters:
 // no "'&<>.  If you add PHP-protected characters, such as $, make sure you
@@ -23,12 +23,13 @@ class TagMapItem {
     public $sitewide = false;
     public $rank = false;
     public $order_anno = false;
-    private $order_anno_list = false;
-    public $colors = null;
+    private $_order_anno_list;
+    private $_order_anno_search;
+    public $colors;
     public $basic_color = false;
-    public $badges = null;
-    public $emoji = null;
-    public $autosearch = null;
+    public $badges;
+    public $emoji;
+    public $autosearch;
     function __construct($tag, TagMap $tagmap) {
         $this->conf = $tagmap->conf;
         $this->set_tag($tag, $tagmap);
@@ -63,14 +64,15 @@ class TagMapItem {
         return $t;
     }
     function order_anno_list() {
-        if ($this->order_anno_list == false) {
-            $this->order_anno_list = [];
+        if ($this->_order_anno_list === null) {
+            $this->_order_anno_list = [];
+            $this->_order_anno_search = 0;
             $result = $this->conf->qe("select * from PaperTagAnno where tag=?", $this->tag);
             while (($ta = TagAnno::fetch($result, $this->conf)))
-                $this->order_anno_list[] = $ta;
+                $this->_order_anno_list[] = $ta;
             Dbl::free($result);
-            $this->order_anno_list[] = TagAnno::make_tag_fencepost($this->tag);
-            usort($this->order_anno_list, function ($a, $b) {
+            $this->_order_anno_list[] = TagAnno::make_tag_fencepost($this->tag);
+            usort($this->_order_anno_list, function ($a, $b) {
                 if ($a->tagIndex != $b->tagIndex)
                     return $a->tagIndex < $b->tagIndex ? -1 : 1;
                 else if (($x = strcasecmp($a->heading, $b->heading)) != 0)
@@ -78,11 +80,28 @@ class TagMapItem {
                 else
                     return $a->annoId < $b->annoId ? -1 : 1;
             });
+            $last_la = null;
+            foreach ($this->_order_anno_list as $i => $la) {
+                $la->annoIndex = $i;
+                if ($last_la)
+                    $last_la->endTagIndex = $la->tagIndex;
+                $last_la = $la;
+            }
         }
-        return $this->order_anno_list;
+        return $this->_order_anno_list;
     }
     function order_anno_entry($i) {
         return get($this->order_anno_list(), $i);
+    }
+    function order_anno_search($tagIndex) {
+        $ol = $this->order_anno_list();
+        $i = $this->_order_anno_search;
+        if ($i > 0 && $tagIndex < $ol[$i - 1]->tagIndex)
+            $i = 0;
+        while ($tagIndex >= $ol[$i]->tagIndex)
+            ++$i;
+        $this->_order_anno_search = $i;
+        return $i ? $ol[$i - 1] : null;
     }
     function has_order_anno() {
         return count($this->order_anno_list()) > 1;
@@ -90,17 +109,23 @@ class TagMapItem {
 }
 
 class TagAnno implements JsonSerializable {
-    public $tag = null;
-    public $annoId = null;
-    public $tagIndex = null;
-    public $heading = null;
-    public $annoFormat = null;
-    public $infoJson = null;
-    public $count = null;
-    public $pos = null;
+    public $tag;
+    public $annoId;
+    public $tagIndex;
+    public $heading;
+    public $annoFormat;
+    public $infoJson;
+
+    public $annoIndex;      // index in array
+    public $endTagIndex;    // tagIndex of next anno
+    public $pos;
+    public $count;
 
     function is_empty() {
-        return $this->heading === null || strcasecmp($this->heading, "none") == 0;
+        return $this->heading === null || strcasecmp($this->heading, "none") === 0;
+    }
+    function is_fencepost() {
+        return $this->tagIndex >= (float) TAG_INDEXBOUND;
     }
     static function fetch($result, Conf $conf) {
         $ta = $result ? $result->fetch_object("TagAnno") : null;
@@ -123,7 +148,7 @@ class TagAnno implements JsonSerializable {
     static function make_tag_fencepost($tag) {
         $ta = new TagAnno;
         $ta->tag = $tag;
-        $ta->tagIndex = (float) TAG_INDEXBOUND;
+        $ta->tagIndex = $ta->endTagIndex = (float) TAG_INDEXBOUND;
         $ta->heading = "Untagged";
         return $ta;
     }
@@ -141,7 +166,8 @@ class TagAnno implements JsonSerializable {
             $j["empty"] = true;
         if ($this->heading !== null)
             $j["heading"] = $this->heading;
-        if ($this->heading !== null && $this->heading !== ""
+        if ($this->heading !== null
+            && $this->heading !== ""
             && ($format = $Conf->check_format($this->annoFormat, $this->heading)))
             $j["format"] = +$format;
         return $j;
@@ -292,23 +318,23 @@ class TagMap implements IteratorAggregate {
             $t = $this->update_patterns($tag, $ltag, $t);
         return $t;
     }
-    private function sort() {
+    private function sort_storage() {
         ksort($this->storage);
         $this->sorted = true;
     }
     function getIterator() {
-        $this->sorted || $this->sort();
+        $this->sorted || $this->sort_storage();
         return new ArrayIterator($this->storage);
     }
     function filter($property) {
         $k = "has_{$property}";
         if (!$this->$k)
             return [];
-        $this->sorted || $this->sort();
+        $this->sorted || $this->sort_storage();
         return array_filter($this->storage, function ($t) use ($property) { return $t->$property; });
     }
     function filter_by($f) {
-        $this->sorted || $this->sort();
+        $this->sorted || $this->sort_storage();
         return array_filter($this->storage, $f);
     }
     function check_property($tag, $property) {
@@ -413,7 +439,7 @@ class TagMap implements IteratorAggregate {
         return $this->color_re;
     }
 
-    function styles($tags, $match = self::STYLE_FG_BG) {
+    function styles($tags, $match = 0, $no_pattern_fill = false) {
         if (is_array($tags))
             $tags = join(" ", $tags);
         if (!$tags || $tags === " " || !preg_match_all($this->color_regex(), $tags, $m))
@@ -425,7 +451,7 @@ class TagMap implements IteratorAggregate {
             $t = $this->check($ltag);
             $ks = $t ? $t->colors : [$ltag];
             foreach ($ks as $k) {
-                if ($this->style_info_lmap[$k] & $match) {
+                if ($match === 0 || ($this->style_info_lmap[$k] & $match)) {
                     $classes[] = $this->canonical_style_lmap[$k] . "tag";
                     $info |= $this->style_info_lmap[$k];
                 }
@@ -439,6 +465,11 @@ class TagMap implements IteratorAggregate {
         }
         if ($info & self::STYLE_BG)
             $classes[] = "tagbg";
+        // This seems out of place---it's redundant if we're going to
+        // generate JSON, for example---but it is convenient.
+        if (!$no_pattern_fill
+            && count($classes) > ($info & self::STYLE_BG ? 2 : 1))
+            self::mark_pattern_fill($classes);
         return $classes;
     }
 
@@ -451,15 +482,8 @@ class TagMap implements IteratorAggregate {
     }
 
     function color_classes($tags, $no_pattern_fill = false) {
-        $classes = $this->styles($tags);
-        if (!$classes)
-            return "";
-        $key = join(" ", $classes);
-        // This seems out of place---it's redundant if we're going to
-        // generate JSON, for example---but it is convenient.
-        if (!$no_pattern_fill && count($classes) > 1)
-            self::mark_pattern_fill($classes);
-        return $key;
+        $s = $this->styles($tags, 0, $no_pattern_fill);
+        return $s ? join(" ", $s) : "";
     }
 
     function canonical_colors() {
@@ -510,6 +534,19 @@ class TagMap implements IteratorAggregate {
                 && !($prow ? $user->can_view_hidden_tags($prow) : $user->privChair))
                 $re = "(?:" . $re . "|(?:" . $this->hidden_regex_part() . ")(?:#\\S+|(?= )))";
             $tags = trim(preg_replace("{ " . $re . "}i", "", " $tags "));
+        }
+        return $tags;
+    }
+
+    function sort($tags) {
+        if ($tags !== "" && $tags !== null && $tags !== []) {
+            if (is_array($tags)) {
+                $this->conf->collator()->sort($tags);
+            } else {
+                $tags = explode(" ", $tags);
+                $this->conf->collator()->sort($tags);
+                $tags = join(" ", $tags);
+            }
         }
         return $tags;
     }
@@ -683,12 +720,11 @@ class Tagger {
     private $contact;
     private $_contactId = 0;
 
-    function __construct($contact = null) {
-        global $Conf, $Me;
-        $this->contact = ($contact ? : $Me);
+    function __construct($contact) {
+        $this->conf = $contact->conf;
+        $this->contact = $contact;
         if ($this->contact && $this->contact->contactId > 0)
             $this->_contactId = $this->contact->contactId;
-        $this->conf = $this->contact ? $this->contact->conf : $Conf;
     }
 
     private function set_error_html($e) {
@@ -721,11 +757,13 @@ class Tagger {
         } else {
             if ($flags & self::NOPRIVATE)
                 return $this->set_error_html("Twiddle tags aren’t allowed here.");
-            if ($m[1] === "~" && $this->_contactId)
-                $m[1] = $this->_contactId . "~";
-            if ($m[1] !== "~" && $m[1] !== $this->_contactId . "~"
-                && !($flags & self::ALLOWCONTACTID))
+            if ($m[1] === "~") {
+                if ($this->_contactId)
+                    $m[1] = $this->_contactId . "~";
+            } else if ($m[1] !== $this->_contactId . "~"
+                       && !($flags & self::ALLOWCONTACTID)) {
                 return $this->set_error_html("Other users’ twiddle tags are off limits.");
+            }
         }
         if ($m[3] !== "" && ($flags & self::NOVALUE))
             return $this->set_error_html("Tag values aren’t allowed here.");
@@ -760,7 +798,7 @@ class Tagger {
 
     function view_score($tag) {
         if ($tag === false)
-            return VIEWSCORE_FALSE;
+            return VIEWSCORE_EMPTY;
         else if (($pos = strpos($tag, "~")) !== false) {
             if (($pos == 0 && $tag[1] === "~")
                 || substr($tag, 0, $pos) != $this->_contactId)
@@ -838,7 +876,7 @@ class Tagger {
                 }
                 $b = self::unparse_emoji_html($e, $count);
                 if (!empty($links))
-                    $b = '<a class="qq" href="' . hoturl("search", ["q" => join(" OR ", $links)]) . '">' . $b . '</a>';
+                    $b = '<a class="qq" href="' . $this->conf->hoturl("search", ["q" => join(" OR ", $links)]) . '">' . $b . '</a>';
                 if ($x === "")
                     $x = " ";
                 $x .= $b;
@@ -905,10 +943,10 @@ class Tagger {
             $q = "#$base";
         else
             $q = "order:#$base";
-        return hoturl("search", ["q" => $q]);
+        return $this->conf->hoturl("search", ["q" => $q]);
     }
 
-    function unparse_and_link($viewable) {
+    function unparse_link($viewable) {
         $tags = $this->unparse($viewable);
         if ($tags === "")
             return "";
@@ -921,11 +959,11 @@ class Tagger {
                 continue;
             $lbase = strtolower($base);
             if (($link = $this->link($tag)))
-                $tx = '<a class="nn nw" href="' . $link . '"><u class="x">#'
+                $tx = '<a class="nn pw" href="' . $link . '"><u class="x">#'
                     . $base . '</u>' . substr($tag, strlen($base)) . '</a>';
             else
                 $tx = "#" . $tag;
-            if (($cc = $dt->styles($base, TagMap::STYLE_FG)))
+            if (($cc = $dt->styles($base)))
                 $tx = '<span class="' . join(" ", $cc) . ' taghh">' . $tx . '</span>';
             $tt .= $tx . " ";
         }

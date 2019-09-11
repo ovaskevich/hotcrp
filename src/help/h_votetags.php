@@ -1,6 +1,6 @@
 <?php
 // src/help/h_votetags.php -- HotCRP help functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class VoteTags_HelpTopic {
     static function render($hth) {
@@ -13,7 +13,7 @@ The PC’s aggregated vote totals might help determine
 which papers to discuss.</p>
 
 <p>HotCRP supports voting through ", $hth->help_link("tags", "tags"), ".
-The chair can ", $hth->settings_link("define a set of voting tags", "tags"),
+The chair can ", $hth->setting_link("define a set of voting tags", "tag_vote"),
 " and allotments" . $hth->current_tag_list("vote") . ".
 PC members vote by assigning the corresponding twiddle tags;
 the aggregated PC vote is visible in the public tag.</p>
@@ -30,12 +30,8 @@ updates the main tag to reflect the total.
 (The system ensures no PC member exceeds their allotment.) </p>
 
 <p>
-To see the current voting status, search by
-<a href=\"" . hoturl("search", "q=rorder:" . $votetag . "") . "\">
-rorder:". $votetag . "</a>. Use view options to show tags
-in the search results (or set up a
-<a href='" . hoturl("help", "t=formulas") . "'>formula</a>).
-</p>
+To see the current voting status, search by ", $hth->hotlink("rorder:$votetag", "search", ["q" => "rorder:$votetag"]), ". Use view options to show tags
+in the search results (or set up a ", $hth->help_link("formula", "formulas"), ").</p>
 
 <p>
 Hover to learn how the PC voted:</p>

@@ -1,6 +1,6 @@
 <?php
 // test02.php -- HotCRP S3 and database unit tests
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
@@ -74,7 +74,7 @@ xassert_eqq(Dbl::compare_and_swap(Dbl::$default_dblink,
 xassert_eqq(Dbl::fetch_ivalue("select value from Settings where name='cmpxchg'"), 3);
 
 // DocumentInfo::update_metadata test
-$paper1 = $Conf->paperRow(1, $Conf->user_by_email("chair@_.com"));
+$paper1 = $Conf->fetch_paper(1, $Conf->user_by_email("chair@_.com"));
 $doc = $paper1->document(DTYPE_SUBMISSION);
 xassert(!!$doc);
 xassert_eqq($doc->metadata(), null);
@@ -166,19 +166,47 @@ xassert_eqq(json_encode(SessionList::decode_ids("[1,2,3-4,5,6-10,11]")), "[1,2,3
 xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([1,2]))), "[1,2]");
 xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([1,2,3,4,5,6,7,8,9,10,11]))), "[1,2,3,4,5,6,7,8,9,10,11]");
 xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([1,3,5,7,9,10,11]))), "[1,3,5,7,9,10,11]");
+xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([11,10,9,8,7,6,5,4,3,2,1]))), "[11,10,9,8,7,6,5,4,3,2,1]");
+xassert_eqq(json_encode(SessionList::decode_ids(SessionList::encode_ids([10,9,7,1,3,5,5]))), "[10,9,7,1,3,5,5]");
+
+function random_paper_ids() {
+    $a = [];
+    $n = mt_rand(1, 10);
+    $p = null;
+    for ($i = 0; $i < $n; ++$i) {
+        $p1 = mt_rand(1, $p === null ? 100 : 150);
+        if ($p1 > 100)
+            $p1 = max(1, $p + (int) round(($p1 - 125) / 8));
+        $p2 = 20 - (int) sqrt(mt_rand(0, 399));
+        if (mt_rand(1, 4) === 1) {
+            for ($p = $p1; $p >= 1 && $p > $p1 - $p2; --$p)
+                $a[] = $p;
+        } else {
+            for ($p = $p1; $p < $p1 + $p2; ++$p)
+                $a[] = $p;
+        }
+    }
+    return $a;
+}
+for ($i = 0; $i < 1000; ++$i) {
+    $ids = random_paper_ids();
+    //file_put_contents("/tmp/x", "if (JSON.stringify(decode_ids(" . json_encode(SessionList::encode_ids($ids)) . ")) !== " . json_encode(json_encode($ids)) . ") throw new Error;\n", FILE_APPEND);
+    xassert_eqq(SessionList::decode_ids(SessionList::encode_ids($ids)), $ids);
+}
 
 // obscure_time tests
 $t = $Conf->parse_time("1 Sep 2010 00:00:01");
 $t0 = $Conf->obscure_time($t);
 xassert_eqq($Conf->unparse_time_obscure($t0), "1 Sep 2010");
-xassert_eqq($Conf->printableTime($t0), "1 Sep 2010 12pm EDT");
+xassert_eqq($Conf->unparse_time($t0), "1 Sep 2010 12pm EDT");
 
 $t = $Conf->parse_time("1 Sep 2010 23:59:59");
 $t0 = $Conf->obscure_time($t);
 xassert_eqq($Conf->unparse_time_obscure($t0), "1 Sep 2010");
-xassert_eqq($Conf->printableTime($t0), "1 Sep 2010 12pm EDT");
+xassert_eqq($Conf->unparse_time($t0), "1 Sep 2010 12pm EDT");
 
 // timezone tests
+xassert_eqq(true === "obscure", false);
 $t = $Conf->parse_time("29 May 2018 11:00:00 EDT");
 xassert_eqq($t, 1527606000);
 $t = $Conf->parse_time("29 May 2018 03:00:00 AoE");
@@ -187,15 +215,22 @@ $Conf->set_opt("timezone", "Etc/GMT+12");
 $Conf->crosscheck_options();
 $t = $Conf->parse_time("29 May 2018 03:00:00");
 xassert_eqq($t, 1527606000);
-$t = $Conf->printableTime(1527606000);
+$t = $Conf->unparse_time(1527606000);
 xassert_eqq($t, "29 May 2018 3am AoE");
 
 // review ordinal tests
 foreach ([1 => "A", 26 => "Z", 27 => "AA", 28 => "AB", 51 => "AY", 52 => "AZ",
-          53 => "BA", 54 => "BB", 702 => "ZZ"] as $n => $t) {
+          53 => "BA", 54 => "BB", 702 => "ZZ", 703 => "AAA", 704 => "AAB",
+          1378 => "AZZ", 1379 => "BAA"] as $n => $t) {
     xassert_eqq(unparseReviewOrdinal($n), $t);
     xassert_eqq(parseReviewOrdinal($t), $n);
 }
+
+// interval tests
+xassert_eqq(SettingParser::parse_interval("2y"), 86400 * 365 * 2);
+xassert_eqq(SettingParser::parse_interval("15m"), 60 * 15);
+xassert_eqq(SettingParser::parse_interval("1h15m"), 60 * 75);
+xassert_eqq(SettingParser::parse_interval("1h15mo"), false);
 
 // preference tests
 xassert_eqq(Preference_AssignmentParser::parse("--2"), [-2, null]);
@@ -344,16 +379,27 @@ xassert_eqq(CountMatcher::filter_using([10, 11, -10], "≤10"), [0 => 10, 2 => -
 // simple_search tests
 xassert_eqq(Text::simple_search("yes", ["yes", "no", "yes-really"]), ["yes"]);
 xassert_eqq(Text::simple_search("yes", ["yes", "no", "yes-really"], Text::SEARCH_UNPRIVILEGE_EXACT), ["yes", 2 => "yes-really"]);
-xassert_eqq(Text::simple_search("yes", ["yes", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), ["yes"]);
-xassert_eqq(Text::simple_search("yes", ["yes-maybe", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), []);
 xassert_eqq(Text::simple_search("yes", ["yes-maybe", "no", "yes-really"], 0), ["yes-maybe", 2 => "yes-really"]);
 xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"]), ["yes"]);
 xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"], Text::SEARCH_UNPRIVILEGE_EXACT), ["yes", 2 => "yes-really"]);
-xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), ["yes"]);
-xassert_eqq(Text::simple_search("Yes", ["yes-maybe", "no", "yes-really"], Text::SEARCH_ONLY_EXACT), []);
 xassert_eqq(Text::simple_search("Yes", ["yes-maybe", "no", "yes-really"], 0), ["yes-maybe", 2 => "yes-really"]);
-xassert_eqq(Text::simple_search("Yes", ["yes", "no", "yes-really"], Text::SEARCH_CASE_SENSITIVE), []);
-xassert_eqq(Text::simple_search("Yes", ["yes", "no", "Yes-really"], Text::SEARCH_CASE_SENSITIVE), [2 => "Yes-really"]);
+
+$opts = ["x" => "None", "a" => "ACM badges: available", "af" => "ACM badges: available, functional", "afr" => "ACM badges: available, functional, replicated", "ar" => "ACM badges: available, reusable", "arr" => "ACM badges: available, reusable, replicated", "f" => "ACM badges: functional", "fr" => "ACM badges: functional, replicated", "r" => "ACM badges: reusable", "rr" => "ACM badges: reusable, replicated"];
+xassert_eqq(array_keys(Text::simple_search("ACM badges: available, functional, replicated", $opts)), ["afr"]);
+xassert_eqq(array_keys(Text::simple_search("ACM badges: functional, replicated", $opts)), ["fr"]);
+xassert_eqq(array_keys(Text::simple_search("ACM badges: available, functional, replicated", $opts, Text::SEARCH_UNPRIVILEGE_EXACT)), ["afr"]);
+xassert_eqq(array_keys(Text::simple_search("ACM badges: functional, replicated", $opts, Text::SEARCH_UNPRIVILEGE_EXACT)), ["afr", "fr"]);
+
+$am = new AbbreviationMatcher;
+foreach ($opts as $d => $dname)
+    $am->add($dname, $d);
+xassert_eqq($am->find_all("ACM badges: available, functional, replicated"), ["afr"]);
+xassert_eqq($am->find_all("ACM badges: functional, replicated"), ["fr"]);
+xassert_eqq($am->find_all("available"), ["a", "af", "afr", "ar", "arr"]);
+xassert_eqq($am->find_all("ACM badges: available"), ["a"]);
+xassert_eqq($am->find_all("acm-badges-available"), ["a"]);
+xassert_eqq($am->find_all("ACMBadAva"), ["a"]);
+xassert_eqq($am->find_all("ava"), ["a", "af", "afr", "ar", "arr"]);
 
 // Qrequest tests
 $q = new Qrequest("GET", ["a" => 1, "b" => 2]);
@@ -400,6 +446,7 @@ $ns = new NavigationState(["SERVER_PORT" => 80, "SCRIPT_FILENAME" => __FILE__,
                            "SCRIPT_NAME" => __FILE__, "REQUEST_URI" => "/fart/barf/?butt",
                            "HTTP_HOST" => "butt.com", "SERVER_SOFTWARE" => "nginx"]);
 xassert_eqq($ns->host, "butt.com");
+xassert_eqq($ns->php_suffix, "");
 xassert_eqq($ns->make_absolute("https://foo/bar/baz"), "https://foo/bar/baz");
 xassert_eqq($ns->make_absolute("http://fooxxx/bar/baz"), "http://fooxxx/bar/baz");
 xassert_eqq($ns->make_absolute("//foo/bar/baz"), "http://foo/bar/baz");
@@ -407,6 +454,13 @@ xassert_eqq($ns->make_absolute("/foo/bar/baz"), "http://butt.com/foo/bar/baz");
 xassert_eqq($ns->make_absolute("after/path"), "http://butt.com/fart/barf/after/path");
 xassert_eqq($ns->make_absolute("../after/path"), "http://butt.com/fart/after/path");
 xassert_eqq($ns->make_absolute("?confusion=20"), "http://butt.com/fart/barf/?confusion=20");
+
+// Test PHP_SUFFIX override
+$ns = new NavigationState(["SERVER_PORT" => 80, "SCRIPT_FILENAME" => __FILE__,
+                           "SCRIPT_NAME" => __FILE__, "REQUEST_URI" => "/fart/barf/?butt",
+                           "HTTP_HOST" => "butt.com", "SERVER_SOFTWARE" => "Apache 2.4",
+                           "HOTCRP_PHP_SUFFIX" => ".xxx"]);
+xassert_eqq($ns->php_suffix, ".xxx");
 
 // other helpers
 xassert_eqq(ini_get_bytes(null, "1"), 1);
@@ -576,6 +630,18 @@ xassert_eqq(!!$aum->test("Bobby (University of Massachusetts)", true), true);
 $aum = AuthorMatcher::make_string_guess("Bobby (UMass)");
 xassert_eqq(!!$aum->test("All (University of Massachusetts)", false), true);
 xassert_eqq(!!$aum->test("All (University of Massachusetts)", true), true);
+$aum = AuthorMatcher::make_string_guess("Bobby (UIUC)");
+xassert_eqq(!!$aum->test("All (University of Illinois Chicago)", false), false);
+xassert_eqq(!!$aum->test("All (University of Illinois Chicago)", true), false);
+xassert_eqq(!!$aum->test("All (University of Illinois)", false), true);
+xassert_eqq(!!$aum->test("All (University of Illinois)", true), true);
+$aum = AuthorMatcher::make_string_guess("Bobby (University of Illinois Chicago)");
+xassert_eqq(!!$aum->test("All (UIUC)", false), false);
+xassert_eqq(!!$aum->test("All (UIUC)", true), false);
+//xassert_eqq(!!$aum->test("All (University of Illinois)", false), true);
+//xassert_eqq(!!$aum->test("All (University of Illinois)", true), true);
+xassert_eqq(!!$aum->test("All (University of Illinois Chicago)", false), true);
+xassert_eqq(!!$aum->test("All (University of Illinois Chicago)", true), true);
 
 // i18n messages
 $ms = new IntlMsgSet;
@@ -589,19 +655,25 @@ $ms->add("bx", "b");
 $ms->add(["fart", "fart example A", ["$1=bob"]]);
 $ms->add(["fart", "fart example B", ["$1^=bob"]]);
 $ms->add(["fart", "fart example C"]);
-$ms->set("FOO", 100);
+$ms->add(["itext" => "fox", "otext" => "%1\$s", "format" => "expand", "context" => "fox-saying", "template" => true]);
+$ms->add(["id" => "fox-saying", "itext" => "What the fox said"]);
+$ms->add(["id" => "fox-saying", "itext" => "What the %FOX% said", "require" => ["$1"]]);
+$ms->add(["itext" => "butt", "otext" => "%1\$s", "format" => "expand", "context" => "test103", "template" => true]);
+$ms->add_override("test103", "%BUTT% %% %s %BU%%MAN%%BUTT%");
 xassert_eqq($ms->x("Hello"), "Bonjour");
 xassert_eqq($ms->x("%d friend", 1), "1 ami");
 xassert_eqq($ms->x("%d friend", 0), "0 amis");
 xassert_eqq($ms->x("%d friend", 2), "2 amis");
-xassert_eqq($ms->x("%FOO\$s friend"), "100 friend");
 xassert_eqq($ms->x("ax"), "b");
 xassert_eqq($ms->x("bx"), "a");
-xassert_eqq($ms->x("%FOO% friend"), "100 friend");
 xassert_eqq($ms->x("%xOOB%x friend", 10, 11), "aOOBb friend");
+xassert_eqq($ms->x("%xOOB%x%% friend", 10, 11), "aOOBb% friend");
 xassert_eqq($ms->x("fart"), "fart example C");
 xassert_eqq($ms->x("fart", "bobby"), "fart example B");
 xassert_eqq($ms->x("fart", "bob"), "fart example A");
+xassert_eqq($ms->xi("fox-saying"), "What the fox said");
+xassert_eqq($ms->xi("fox-saying", false, "Animal"), "What the Animal said");
+xassert_eqq($ms->xi("test103", false, "Ass"), "Ass %% %s %BU%%MAN%Ass");
 
 // i18n messages with contexts
 $ms = new IntlMsgSet;
@@ -692,6 +764,15 @@ xassert(AbbreviationMatcher::is_camel_word("ove-mer"));
 $am->add("99 Problems", 7);
 xassert_eqq($am->find_all("99p"), [7]);
 
+$am->add("?", 8);
+xassert_eqq($am->find_all("ela"), [1, 5, 6]);
+xassert_eqq($am->find_all("elan"), [1, 5]);
+xassert_eqq($am->find_all("elange"), [6]);
+xassert_eqq($am->find_all("elan*"), [1, 5, 6]);
+xassert_eqq($am->find_all("e*e"), [6]);
+xassert_eqq($am->find_all("99p"), [7]);
+xassert_eqq($am->find_all("?"), [8]);
+
 $am = new AbbreviationMatcher;
 $am->add("Overall merit", 1);
 $am->add("Overall merit 2", 2);
@@ -711,6 +792,31 @@ xassert_eqq($am->find_all("PCPer"), [5]);
 xassert_eqq($am->find_all("PCPer2"), [6]);
 xassert_eqq($am->find_all("PCPer3"), [7]);
 xassert_eqq($am->find_all("PCPer20"), [8]);
+xassert_eqq($am->find_all("Per"), [5, 6, 7, 8]);
+xassert_eqq($am->find_all("20"), [8]);
+xassert_eqq($am->find_all("2"), [2, 6]);
+
+$am->add("Number 2", 9);
+$am->add("Number 2 Bis", 10);
+$am->add("2 Butts", 11);
+xassert_eqq($am->find_all("2"), [2, 6, 9, 10, 11]);
+
+$am = new AbbreviationMatcher;
+$am->add("France Land", 5);
+$am->add("France Land Flower", 6);
+$am->add("France Land Ripen", 7);
+$am->add("Glass Flower", 8);
+$am->add("Glass Flower Milk", 9);
+$am->add("Flower Cheese", 10);
+$am->add("Anne France", 11);
+xassert_eqq($am->find_all("flower"), [6, 8, 9, 10]);
+xassert_eqq($am->find_all("flo"), [6, 8, 9, 10]);
+xassert_eqq($am->find_all("fra"), [5, 6, 7, 11]);
+
+$am->add("France", 12);
+xassert_eqq($am->find_all("fra"), [12]);
+xassert_eqq($am->find_all("fra*"), [5, 6, 7, 12]);
+xassert_eqq($am->find_all("*fra*"), [5, 6, 7, 11, 12]);
 
 // AbbreviationMatcher tests taken from old abbreviation styles
 $am = new AbbreviationMatcher;
@@ -744,7 +850,7 @@ xassert_eqq(Filer::docstore_fixed_prefix("%02h%x"), "");
 
 // Document::content_binary_hash
 $Conf->save_setting("opt.contentHashMethod", 1, "sha1");
-$doc = new DocumentInfo(["content" => ""]);
+$doc = new DocumentInfo(["content" => ""], $Conf);
 xassert_eqq($doc->text_hash(), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
 xassert_eqq($doc->content_binary_hash(), hex2bin("da39a3ee5e6b4b0d3255bfef95601890afd80709"));
 $doc->set_content("Hello\n");
@@ -1087,5 +1193,51 @@ xassert_eqq($mailer->expand("%SITECONTACT%//%ADMINEMAIL%"),
     "Eddie Kohler <ekohler@hotcrp.lcdf.org>//ekohler@hotcrp.lcdf.org\n");
 xassert_eqq($mailer->expand("%URLENC(ADMINEMAIL)% : %OPT(ADMINEMAIL)% : %OPT(NULL)% : %OPT(EMAIL)%"),
     "ekohler%40hotcrp.lcdf.org : ekohler@hotcrp.lcdf.org :  : %OPT(EMAIL)%\n");
+
+// HTML cleaning
+$err = null;
+xassert_eqq(CleanHTML::basic_clean('<a>Hello', $err), false);
+xassert_eqq(CleanHTML::basic_clean('<a>Hello</a>', $err), '<a>Hello</a>');
+xassert_eqq(CleanHTML::basic_clean('<script>Hello</script>', $err), false);
+xassert_eqq(CleanHTML::basic_clean('< SCRIPT >Hello</script>', $err), false);
+xassert_eqq(CleanHTML::basic_clean('<a href = fuckovia ><B>Hello</b></a>', $err), '<a href="fuckovia"><b>Hello</b></a>');
+xassert_eqq(CleanHTML::basic_clean('<a href = " javaScript:hello" ><B>Hello</b></a>', $err), false);
+xassert_eqq(CleanHTML::basic_clean('<a href = "https://hello" onclick="fuck"><B>Hello</b></a>', $err), false);
+xassert_eqq(CleanHTML::basic_clean('<a href =\'https:"""//hello\' butt><B>Hello</b></a>', $err), '<a href="https:&quot;&quot;&quot;//hello" butt><b>Hello</b></a>');
+
+// tag sorting
+$dt = $Conf->tags();
+xassert_eqq($dt->sort(""), "");
+xassert_eqq($dt->sort("a"), "a");
+xassert_eqq($dt->sort(" a"), " a");
+xassert_eqq($dt->sort(" a1 a10 a100 a2"), " a1 a2 a10 a100");
+
+// GMP shim
+require_once("$ConfSitePATH/lib/gmpshim.php");
+$a = gmpshim_init("0");
+xassert_eqq(gmpshim_testbit($a, 0), false);
+xassert_eqq(gmpshim_testbit($a, 1), false);
+xassert_eqq(gmpshim_testbit($a, 63), false);
+xassert_eqq(gmpshim_testbit($a, 64), false);
+xassert_eqq(gmpshim_scan1($a, 0), -1);
+gmpshim_setbit($a, 10);
+xassert_eqq(gmpshim_testbit($a, 0), false);
+xassert_eqq(gmpshim_testbit($a, 10), true);
+xassert_eqq(gmpshim_testbit($a, 63), false);
+xassert_eqq(gmpshim_testbit($a, 64), false);
+xassert_eqq(gmpshim_scan1($a, 0), 10);
+xassert_eqq(gmpshim_scan1($a, 10), 10);
+xassert_eqq(gmpshim_scan1($a, 11), -1);
+gmpshim_setbit($a, 10, false);
+gmpshim_setbit($a, 63, true);
+gmpshim_setbit($a, 127, true);
+xassert_eqq(gmpshim_testbit($a, 0), false);
+xassert_eqq(gmpshim_testbit($a, 10), false);
+xassert_eqq(gmpshim_testbit($a, 63), true);
+xassert_eqq(gmpshim_testbit($a, 64), false);
+xassert_eqq(gmpshim_testbit($a, 127), true);
+xassert_eqq(gmpshim_scan1($a, 0), 63);
+xassert_eqq(gmpshim_scan1($a, 63), 63);
+xassert_eqq(gmpshim_scan1($a, 64), 127);
 
 xassert_exit();

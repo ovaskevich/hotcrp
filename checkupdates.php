@@ -1,6 +1,6 @@
 <?php
 // checkupdates.php -- HotCRP update checker helper
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 header("Content-Type: " . ($Qreq->text ? "text/plain" : "application/json"));
@@ -45,17 +45,17 @@ if ($Me->privChair
         if ($errid && $Conf->setting("ignoreupdate_$errid", 0) > time())
             $ok = false;
         if ($ok) {
-            $m = "<div class='msg msg-error'";
+            $m = "<div class=\"msg msg-error\"";
             if ($errid)
-                $m .= " id='softwareupdate_$errid'";
-            $m .= " style='font-size:smaller'><div class='dod'><strong>WARNING: Upgrade your HotCRP installation.</strong>";
+                $m .= " id=\"softwareupdate_$errid\"";
+            $m .= " style=\"font-size:smaller\"><div class=\"dod\"><strong>WARNING: Upgrade your HotCRP installation.</strong>";
             if (isset($update["vulnid"]) && is_numeric($update["vulnid"]))
                 $m .= " (HotCRP-Vulnerability-" . $update["vulnid"] . ")";
             $m .= "</div>";
             if (isset($update["message"]) && is_string($update["message"]))
-                $m .= "<div class='bigid'>" . CleanHTML::clean($update["message"], $error) . "</div>";
+                $m .= "<div class=\"bigid\">" . CleanHTML::clean($update["message"], $error) . "</div>";
             if (isset($update["to"]) && is_string($update["to"])) {
-                $m .= "<div class='bigid'>First unaffected commit: " . htmlspecialchars($update["to"]);
+                $m .= "<div class=\"bigid\">First unaffected commit: " . htmlspecialchars($update["to"]);
                 if ($errid)
                     $m .= ' <span class="barsep">·</span> '
                         . '<a class="ui js-check-version-ignore" href="" data-version-id="' . $errid . '">Ignore for two days</a>';

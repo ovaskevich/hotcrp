@@ -1,6 +1,6 @@
 <?php
 // search/st_comment.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Comment_SearchTerm extends SearchTerm {
     private $csm;
@@ -27,7 +27,7 @@ class Comment_SearchTerm extends SearchTerm {
         $this->only_author = get($kwdef, "only_author");
         $this->commentRound = get($kwdef, "round");
     }
-    static function comment_factory($keyword, Conf $conf, $kwfj, $m) {
+    static function comment_factory($keyword, $user, $kwfj, $m) {
         $tword = str_replace("-", "", $m[1]);
         return (object) [
             "name" => $keyword, "parse_callback" => "Comment_SearchTerm::parse",
@@ -37,8 +37,15 @@ class Comment_SearchTerm extends SearchTerm {
             "has" => ">0"
         ];
     }
-    static function response_factory($keyword, Conf $conf, $kwfj, $m) {
-        $round = $conf->resp_round_number($m[2]);
+    static function response_factory($keyword, $user, $kwfj, $m) {
+        $round = $user->conf->resp_round_number($m[2]);
+        if ($round === false
+            && $m[1] === ""
+            && preg_match('/\A(draft-?)(.*)\z/i', $m[2], $mm)) {
+            $m[1] = $mm[1];
+            $m[2] = $mm[2];
+            $round = $user->conf->resp_round_number($m[2]);
+        }
         if ($round === false || ($m[1] && $m[3]))
             return null;
         return (object) [
@@ -59,7 +66,7 @@ class Comment_SearchTerm extends SearchTerm {
             if (empty($tags))
                 return new False_SearchTerm;
         } else if ($m[0] !== "")
-            $contacts = $srch->matching_users($m[0], $sword->quoted, false);
+            $contacts = $srch->matching_uids($m[0], $sword->quoted, false);
         $csm = new ContactCountMatcher($m[1], $contacts);
         return new Comment_SearchTerm($csm, $tags, $sword->kwdef);
     }
@@ -96,8 +103,9 @@ class Comment_SearchTerm extends SearchTerm {
         }
     }
     function exec(PaperInfo $row, PaperSearch $srch) {
+        $textless = $this->type_mask === (COMMENTTYPE_DRAFT | COMMENTTYPE_RESPONSE);
         $n = 0;
-        foreach ($row->viewable_comment_skeletons($srch->user) as $crow)
+        foreach ($row->viewable_comment_skeletons($srch->user, $textless) as $crow)
             if ($this->csm->test_contact($crow->contactId)
                 && ($crow->commentType & $this->type_mask) == $this->type_value
                 && (!$this->only_author || $crow->commentType >= COMMENTTYPE_AUTHOR)

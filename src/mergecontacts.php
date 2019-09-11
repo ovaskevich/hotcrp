@@ -1,6 +1,6 @@
 <?php
 // mergecontacts.php -- HotCRP helper class for merging users
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class MergeContacts extends MessageSet {
     private $conf;
@@ -86,6 +86,7 @@ class MergeContacts extends MessageSet {
 
         // merge more things
         $this->merge1("ActionLog", "contactId");
+        $this->merge1("ActionLog", "destContactId");
         $this->merge1_ignore("TopicInterest", "contactId");
         $this->merge1("PaperComment", "contactId");
 
@@ -95,6 +96,7 @@ class MergeContacts extends MessageSet {
         $this->merge1_ignore("PaperReviewPreference", "contactId");
         $this->merge1("PaperReviewRefused", "contactId");
         $this->merge1("PaperReviewRefused", "requestedBy");
+        $this->merge1("PaperReviewRefused", "refusedBy");
         $this->merge1("ReviewRequest", "requestedBy");
         $this->merge1_ignore("PaperWatch", "contactId");
         $this->merge1_ignore("ReviewRating", "contactId");

@@ -1,6 +1,13 @@
 <?php
 // base.php -- HotCRP base helper functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+
+// type helpers
+
+function is_number($x) {
+    return is_int($x) || is_float($x);
+}
+
 
 // string helpers
 
@@ -33,7 +40,7 @@ function cleannl($text) {
         $text = str_replace("\r\n", "\n", $text);
         $text = strtr($text, "\r", "\n");
     }
-    if (strlen($text) && $text[strlen($text) - 1] !== "\n")
+    if ($text !== "" && $text[strlen($text) - 1] !== "\n")
         $text .= "\n";
     return $text;
 }
@@ -264,11 +271,6 @@ function get_f($var, $idx, $default = null) {
     return (float) get($var, $idx, $default);
 }
 
-function opt($idx, $default = null) {
-    global $Conf, $Opt;
-    return get($Conf ? $Conf->opt : $Opt, $idx, $default);
-}
-
 function uploaded_file_error($finfo) {
     $e = $finfo["error"];
     $name = get($finfo, "name") ? "<span class=\"lineno\">" . htmlspecialchars($finfo["name"]) . ":</span> " : "";
@@ -405,11 +407,26 @@ function assert_callback() {
 // pcntl helpers
 
 if (function_exists("pcntl_wifexited") && pcntl_wifexited(0) !== null) {
-    function pcntl_wifexitedsuccess($status) {
-        return pcntl_wifexited($status) && pcntl_wexitstatus($status) == 0;
+    function pcntl_wifexitedwith($status, $exitstatus = 0) {
+        return pcntl_wifexited($status) && pcntl_wexitstatus($status) == $exitstatus;
     }
 } else {
-    function pcntl_wifexitedsuccess($status) {
-        return ($status & 0x7f) == 0 && (($status & 0xff00) >> 8) == 0;
+    function pcntl_wifexitedwith($status, $exitstatus = 0) {
+        return ($status & 0xff7f) == ($exitstatus << 8);
+    }
+}
+
+
+// setcookie helper
+
+if (PHP_VERSION_ID >= 70300) {
+    function hotcrp_setcookie($name, $value = "", $options = []) {
+        return setcookie($name, $value, $options);
+    }
+} else {
+    function hotcrp_setcookie($name, $value = "", $options = []) {
+        return setcookie($name, $value, get($options, "expires", 0),
+                         get($options, "path", ""), get($options, "domain", ""),
+                         get($options, "secure", false), get($options, "httponly", false));
     }
 }

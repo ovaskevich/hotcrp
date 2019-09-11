@@ -1,6 +1,6 @@
 <?php
 // pc_formulagraph.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
     public $formula;
@@ -45,22 +45,18 @@ class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
         else
             return htmlspecialchars($x);
     }
-}
 
-class FormulaGraph_PaperColumnFactory {
-    static private $nregistered = 0;
-    static function expand($name, Conf $conf, $xfj, $m) {
+    static function expand($name, $user, $xfj, $m) {
         $formula = new Formula($m[1], true);
-        if (!$formula->check($conf->xt_user)) {
-            $conf->xt_factory_error($formula->error_html());
+        if (!$formula->check($user)) {
+            $user->conf->xt_factory_error($formula->error_html());
             return null;
         } else if (!($formula->result_format() instanceof ReviewField)) {
-            $conf->xt_factory_error("Graphed formulas must return review fields.");
+            $user->conf->xt_factory_error("Graphed formulas must return review fields.");
             return null;
         } else {
-            ++self::$nregistered;
             $cj = (array) $xfj;
-            $cj["name"] = "graphx" . self::$nregistered;
+            $cj["name"] = "graph(" . $m[1] . ")";
             $cj["formula"] = $formula;
             return [(object) $cj];
         }

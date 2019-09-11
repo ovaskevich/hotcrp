@@ -1,12 +1,12 @@
 <?php
 // listactions/la_get_sub.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Get_ListAction extends ListAction {
     static function render(PaperList $pl) {
         $actions = array_values($pl->displayable_list_actions("get/"));
         foreach ($pl->user->user_option_list() as $o)
-            if ($pl->user->can_view_some_paper_option($o)
+            if ($pl->user->can_view_some_option($o)
                 && $o->is_document()
                 && $pl->has($o->field_key()))
                 $actions[] = GetDocument_ListAction::make_list_action($o);
@@ -31,7 +31,7 @@ class Get_ListAction extends ListAction {
         if (!empty($sel_opt)) {
             return Ht::select("getfn", $sel_opt, $pl->qreq->getfn,
                               ["class" => "want-focus js-submit-action-info-get", "style" => "max-width:10em"])
-                . "&nbsp; " . Ht::submit("fn", "Go", ["value" => "get", "data-default-submit-all" => 1, "class" => "btn uix js-submit-mark"]);
+                . "&nbsp; " . Ht::submit("fn", "Go", ["value" => "get", "data-default-submit-all" => 1, "class" => "uix js-submit-mark"]);
         } else
             return null;
     }
@@ -39,7 +39,7 @@ class Get_ListAction extends ListAction {
         if (($opts = $user->conf->paper_opts->find_all($qreq->getfn))
             && count($opts) == 1
             && ($o = current($opts))
-            && $user->can_view_some_paper_option($o)) {
+            && $user->can_view_some_option($o)) {
             $ga = new GetDocument_ListAction($o->id);
             return $ga->run($user, $qreq, $ssel);
         } else
@@ -56,8 +56,8 @@ class GetCheckFormat_ListAction extends ListAction {
         $csvg = $user->conf->make_csvg("formatcheck")->select(["paper", "title", "pages", "format"]);
         $csvg->download_headers();
         echo $csvg->headerline;
-        $cf = new CheckFormat($user->conf);
-        foreach ($ssel->reorder($papers) as $prow) {
+        $cf = new CheckFormat($user->conf, CheckFormat::RUN_PREFER_NO);
+        foreach ($papers as $prow) {
             $pages = "?";
             if ($prow->mimetype == "application/pdf") {
                 $dtype = $prow->finalPaperStorageId ? DTYPE_FINAL : DTYPE_SUBMISSION;
@@ -81,81 +81,74 @@ class GetCheckFormat_ListAction extends ListAction {
 
 class GetAbstract_ListAction extends ListAction {
     const WIDTH = 96;
-    static private function render_option(PaperOption $o, $otxt) {
-        $dtype = array_shift($otxt);
-        if ($dtype === PaperOption::PAGE_HTML_NAME)
-            $n = join(" ", $otxt);
-        else
-            $n = $o->title;
-        $text = prefix_word_wrap("", $n, 0, self::WIDTH);
-        $text .= str_repeat("-", min(self::WIDTH, strlen($text) - 1)) . "\n";
-        if ($dtype === PaperOption::PAGE_HTML_DATA && !empty($otxt)) {
-            if (count($otxt) === 1)
-                $text .= rtrim($otxt[0]);
-            else
-                $text .= join("", array_map(function ($t) { return "* " . rtrim($t) . "\n"; }, $otxt));
-            $text .= "\n";
-        }
-        return $text . "\n";
+    private static function render_abstract($fr, $prow, $user, $o) {
+        $fr->value = $prow->abstract;
+        $fr->value_format = $prow->format_of($prow->abstract);
     }
-    static function render_displayed_options(PaperInfo $prow, Contact $user, $display) {
-        $text = "";
-        foreach ($prow->options() as $ov) {
-            if ($ov->option->display() === $display
-                && $user->can_view_paper_option($prow, $ov->option)
-                && ($otxt = $ov->option->unparse_page_text($prow, $ov)))
-                $text .= self::render_option($ov->option, $otxt);
+    private static function render_authors($fr, $prow, $user, $o) {
+        if ($user->can_view_authors($prow)
+            && ($alist = $prow->author_list())) {
+            $fr->title = $o->title(count($alist));
+            $fr->set_text("");
+            foreach ($alist as $i => $au) {
+                $marker = ($i || count($alist) > 1 ? ($i + 1) . ". " : "");
+                $fr->value .= prefix_word_wrap($marker, $au->name_email_aff_text(), strlen($marker), self::WIDTH);
+            }
         }
-        return $text;
+    }
+    private static function render_topics($fr, $prow, $user, $o) {
+        if (($tlist = $prow->topic_map())) {
+            $fr->title = $o->title(count($tlist));
+            $fr->set_text("");
+            foreach ($tlist as $t)
+                $fr->value .= prefix_word_wrap("* ", $t, 2, self::WIDTH);
+        }
     }
     static function render(PaperInfo $prow, Contact $user) {
         $n = prefix_word_wrap("", "Submission #{$prow->paperId}: {$prow->title}", 0, self::WIDTH);
         $text = $n . str_repeat("=", min(self::WIDTH, strlen($n) - 1)) . "\n\n";
 
-        $text .= self::render_displayed_options($prow, $user, PaperOption::DISP_SUBMISSION);
-
-        if ($user->can_view_authors($prow) && ($alist = $prow->author_list())) {
-            if (count($alist) == 1)
-                $text .= "Author\n------\n"
-                    . prefix_word_wrap("", $alist[0]->name_email_aff_text(), 0, self::WIDTH);
-            else {
-                $text .= "Authors\n-------\n";
-                foreach ($alist as $i => $au) {
-                    $marker = ($i + 1) . ". ";
-                    $text .= prefix_word_wrap($marker, $au->name_email_aff_text(), strlen($marker), self::WIDTH);
+        $fr = new FieldRender(FieldRender::CTEXT);
+        foreach ($user->conf->paper_opts->field_list($prow) as $o) {
+            if (($o->id <= 0 || $user->allow_view_option($prow, $o))
+                && $o->display_position() !== false) {
+                $fr->clear();
+                if ($o->id === -1004) {
+                    self::render_abstract($fr, $prow, $user, $o);
+                } else if ($o->id === -1001) {
+                    self::render_authors($fr, $prow, $user, $o);
+                } else if ($o->id === -1005) {
+                    self::render_topics($fr, $prow, $user, $o);
+                } else if ($o->id > 0
+                           && ($ov = $prow->option($o))) {
+                    $o->render($fr, $ov);
+                }
+                if (!$fr->is_empty()) {
+                    if ($fr->title === null) {
+                        $fr->title = $o->title();
+                    }
+                    $title = prefix_word_wrap("", $fr->title, 0, self::WIDTH);
+                    $text .= $title
+                        . str_repeat("-", min(self::WIDTH, strlen($title) - 1))
+                        . "\n" . rtrim($fr->value) . "\n\n";
                 }
             }
-            $text .= "\n";
         }
-
-        if ($prow->abstract)
-            $text .= "Abstract\n--------\n" . rtrim($prow->abstract) . "\n\n";
-
-        $text .= self::render_displayed_options($prow, $user, PaperOption::DISP_PROMINENT);
-
-        if (($tlist = $prow->named_topic_map())) {
-            $text .= "Topics\n------\n";
-            foreach ($tlist as $t)
-                $text .= prefix_word_wrap("* ", $t, 2, self::WIDTH);
-            $text .= "\n";
-        }
-
-        $text .= self::render_displayed_options($prow, $user, PaperOption::DISP_TOPICS);
 
         return $text . "\n";
     }
     function run(Contact $user, $qreq, $ssel) {
         $texts = array();
         foreach ($user->paper_set($ssel, ["topics" => 1]) as $prow) {
-            if (($whyNot = $user->perm_view_paper($prow)))
+            if (($whyNot = $user->perm_view_paper($prow))) {
                 Conf::msg_error(whyNotText($whyNot));
-            else {
-                defappend($texts[$prow->paperId], $this->render($prow, $user));
+            } else {
+                $texts[] = $this->render($prow, $user);
                 $rfSuffix = (count($texts) == 1 ? $prow->paperId : "s");
             }
         }
-        if (count($texts))
-            downloadText(join("", $ssel->reorder($texts)), "abstract$rfSuffix");
+        if (!empty($texts))
+            downloadText(join("", $texts), "abstract$rfSuffix");
     }
 }
 
@@ -196,16 +189,15 @@ class GetAuthors_ListAction extends ListAction {
                     unset($contact_emails[$lemail]);
                 } else if ($admin)
                     $line[] = "no";
-                arrayappend($texts[$prow->paperId], $line);
+                $texts[] = $line;
             }
             foreach ($contact_emails as $c)
-                arrayappend($texts[$prow->paperId], [$prow->paperId, $prow->title, $c->firstName, $c->lastName, $c->email, $c->affiliation, "contact_only"]);
+                $texts[] = [$prow->paperId, $prow->title, $c->firstName, $c->lastName, $c->email, $c->affiliation, "contact_only"];
         }
         $header = ["paper", "title", "first", "last", "email", "affiliation"];
         if ($want_contacttype)
             $header[] = "iscontact";
-        return $user->conf->make_csvg("authors")->select($header)
-            ->add($ssel->reorder($texts));
+        return $user->conf->make_csvg("authors")->select($header)->add($texts);
     }
 }
 
@@ -216,16 +208,17 @@ class GetContacts_ListAction extends ListAction {
     }
     function run(Contact $user, $qreq, $ssel) {
         $contact_map = GetAuthors_ListAction::contact_map($user->conf, $ssel);
+        $texts = [];
         foreach ($user->paper_set($ssel, ["allConflictType" => 1]) as $prow)
             if ($user->allow_administer($prow))
                 foreach ($prow->contacts() as $cid => $c) {
                     $a = $contact_map[$cid];
                     $aa = $prow->author_by_email($a->email) ? : $a;
-                    arrayappend($texts[$prow->paperId], [$prow->paperId, $prow->title, $aa->firstName, $aa->lastName, $aa->email, $aa->affiliation]);
+                    $texts[] = [$prow->paperId, $prow->title, $aa->firstName, $aa->lastName, $aa->email, $aa->affiliation];
                 }
         return $user->conf->make_csvg("contacts")
             ->select(["paper", "title", "first", "last", "email", "affiliation"])
-            ->add($ssel->reorder($texts));
+            ->add($texts);
     }
 }
 
@@ -234,10 +227,7 @@ class GetPcconflicts_ListAction extends ListAction {
         return $user->is_manager();
     }
     function run(Contact $user, $qreq, $ssel) {
-        $allConflictTypes = Conflict::$type_descriptions;
-        $allConflictTypes[CONFLICT_CHAIRMARK] = "Chair-confirmed";
-        $allConflictTypes[CONFLICT_AUTHOR] = "Author";
-        $allConflictTypes[CONFLICT_CONTACTAUTHOR] = "Contact";
+        $confset = $user->conf->conflict_types();
         $pcm = $user->conf->pc_members();
         $texts = array();
         $old_overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
@@ -247,18 +237,18 @@ class GetPcconflicts_ListAction extends ListAction {
                 foreach ($prow->conflicts() as $cid => $c)
                     if (isset($pcm[$cid])) {
                         $pc = $pcm[$cid];
-                        $m[$pc->sort_position] = [$prow->paperId, $prow->title, $pc->firstName, $pc->lastName, $pc->email, get($allConflictTypes, $c->conflictType, "Conflict")];
+                        $m[$pc->sort_position] = [$prow->paperId, $prow->title, $pc->firstName, $pc->lastName, $pc->email, $confset->unparse_text($c->conflictType)];
                     }
                 if ($m) {
                     ksort($m);
-                    $texts[$prow->paperId] = $m;
+                    $texts[] = $m;
                 }
             }
         }
         $user->set_overrides($old_overrides);
         return $user->conf->make_csvg("pcconflicts")
             ->select(["paper", "title", "first", "last", "email", "conflicttype"])
-            ->add($ssel->reorder($texts));
+            ->add($texts);
     }
 }
 
@@ -268,15 +258,15 @@ class GetTopics_ListAction extends ListAction {
         foreach ($user->paper_set($ssel, ["topics" => 1]) as $row)
             if ($user->can_view_paper($row)) {
                 $out = array();
-                foreach ($row->named_topic_map() as $t)
+                foreach ($row->topic_map() as $t)
                     $out[] = [$row->paperId, $row->title, $t];
                 if (empty($out))
                     $out[] = [$row->paperId, $row->title, "<none>"];
-                arrayappend($texts[$row->paperId], $out);
+                $texts[] = $out;
             }
         return $user->conf->make_csvg("topics")
             ->select(["paper", "title", "topic"])
-            ->add($ssel->reorder($texts));
+            ->add($texts);
     }
 }
 

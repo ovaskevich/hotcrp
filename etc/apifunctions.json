@@ -1,7 +1,7 @@
 [
     {
         "name": "administrator", "paper": true, "get": true, "post": true,
-        "callback": "PaperApi::manager_api",
+        "callback": "PaperPC_API::manager_api",
         "synonym": ["manager"]
     },
     {
@@ -9,16 +9,24 @@
         "callback": "AllTags_API::run"
     },
     {
-        "name": "checkformat", "paper": true, "get": true, "post": true,
-        "callback": "PaperApi::checkformat_api"
-    },
-    {
         "name": "clickthrough", "post": true,
         "callback": "User_API::clickthrough"
     },
     {
+        "name": "comment", "paper": true, "post": true,
+        "callback": "Comment_API::run"
+    },
+    {
+        "name": "declinereview", "post": true, "redirect": true,
+        "callback": "RequestReview_API::declinereview"
+    },
+    {
         "name": "decision", "paper": true, "get": true, "post": true,
-        "callback": "PaperApi::decision_api"
+        "callback": "Decision_API::run"
+    },
+    {
+        "name": "fieldtext", "get": true,
+        "callback": "Search_API::fieldtext"
     },
     {
         "name": "fieldhtml", "get": true,
@@ -29,13 +37,25 @@
         "callback": "PaperApi::follow_api"
     },
     {
-        "name": "lead", "paper": true, "get": true, "post": true,
-        "callback": "PaperApi::lead_api"
+        "name": "formatcheck", "get": true, "post": true,
+        "callback": "FormatCheck_API::run",
+        "synonym": ["checkformat"]
     },
     {
-        "name": "viewoptions", "get": true, "post": true,
-        "callback": "SearchConfig_API::viewoptions",
-        "synonym": ["listreport"]
+        "name": "graphdata", "get": true,
+        "callback": "GraphData_Api::graphdata"
+    },
+    {
+        "name": "jserror", "get": true, "post": true,
+        "callback": "Error_API::jserror"
+    },
+    {
+        "name": "lead", "paper": true, "get": true, "post": true,
+        "callback": "PaperPC_API::lead_api"
+    },
+    {
+        "name": "mailtext", "get": true, "post": true,
+        "callback": "Mail_API::mailtext"
     },
     {
         "name": "namedformula", "get": true,
@@ -50,6 +70,10 @@
         "callback": "PaperApi::mentioncompletion_api"
     },
     {
+        "name": "pc", "get": true, "post": true,
+        "callback": "PaperPC_API::pc_api"
+    },
+    {
         "name": "review", "paper": true, "get": true, "post": true,
         "callback": "PaperApi::review_api"
     },
@@ -62,8 +86,8 @@
         "callback": "PaperApi::reviewround_api"
     },
     {
-        "name": "revpref", "paper": true, "get": true, "post": true,
-        "callback": "PaperApi::pref_api",
+        "name": "revpref", "get": true, "post": true,
+        "callback": "Preference_API::pref_api",
         "synonym": ["pref"]
     },
     {
@@ -71,12 +95,17 @@
         "callback": "Search_API::search"
     },
     {
+        "name": "session", "post": true,
+        "callback": "Session_API::setsession",
+        "synonym": ["setsession"]
+    },
+    {
         "name": "settags", "post": true,
         "callback": "PaperApi::settags_api"
     },
     {
         "name": "shepherd", "paper": true, "get": true, "post": true,
-        "callback": "PaperApi::shepherd_api"
+        "callback": "PaperPC_API::shepherd_api"
     },
     {
         "name": "taganno", "get": true,
@@ -92,6 +121,10 @@
         "callback": "PaperApi::tagreport_api"
     },
     {
+        "name": "trackerconfig", "post": true,
+        "callback": "MeetingTracker::trackerconfig_api"
+    },
+    {
         "name": "trackerstatus", "get": true, "post": true,
         "callback": "MeetingTracker::trackerstatus_api"
     },
@@ -100,15 +133,16 @@
         "callback": "User_API::user"
     },
     {
+        "name": "viewoptions", "get": true, "post": true,
+        "callback": "SearchConfig_API::viewoptions",
+        "synonym": ["listreport"]
+    },
+    {
         "name": "votereport", "paper": true, "get": true, "post": true,
         "callback": "PaperApi::votereport_api"
     },
     {
         "name": "whoami", "get": true,
         "callback": "User_API::whoami"
-    },
-    {
-        "name": "jserror", "get": true, "post": true,
-        "callback": "Error_API::jserror"
     }
 ]

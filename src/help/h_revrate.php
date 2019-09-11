@@ -1,6 +1,6 @@
 <?php
 // src/help/h_revrate.php -- HotCRP help functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class RevRate_HelpTopic {
     static function render($hth) {
@@ -16,7 +16,7 @@ their reviews.</p>
   focused, and provide direction for the authors’ future work.
   The rating options are:</p>
 
-<ul class=\"xd\">
+<ul class=\"x\">
 <li><strong>Good review</strong>: Thorough, clear, constructive, and gives good
   ideas for next steps.</li>
 <li><strong>Needs work</strong>: The review needs revision. If possible,
@@ -50,7 +50,7 @@ $hth->search_link("search for “rate:short”", "rate:short"), ".</p>";
             $what = "no one";
         echo $hth->subhead("Settings");
         echo "<p>Chairs set how ratings work on the ",
-            $hth->settings_link("review settings page", "reviews"), ".",
+            $hth->setting_link("review settings page", "rev_ratings"), ".",
             ($hth->user->is_reviewer() ? " Currently, $what can rate reviews." : ""), "</p>";
 
         echo $hth->subhead("Visibility");

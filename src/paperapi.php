@@ -1,64 +1,8 @@
 <?php
 // paperapi.php -- HotCRP paper-related API calls
-// Copyright (c) 2008-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
 
 class PaperApi {
-    static function decision_api(Contact $user, Qrequest $qreq, $prow) {
-        if ($qreq->method() !== "GET") {
-            $aset = new AssignmentSet($user, true);
-            $aset->enable_papers($prow);
-            if (is_numeric($qreq->decision))
-                $qreq->decision = get($user->conf->decision_map(), +$qreq->decision);
-            $aset->parse("paper,action,decision\n{$prow->paperId},decision," . CsvGenerator::quote($qreq->decision));
-            if (!$aset->execute())
-                return $aset->json_result();
-            $prow->outcome = $prow->conf->fetch_ivalue("select outcome from Paper where paperId=?", $prow->paperId);
-        }
-        if (!$user->can_view_decision($prow))
-            json_exit(403, "Permission error.");
-        $dname = $prow->conf->decision_name($prow->outcome);
-        $jr = new JsonResult(["ok" => true, "value" => (int) $prow->outcome, "result" => htmlspecialchars($dname ? : "?")]);
-        if ($user->can_set_decision($prow))
-            $jr->content["editable"] = true;
-        return $jr;
-    }
-
-    private static function paper_pc_api(Contact $user, Qrequest $qreq, $prow, $type) {
-        if ($qreq->method() !== "GET") {
-            if (!isset($qreq->$type))
-                return new JsonResult(400, ["ok" => false, "error" => "Missing parameter."]);
-            $aset = new AssignmentSet($user);
-            $aset->enable_papers($prow);
-            $aset->parse("paper,action,user\n{$prow->paperId},$type," . CsvGenerator::quote($qreq->$type));
-            if (!$aset->execute())
-                return $aset->json_result();
-            $cid = $user->conf->fetch_ivalue("select {$type}ContactId from Paper where paperId=?", $prow->paperId);
-        } else {
-            $k = "can_view_$type";
-            if (!$user->$k($prow))
-                return new JsonResult(403, ["ok" => false, "error" => "Permission error."]);
-            $k = "{$type}ContactId";
-            $cid = $prow->$k;
-        }
-        $luser = $cid ? $user->conf->pc_member_by_id($cid) : null;
-        $j = ["ok" => true, "result" => $luser ? $user->name_html_for($luser) : "None"];
-        if ($user->can_view_reviewer_tags($prow))
-            $j["color_classes"] = $cid ? $user->user_color_classes_for($luser) : "";
-        return $j;
-    }
-
-    static function lead_api(Contact $user, Qrequest $qreq, $prow) {
-        return self::paper_pc_api($user, $qreq, $prow, "lead");
-    }
-
-    static function shepherd_api(Contact $user, Qrequest $qreq, $prow) {
-        return self::paper_pc_api($user, $qreq, $prow, "shepherd");
-    }
-
-    static function manager_api(Contact $user, Qrequest $qreq, $prow) {
-        return self::paper_pc_api($user, $qreq, $prow, "manager");
-    }
-
     static function tagreport(Contact $user, $prow) {
         $ret = (object) ["ok" => $user->can_view_tags($prow)];
         if ($prow)
@@ -73,7 +17,7 @@ class PaperApi {
                 $qv[] = $myprefix . $lbase;
                 $myvotes[$lbase] = 0;
             }
-            $result = $user->conf->qe("select tag, sum(tagIndex) from PaperTag where tag ?a group by tag", $qv);
+            $result = $user->conf->qe("select tag, sum(tagIndex) from PaperTag join Paper using (paperId) where timeSubmitted>0 and tag?a group by tag", $qv);
             while (($row = edb_row($result))) {
                 $lbase = strtolower(substr($row[0], strlen($myprefix)));
                 $myvotes[$lbase] += +$row[1];
@@ -91,7 +35,7 @@ class PaperApi {
 
     static function tagreport_api(Contact $user, $qreq, $prow) {
         $jr = new JsonResult((array) self::tagreport($user, $prow));
-        $jr->transfer_messages($user->conf, true);
+        $jr->take_messages($user, true);
         return $jr;
     }
 
@@ -176,7 +120,7 @@ class PaperApi {
             json_exit(["ok" => true, "result" => '<span class="nw">' . join(',</span> <span class="nw">', $result) . '</span>']);
     }
 
-    static function get_user(Contact $user, Qrequest $qreq, $forceShow = null) {
+    static function get_user(Contact $user, Qrequest $qreq) {
         $u = $user;
         if (isset($qreq->u) || isset($qreq->reviewer)) {
             $x = isset($qreq->u) ? $qreq->u : $qreq->reviewer;
@@ -197,49 +141,14 @@ class PaperApi {
         return $u;
     }
 
-    static function get_reviewer(Contact $user, $qreq, $prow, $forceShow = null) {
-        $u = self::get_user($user, $qreq, $forceShow);
+    static function get_reviewer(Contact $user, $qreq, $prow) {
+        $u = self::get_user($user, $qreq);
         if ($u->contactId !== $user->contactId
-            && ($prow ? !$user->can_administer($prow, $forceShow) : !$user->privChair)) {
+            && ($prow ? !$user->can_administer($prow) : !$user->privChair)) {
             error_log("PaperApi::get_reviewer: rejecting user {$u->contactId}/{$u->email}, requested by {$user->contactId}/{$user->email}");
             json_exit(403, "Permission error.");
         }
         return $u;
-    }
-
-    static function pref_api(Contact $user, $qreq, $prow) {
-        $u = self::get_reviewer($user, $qreq, $prow, true);
-        if ($qreq->method() !== "GET") {
-            $aset = new AssignmentSet($user, true);
-            $aset->enable_papers($prow);
-            $aset->parse("paper,user,preference\n{$prow->paperId}," . CsvGenerator::quote($u->email) . "," . CsvGenerator::quote($qreq->pref, true));
-            if (!$aset->execute())
-                return $aset->json_result();
-            $prow->load_reviewer_preferences();
-        }
-        if ($u->contactId !== $user->contactId && !$user->allow_administer($prow)) {
-            error_log("PaperApi::pref_api: rejecting user {$u->contactId}/{$u->email}, requested by {$user->contactId}/{$user->email}");
-            json_exit(403, "Permission error.");
-        }
-        $pref = $prow->reviewer_preference($u, true);
-        $value = unparse_preference($pref[0], $pref[1]);
-        $jr = new JsonResult(["ok" => true, "value" => $value === "0" ? "" : $value, "pref" => $pref[0]]);
-        if ($pref[1] !== null)
-            $jr->content["prefexp"] = unparse_expertise($pref[1]);
-        if ($user->conf->has_topics())
-            $jr->content["topic_score"] = $pref[2];
-        return $jr;
-    }
-
-    static function checkformat_api(Contact $user, $qreq, $prow) {
-        $dtype = cvtint($qreq->dt, 0);
-        $opt = $user->conf->paper_opts->get($dtype);
-        if (!$opt || !$user->can_view_paper_option($prow, $opt))
-            return ["ok" => false, "error" => "Permission error."];
-        $cf = new CheckFormat($prow->conf);
-        $doc = $cf->fetch_document($prow, $dtype, $qreq->docid);
-        $cf->check_document($prow, $doc);
-        return ["ok" => !$cf->failed, "response" => $cf->document_report($prow, $doc)];
     }
 
     static function follow_api(Contact $user, $qreq, $prow) {
@@ -259,13 +168,13 @@ class PaperApi {
         if ($user->can_view_pc()) {
             $pcmap = $user->conf->pc_completion_map();
             foreach ($user->conf->pc_members_and_admins() as $pc)
-                if (!$pc->disabled
+                if (!$pc->is_disabled()
                     && (!$prow || $pc->can_view_new_comment_ignore_conflict($prow))) {
                     $primary = true;
                     foreach ($pc->completion_items() as $k => $level)
                         if (get($pcmap, $k) === $pc) {
                             $skey = $primary ? "s" : "sm1";
-                            $result[$k] = [$skey => $k, "d" => $pc->name_text()];
+                            $result[$k] = [$skey => $k, "d" => $pc->name()];
                             $primary = false;
                         }
                 }
@@ -281,7 +190,7 @@ class PaperApi {
         if (isset($qreq->r)) {
             $rrow = $prow->full_review_of_textual_id($qreq->r);
             if ($rrow === false)
-                return new JsonResult(400, "Parameter error.");
+                return new JsonResult(400, "Bad request.");
             $rrows = $rrow ? [$rrow] : [];
         } else if (isset($qreq->u)) {
             $need_id = true;
@@ -297,10 +206,12 @@ class PaperApi {
         }
         $vrrows = [];
         $rf = $user->conf->review_form();
-        foreach ($rrows as $rrow)
+        foreach ($rrows as $rrow) {
             if ($user->can_view_review($prow, $rrow)
-                && (!$need_id || $user->can_view_review_identity($prow, $rrow)))
-                $vrrows[] = $rf->unparse_review_json($prow, $rrow, $user);
+                && (!$need_id || $user->can_view_review_identity($prow, $rrow))) {
+                $vrrows[] = $rf->unparse_review_json($user, $prow, $rrow);
+            }
+        }
         if (!$vrrows && $rrows)
             return new JsonResult(403, "Permission error.");
         else
@@ -310,7 +221,7 @@ class PaperApi {
     static function reviewrating_api(Contact $user, Qrequest $qreq, PaperInfo $prow) {
         if (!$qreq->r
             || ($rrow = $prow->full_review_of_textual_id($qreq->r)) === false)
-            return new JsonResult(400, "Parameter error.");
+            return new JsonResult(400, "Bad request.");
         else if (!$user->can_view_review($prow, $rrow))
             return new JsonResult(403, "Permission error.");
         else if (!$rrow)
@@ -319,7 +230,7 @@ class PaperApi {
         if ($qreq->method() !== "GET") {
             if (!isset($qreq->user_rating)
                 || ($rating = ReviewInfo::parse_rating($qreq->user_rating)) === false)
-                return new JsonResult(400, "Parameter error.");
+                return new JsonResult(400, "Bad request.");
             else if (!$editable)
                 return new JsonResult(403, "Permission error.");
             if ($rating === null)
@@ -340,7 +251,7 @@ class PaperApi {
     static function reviewround_api(Contact $user, $qreq, $prow) {
         if (!$qreq->r
             || ($rrow = $prow->full_review_of_textual_id($qreq->r)) === false)
-            return new JsonResult(400, "Parameter error.");
+            return new JsonResult(400, "Bad request.");
         else if (!$user->can_administer($prow))
             return new JsonResult(403, "Permission error.");
         else if (!$rrow)

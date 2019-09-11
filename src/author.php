@@ -1,6 +1,6 @@
 <?php
 // author.php -- HotCRP author objects
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Author {
     public $firstName = "";
@@ -8,7 +8,7 @@ class Author {
     public $email = "";
     public $affiliation = "";
     private $_name;
-    public $contactId = null;
+    public $contactId;
     private $_deaccents;
     public $nonauthor;
     public $sorter;

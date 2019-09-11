@@ -1,11 +1,14 @@
 <?php
 // test/setup.php -- HotCRP helper file to initialize tests
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
 define("HOTCRP_OPTIONS", "$ConfSitePATH/test/options.php");
 define("HOTCRP_TESTHARNESS", true);
+ini_set("error_log", null);
+ini_set("log_errors", "0");
+ini_set("display_errors", "stderr");
 require_once("$ConfSitePATH/src/init.php");
 $Conf->set_opt("disablePrintEmail", true);
 $Conf->set_opt("postfixEOL", "\n");
@@ -229,6 +232,7 @@ function xassert($x, $description = "") {
         trigger_error("Assertion" . ($description ? " " . $description : "") . " failed at " . assert_location() . "\n", E_USER_WARNING);
     else
         ++Xassert::$nsuccess;
+    return !!$x;
 }
 
 function xassert_exit() {
@@ -243,38 +247,46 @@ function xassert_exit() {
 
 function xassert_eqq($a, $b) {
     ++Xassert::$n;
-    if ($a === $b)
+    $ok = $a === $b;
+    if ($ok)
         ++Xassert::$nsuccess;
     else
         trigger_error("Assertion " . var_export($a, true) . " === " . var_export($b, true)
                       . " failed at " . assert_location() . "\n", E_USER_WARNING);
+    return $ok;
 }
 
 function xassert_neqq($a, $b) {
     ++Xassert::$n;
-    if ($a !== $b)
+    $ok = $a !== $b;
+    if ($ok)
         ++Xassert::$nsuccess;
     else
         trigger_error("Assertion " . var_export($a, true) . " !== " . var_export($b, true)
                       . " failed at " . assert_location() . "\n", E_USER_WARNING);
+    return $ok;
 }
 
 function xassert_eq($a, $b) {
     ++Xassert::$n;
-    if ($a == $b)
+    $ok = $a == $b;
+    if ($ok)
         ++Xassert::$nsuccess;
     else
         trigger_error("Assertion " . var_export($a, true) . " == " . var_export($b, true)
                       . " failed at " . assert_location() . "\n", E_USER_WARNING);
+    return $ok;
 }
 
 function xassert_neq($a, $b) {
     ++Xassert::$n;
-    if ($a != $b)
+    $ok = $a != $b;
+    if ($ok)
         ++Xassert::$nsuccess;
     else
         trigger_error("Assertion " . var_export($a, true) . " != " . var_export($b, true)
                       . " failed at " . assert_location() . "\n", E_USER_WARNING);
+    return $ok;
 }
 
 function xassert_array_eqq($a, $b) {
@@ -302,15 +314,18 @@ function xassert_array_eqq($a, $b) {
         ++Xassert::$nsuccess;
     else
         trigger_error("Array assertion failed, $problem at " . assert_location() . "\n", E_USER_WARNING);
+    return $problem === "";
 }
 
 function xassert_match($a, $b) {
     ++Xassert::$n;
-    if (is_string($a) && preg_match($b, $a))
+    $ok = is_string($a) && preg_match($b, $a);
+    if ($ok)
         ++Xassert::$nsuccess;
     else
         trigger_error("Assertion " . var_export($a, true) . " ~= " . $b
                       . " failed at " . assert_location() . "\n", E_USER_WARNING);
+    return $ok;
 }
 
 function search_json($user, $text, $cols = "id") {
@@ -332,12 +347,12 @@ function assert_search_papers($user, $text, $result) {
     $result = preg_replace_callback('/(\d+)-(\d+)/', function ($m) {
         return join(" ", range(+$m[1], +$m[2]));
     }, $result);
-    xassert_eqq(join(" ", array_keys(search_json($user, $text))), $result);
+    return xassert_eqq(join(" ", array_keys(search_json($user, $text))), $result);
 }
 
 function assert_query($q, $b) {
     $result = Dbl::qe_raw($q);
-    xassert_eqq(join("\n", edb_first_columns($result)), $b);
+    return xassert_eqq(join("\n", edb_first_columns($result)), $b);
 }
 
 function tag_normalize_compare($a, $b) {
@@ -375,18 +390,19 @@ function paper_tag_normalize($prow) {
 function xassert_assign($who, $what, $override = false) {
     $assignset = new AssignmentSet($who, $override);
     $assignset->parse($what);
-    $xassert_success = $assignset->execute();
-    xassert($xassert_success);
-    if (!$xassert_success) {
+    $ok = $assignset->execute();
+    xassert($ok);
+    if (!$ok) {
         foreach ($assignset->errors_text() as $line)
             fwrite(STDERR, "  $line\n");
     }
+    return $ok;
 }
 
 function xassert_assign_fail($who, $what, $override = false) {
     $assignset = new AssignmentSet($who, $override);
     $assignset->parse($what);
-    xassert(!$assignset->execute());
+    return xassert(!$assignset->execute());
 }
 
 function call_api($fn, $user, $qreq, $prow) {
@@ -408,21 +424,23 @@ function call_api($fn, $user, $qreq, $prow) {
 
 function fetch_paper($pid, $contact = null) {
     global $Conf;
-    return $Conf->paperRow($pid, $contact);
+    return $Conf->fetch_paper($pid, $contact);
 }
 
-function fetch_review(PaperInfo $prow, $contact) {
+function fetch_review($prow, $contact) {
+    if (is_int($prow))
+        $prow = fetch_paper($prow, $contact);
     return $prow->fresh_review_of_user($contact);
 }
 
-function save_review($paper, $contact, $revreq) {
+function save_review($paper, $contact, $revreq, $rrow = null) {
     global $Conf;
     $pid = is_object($paper) ? $paper->paperId : $paper;
     $prow = fetch_paper($pid, $contact);
     $rf = $Conf->review_form();
     $tf = new ReviewValues($rf);
     $tf->parse_web(new Qrequest("POST", $revreq), false);
-    $tf->check_and_save($contact, $prow, fetch_review($prow, $contact));
+    $tf->check_and_save($contact, $prow, $rrow ? : fetch_review($prow, $contact));
     return fetch_review($prow, $contact);
 }
 

@@ -1,6 +1,6 @@
 <?php
 // a_lead.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Lead_AssignmentParser extends AssignmentParser {
     private $key;
@@ -18,14 +18,17 @@ class Lead_AssignmentParser extends AssignmentParser {
             if (($cid = +$prow->$k))
                 $state->load(["type" => $this->key, "pid" => $prow->paperId, "_cid" => $cid]);
         }
+        Conflict_AssignmentParser::load_conflict_state($state);
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
         if ($this->key === "manager")
             return $state->user->privChair ? true : "You can’t change paper administrators.";
+        else if (!$state->user->can_administer($prow))
+            return "You can’t administer #{$prow->paperId}.";
         else
-            return parent::allow_paper($prow, $state);
+            return true;
     }
-    function expand_any_user(PaperInfo $prow, &$req, AssignmentState $state) {
+    function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
         if ($this->remove) {
             $m = $state->query(["type" => $this->key, "pid" => $prow->paperId]);
             $cids = array_map(function ($x) { return $x["_cid"]; }, $m);
@@ -33,25 +36,29 @@ class Lead_AssignmentParser extends AssignmentParser {
         } else
             return false;
     }
-    function expand_missing_user(PaperInfo $prow, &$req, AssignmentState $state) {
+    function expand_missing_user(PaperInfo $prow, $req, AssignmentState $state) {
         return $this->expand_any_user($prow, $req, $state);
     }
-    function allow_contact(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function allow_user(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         if ($this->remove || !$contact->contactId)
             return true;
         else if (!$contact->can_accept_review_assignment_ignore_conflict($prow)) {
             $verb = $this->key === "manager" ? "administer" : $this->key;
             return Text::user_html_nolink($contact) . " can’t $verb #{$prow->paperId}.";
         } else
-            return AssignmentParser::unconflicted($prow, $contact, $state);
+            return true;
     }
-    function apply(PaperInfo $prow, Contact $contact, &$req, AssignmentState $state) {
+    function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         $remcid = null;
         if ($this->remove && $contact->contactId)
             $remcid = $contact->contactId;
-        $state->remove(array("type" => $this->key, "pid" => $prow->paperId, "_cid" => $remcid));
-        if (!$this->remove && $contact->contactId)
-            $state->add(array("type" => $this->key, "pid" => $prow->paperId, "_cid" => $contact->contactId));
+        $state->remove(["type" => $this->key, "pid" => $prow->paperId, "_cid" => $remcid]);
+        if (!$this->remove && $contact->contactId) {
+            $it = ["type" => $this->key, "pid" => $prow->paperId, "_cid" => $contact->contactId];
+            if (isset($req["override"]) && friendly_boolean($req["override"]))
+                $it["_override"] = 1;
+            $state->add($it);
+        }
         return true;
     }
 }
@@ -63,6 +70,9 @@ class Lead_Assigner extends Assigner {
         $this->description = $this->type === "manager" ? "administrator" : $this->type;
     }
     static function make(AssignmentItem $item, AssignmentState $state) {
+        if (!$item->existed()) {
+            Conflict_Assigner::check_unconflicted($item, $state);
+        }
         return new Lead_Assigner($item, $state);
     }
     function icon() {
@@ -90,7 +100,7 @@ class Lead_Assigner extends Assigner {
             $x["email"] = "none";
         else {
             $x["email"] = $this->contact->email;
-            $x["name"] = $this->contact->name_text();
+            $x["name"] = $this->contact->name();
         }
         return $x;
     }

@@ -1,6 +1,6 @@
 <?php
 // reviewinfo.php -- HotCRP class representing reviews
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ReviewInfo {
     public $conf;
@@ -21,13 +21,15 @@ class ReviewInfo {
     //public $reviewAuthorNotified;
     public $reviewAuthorSeen;
     public $reviewOrdinal;
-    //public $timeDisplayed;
+    public $timeDisplayed;
     public $timeApprovalRequested;
     //public $reviewEditVersion;
     public $reviewNeedsSubmit;
     // ... scores ...
     //public $reviewWordCount;
     //public $reviewFormat;
+    //public $data;
+    private $_data;
 
     static public $text_field_map = [
         "paperSummary" => "t01", "commentsToAuthor" => "t02",
@@ -123,27 +125,97 @@ class ReviewInfo {
             $rrow->merge($conf);
         return $rrow;
     }
-    static function review_signature_sql() {
-        return "group_concat(r.reviewId, ' ', r.contactId, ' ', r.reviewToken, ' ', r.reviewType, ' ', "
-            . "r.reviewRound, ' ', r.requestedBy, ' ', r.reviewBlind, ' ', r.reviewModified, ' ', "
-            . "coalesce(r.reviewSubmitted,0), ' ', coalesce(r.reviewAuthorSeen,0), ' ', "
-            . "r.reviewOrdinal, ' ', r.timeApprovalRequested, ' ', r.reviewNeedsSubmit order by r.reviewId)";
+    static function review_signature_sql(Conf $conf, $scores = null) {
+        $t = "r.reviewId, ' ', r.contactId, ' ', r.reviewToken, ' ', r.reviewType, ' ', r.reviewRound, ' ', r.requestedBy, ' ', r.reviewBlind, ' ', r.reviewModified, ' ', coalesce(r.reviewSubmitted,0), ' ', coalesce(r.reviewAuthorSeen,0), ' ', r.reviewOrdinal, ' ', r.timeDisplayed, ' ', r.timeApprovalRequested, ' ', r.reviewNeedsSubmit";
+        foreach ($scores ? : [] as $fid)
+            if (($f = $conf->review_field($fid)) && $f->main_storage)
+                $t .= ", ' " . $f->short_id . "=', " . $f->id;
+        return "group_concat($t order by r.reviewId)";
     }
     static function make_signature(PaperInfo $prow, $signature) {
         $rrow = new ReviewInfo;
         $rrow->paperId = $prow->paperId;
-        list($rrow->reviewId, $rrow->contactId, $rrow->reviewToken, $rrow->reviewType,
-             $rrow->reviewRound, $rrow->requestedBy, $rrow->reviewBlind, $rrow->reviewModified,
-             $rrow->reviewSubmitted, $rrow->reviewAuthorSeen,
-             $rrow->reviewOrdinal, $rrow->timeApprovalRequested, $rrow->reviewNeedsSubmit)
-            = explode(" ", $signature);
+        $vals = explode(" ", $signature);
+        list($rrow->reviewId, $rrow->contactId, $rrow->reviewToken,
+             $rrow->reviewType, $rrow->reviewRound, $rrow->requestedBy,
+             $rrow->reviewBlind, $rrow->reviewModified, $rrow->reviewSubmitted,
+             $rrow->reviewAuthorSeen, $rrow->reviewOrdinal,
+             $rrow->timeDisplayed, $rrow->timeApprovalRequested,
+             $rrow->reviewNeedsSubmit) = $vals;
+        for ($i = 14; isset($vals[$i]); ++$i) {
+            $eq = strpos($vals[$i], "=");
+            $f = self::field_info(substr($vals[$i], 0, $eq), $prow->conf);
+            $fid = $f->id;
+            $rrow->$fid = substr($vals[$i], $eq + 1);
+            $prow->_mark_has_score($fid);
+        }
         $rrow->merge($prow->conf);
         return $rrow;
+    }
+
+
+    function is_subreview() {
+        return $this->reviewType == REVIEW_EXTERNAL
+            && !$this->reviewSubmitted
+            && !$this->reviewOrdinal
+            && ($this->timeApprovalRequested < 0 || $this->conf->ext_subreviews);
+    }
+
+    function needs_approval() {
+        return $this->reviewType == REVIEW_EXTERNAL
+            && !$this->reviewSubmitted
+            && $this->requestedBy
+            && $this->conf->ext_subreviews > 1;
     }
 
     function round_name() {
         return $this->reviewRound ? $this->conf->round_name($this->reviewRound) : "";
     }
+
+    function type_icon() {
+        if ($this->is_subreview()) {
+            $title = "Subreview";
+        } else {
+            $title = ReviewForm::$revtype_names_full[$this->reviewType];
+        }
+        $t = '<span class="rto rt' . $this->reviewType;
+        if (!$this->reviewSubmitted) {
+            if ($this->timeApprovalRequested < 0) {
+                $t .= " rtsubrev";
+            } else {
+                $t .= " rtinc";
+            }
+            if ($title !== "Subreview" || $this->timeApprovalRequested >= 0) {
+                $title .= " (" . $this->status_description() . ")";
+            }
+        }
+        return $t . '" title="' . $title . '"><span class="rti">'
+            . ReviewForm::$revtype_icon_text[$this->reviewType]
+            . '</span></span>';
+    }
+
+    function status_description() {
+        if ($this->reviewSubmitted) {
+            return "complete";
+        } else if ($this->reviewType == REVIEW_EXTERNAL
+                   && $this->timeApprovalRequested < 0) {
+            return "approved";
+        } else if ($this->reviewType == REVIEW_EXTERNAL
+                   && $this->timeApprovalRequested > 0) {
+            return "pending approval";
+        } else if ($this->reviewModified > 1) {
+            return "draft";
+        } else if ($this->reviewType == REVIEW_SECONDARY
+                   && $this->reviewNeedsSubmit <= 0
+                   && $this->conf->ext_subreviews < 3) {
+            return "delegated";
+        } else if ($this->reviewModified > 0) {
+            return "started";
+        } else {
+            return "not started";
+        }
+    }
+
 
     function assign_name($c) {
         $this->firstName = $c->firstName;
@@ -227,39 +299,6 @@ class ReviewInfo {
         return $json;
     }
 
-    static function compare($a, $b) {
-        // 1. different papers
-        if ($a->paperId != $b->paperId)
-            return (int) $a->paperId < (int) $b->paperId ? -1 : 1;
-        // 2. different ordinals (both have ordinals)
-        if ($a->reviewOrdinal
-            && $b->reviewOrdinal
-            && $a->reviewOrdinal != $b->reviewOrdinal)
-            return (int) $a->reviewOrdinal < (int) $b->reviewOrdinal ? -1 : 1;
-        // 3. some submitted reviews have no ordinal (ordinal is reserved for
-        //    user-visible reviews)
-        $asub = (int) $a->reviewSubmitted;
-        $bsub = (int) $b->reviewSubmitted;
-        if (($asub > 0) != ($bsub > 0))
-            return $asub > 0 ? -1 : 1;
-        if ($asub !== $bsub)
-            return $asub < $bsub ? -1 : 1;
-        // 4. submission class
-        $asclass = self::submission_class($a);
-        $bsclass = self::submission_class($b);
-        if ($asclass !== $bsclass)
-            return $asclass < $bsclass ? 1 : -1;
-        // 5. reviewer
-        if (isset($a->sorter)
-            && isset($b->sorter)
-            && ($x = strcmp($a->sorter, $b->sorter)) != 0)
-            return $x;
-        // 6. review id
-        if ($a->reviewId != $b->reviewId)
-            return (int) $a->reviewId < (int) $b->reviewId ? -1 : 1;
-        return 0;
-    }
-
     static function compare_id($a, $b) {
         if ($a->paperId != $b->paperId)
             return (int) $a->paperId < (int) $b->paperId ? -1 : 1;
@@ -268,20 +307,6 @@ class ReviewInfo {
         return 0;
     }
 
-    static function submission_class($rr) {
-        if ($rr->reviewSubmitted > 0)
-            return 5;
-        else if ($rr->reviewType == REVIEW_SECONDARY && $rr->reviewNeedsSubmit <= 0)
-            return 4;
-        else if ($rr->reviewModified > 1 && $rr->timeApprovalRequested > 0)
-            return 3;
-        else if ($rr->reviewModified > 1)
-            return 2;
-        else if ($rr->reviewModified > 0)
-            return 1;
-        else
-            return 0;
-    }
 
     function ratings() {
         $ratings = [];
@@ -331,5 +356,44 @@ class ReviewInfo {
                 return false;
         }
         return $n;
+    }
+
+
+    private function _load_data() {
+        if (!property_exists($this, "data"))
+            $this->data = $this->conf->fetch_value("select `data` from PaperReview where paperId=? and reviewId=?", $this->paperId, $this->reviewId);
+        $this->_data = $this->data ? json_decode($this->data) : (object) [];
+    }
+
+    private function _save_data() {
+        $this->data = json_encode_db($this->_data);
+        if ($this->data === "{}")
+            $this->data = null;
+        $this->conf->qe("update PaperReview set `data`=? where paperId=? and reviewId=?", $this->data, $this->paperId, $this->reviewId);
+    }
+
+    function acceptor() {
+        global $Now;
+        if ($this->_data === null)
+            $this->_load_data();
+        if (!isset($this->_data->acceptor)) {
+            $this->_data->acceptor = (object) ["text" => hotcrp_random_password(), "at" => $Now];
+            $this->_save_data();
+        }
+        return $this->_data->acceptor;
+    }
+    function acceptor_is($text) {
+        if ($this->_data === null)
+            $this->_load_data();
+        return isset($this->_data->acceptor)
+            && $this->_data->acceptor->text === $text;
+    }
+    function delete_acceptor() {
+        if ($this->_data === null)
+            $this->_load_data();
+        if (isset($this->_data->acceptor) && $this->_data->acceptor->at) {
+            $this->_data->acceptor->at = 0;
+            $this->_save_data();
+        }
     }
 }

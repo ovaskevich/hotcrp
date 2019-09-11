@@ -1,6 +1,6 @@
 <?php
 // pc_lead.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Lead_PaperColumn extends PaperColumn {
     function __construct(Conf $conf, $cj) {
@@ -16,9 +16,15 @@ class Lead_PaperColumn extends PaperColumn {
             return $row->leadContactId;
         return 0;
     }
+    function analyze_sort(PaperList $pl, &$rows, ListSorter $sorter) {
+        $sorter->anno = Contact::parse_sortanno($pl->conf, $sorter->anno);
+    }
+    function sort_name(PaperList $pl, ListSorter $sorter = null) {
+        return $this->name . PaperColumn::contact_sort_anno($pl, $sorter);
+    }
     function compare(PaperInfo $a, PaperInfo $b, ListSorter $sorter) {
-        $pl = $sorter->list;
-        return $pl->_compare_pc(self::cid($pl, $a), self::cid($pl, $b));
+        $pl = $sorter->pl;
+        return $pl->_compare_pc(self::cid($pl, $a), self::cid($pl, $b), $sorter);
     }
     function header(PaperList $pl, $is_text) {
         return "Discussion lead";

@@ -1,6 +1,6 @@
 <?php
 // profile.php -- HotCRP profile management page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 
@@ -23,7 +23,7 @@ function change_email_by_capability($Qreq) {
     if (!$Acct)
         error_go(false, "No such account.");
     else if (isset($capdata->data->oldemail)
-             && strcasecmp($Acct->email, $capdata->data->oldemail))
+             && strcasecmp($Acct->email, $capdata->data->oldemail) !== 0)
         error_go(false, "You have changed your email address since creating that email change code.");
 
     $email = $capdata->data->uemail;
@@ -34,28 +34,32 @@ function change_email_by_capability($Qreq) {
     $capmgr->delete($capdata);
 
     $Conf->confirmMsg("Your email address has been changed.");
-    if (!$Me->has_database_account() || $Me->contactId == $Acct->contactId)
+    if (!$Me->has_account_here() || $Me->contactId == $Acct->contactId)
         $Me = $Acct->activate($Qreq);
 }
-if ($Qreq->changeemail)
+if ($Qreq->changeemail
+    && !$Me->is_actas_user())
     change_email_by_capability($Qreq);
 
-if (!$Me->has_email())
+if (!$Me->is_signed_in()) {
     $Me->escape();
+}
+
 $newProfile = false;
-$useRequest = false;
 $UserStatus = new UserStatus($Me);
 
 if ($Qreq->u === null) {
-    if ($Qreq->user)
+    if ($Qreq->user) {
         $Qreq->u = $Qreq->user;
-    else if ($Qreq->contact)
+    } else if ($Qreq->contact) {
         $Qreq->u = $Qreq->contact;
-    else if (preg_match(',\A/(?:new|[^\s/]+)\z,i', Navigation::path()))
+    } else if (preg_match(',\A/(?:new|[^\s/]+)\z,i', Navigation::path())) {
         $Qreq->u = substr(Navigation::path(), 1);
+    }
 }
-if ($Me->privChair && $Qreq->new)
+if ($Me->privChair && $Qreq->new) {
     $Qreq->u = "new";
+}
 
 
 // Load user.
@@ -64,20 +68,20 @@ if ($Me->privChair && ($Qreq->u || $Qreq->search)) {
     if ($Qreq->u === "new") {
         $Acct = new Contact(null, $Conf);
         $newProfile = true;
-    } else if (($id = cvtint($Qreq->u)) > 0)
+    } else if (($id = cvtint($Qreq->u)) > 0) {
         $Acct = $Conf->user_by_id($id);
-    else if ($Qreq->u === "" && $Qreq->search)
+    } else if ($Qreq->u === "" && $Qreq->search) {
         Navigation::redirect_site("users");
-    else {
+    } else {
         $Acct = $Conf->user_by_email($Qreq->u);
         if (!$Acct && $Qreq->search) {
             $cs = new ContactSearch(ContactSearch::F_USER, $Qreq->u, $Me);
             if ($cs->ids) {
                 $Acct = $Conf->user_by_id($cs->ids[0]);
-                $list = new SessionList("u/all/" . urlencode($Qreq->search), $cs->ids, "“" . htmlspecialchars($Qreq->u) . "”", hoturl_site_relative_raw("users", ["t" => "all"]));
+                $list = new SessionList("u/all/" . urlencode($Qreq->search), $cs->ids, "“" . htmlspecialchars($Qreq->u) . "”", $Conf->hoturl_site_relative_raw("users", ["t" => "all"]));
                 $list->set_cookie();
                 $Qreq->u = $Acct->email;
-                SelfHref::redirect($Qreq);
+                $Conf->self_redirect($Qreq);
             }
         }
     }
@@ -91,16 +95,17 @@ if (!$Acct
         && ($Acct->contactId || $Qreq->u !== "new"))
     || (isset($Qreq->profile_contactid)
         && $Qreq->profile_contactid !== (string) $Acct->contactId)) {
-    if (!$Acct)
+    if (!$Acct) {
         Conf::msg_error("Invalid user.");
-    else if (isset($Qreq->save) || isset($Qreq->savebulk))
+    } else if (isset($Qreq->save) || isset($Qreq->savebulk)) {
         Conf::msg_error("You’re logged in as a different user now, so your changes were ignored.");
+    }
     unset($Qreq->u, $Qreq->save, $Qreq->savebulk);
-    SelfHref::redirect($Qreq);
+    $Conf->self_redirect($Qreq);
 }
 
 $need_highlight = false;
-if (($Acct->contactId != $Me->contactId || !$Me->has_database_account())
+if (($Acct->contactId != $Me->contactId || !$Me->has_account_here())
     && $Acct->has_email()
     && !$Acct->firstName && !$Acct->lastName && !$Acct->affiliation
     && !$Qreq->post) {
@@ -139,12 +144,12 @@ function save_user($cj, $user_status, $Acct, $allow_modification) {
 
     // check email
     if ($newProfile || strcasecmp($cj->email, $Acct->email)) {
-        if ($Acct && $Acct->data("locked"))
+        if ($Acct && $Acct->data("locked")) {
             return $user_status->error_at("email", "This account is locked, so you can’t change its email address.");
-        else if (($new_acct = $Conf->user_by_email($cj->email))) {
-            if ($allow_modification)
+        } else if (($new_acct = $Conf->user_by_email($cj->email))) {
+            if ($allow_modification) {
                 $cj->id = $new_acct->contactId;
-            else {
+            } else {
                 $msg = "Email address “" . htmlspecialchars($cj->email) . "” is already in use.";
                 if ($Me->privChair)
                     $msg = str_replace("an account", "<a href=\"" . hoturl("profile", "u=" . urlencode($cj->email)) . "\">an account</a>", $msg);
@@ -159,7 +164,7 @@ function save_user($cj, $user_status, $Acct, $allow_modification) {
             return $user_status->error_at("email", "You must supply an email address.");
         } else if (!validate_email($cj->email)) {
             return $user_status->error_at("email", "“" . htmlspecialchars($cj->email) . "” is not a valid email address.");
-        } else if ($Acct && !$Acct->has_database_account()) {
+        } else if ($Acct && !$Acct->has_account_here()) {
             return $user_status->error_at("email", "Your current account is only active on other HotCRP.com sites. Due to a server limitation, you can’t change your email until activating your account on this site.");
         }
         if (!$newProfile && !$Me->privChair) {
@@ -205,39 +210,45 @@ function parseBulkFile($text, $filename) {
 
     $csv = new CsvParser($text);
     $csv->set_comment_chars("#%");
-    if (($line = $csv->next())) {
-        $lcline = array_map(function ($a) { return strtolower(trim($a)); }, $line);
-        if (array_search("email", $lcline) !== false
-            || array_search("user", $lcline) !== false)
-            $csv->set_header($lcline);
-        else if (count($line) == 1) {
+    if (($line = $csv->next_array())) {
+        if (preg_grep('{\A(?:email|user)\z}i', $line)) {
+            $csv->set_header($line);
+        } else if (count($line) == 1) {
             $csv->set_header(["user"]);
             $csv->unshift($line);
         } else {
             // interpolate a likely header
-            $lcline = [];
-            for ($i = 0; $i < count($line); ++$i)
-                if (validate_email($line[$i]) && array_search("email", $lcline) === false)
-                    $lcline[] = "email";
-                else if (strpos($line[$i], " ") !== false && array_search("name", $lcline) === false)
-                    $lcline[] = "name";
-                else if (array_search($line[$i], ["pc", "chair"]) !== false && array_search("roles", $lcline) === false)
-                    $lcline[] = "roles";
-                else if (array_search("name", $lcline) !== false && array_search("affiliation", $lcline) === false)
-                    $lcline[] = "affiliation";
-                else
-                    $lcline[] = "unknown";
-            $csv->set_header($lcline);
             $csv->unshift($line);
-            $errors[] = "<span class='lineno'>" . $filename . $csv->lineno() . ":</span> Header missing, assuming “<code>" . join(",", $lcline) . "</code>”";
+            $hdr = [];
+            for ($i = 0; $i < count($line); ++$i) {
+                if (validate_email($line[$i])
+                    && array_search("email", $hdr) === false) {
+                    $hdr[] = "email";
+                } else if (strpos($line[$i], " ") !== false
+                           && array_search("name", $hdr) === false) {
+                    $hdr[] = "name";
+                } else if (preg_match('{\A(?:pc|chair|sysadmin|admin)\z}i', $line[$i])
+                           && array_search("roles", $hdr) === false) {
+                    $hdr[] = "roles";
+                } else if (array_search("name", $hdr) !== false
+                           && array_search("affiliation", $hdr) === false) {
+                    $hdr[] = "affiliation";
+                } else {
+                    $hdr[] = "unknown" . count($hdr);
+                }
+            }
+            $csv->set_header($hdr);
+            $errors[] = '<span class="lineno">' . $filename . $csv->lineno() . ":</span> Header missing, assuming “<code>" . join(",", $hdr) . "</code>”";
         }
-
     }
 
     $saved_users = [];
-    $ustatus = new UserStatus($Me, ["send_email" => true, "no_deprivilege_self" => true]);
+    $ustatus = new UserStatus($Me, [
+        "send_email" => true, "no_deprivilege_self" => true, "no_update_profile" => true
+    ]);
+    $ustatus->add_csv_synonyms($csv);
 
-    while (($line = $csv->next()) !== false) {
+    while (($line = $csv->next_row()) !== false) {
         $ustatus->set_user(new Contact(null, $Conf));
         $ustatus->clear_messages();
         $cj = (object) ["id" => null];
@@ -254,7 +265,7 @@ function parseBulkFile($text, $filename) {
         if (($saved_user = save_user($cj, $ustatus, null, true)))
             $success[] = "<a href=\"" . hoturl("profile", "u=" . urlencode($saved_user->email)) . "\">"
                 . Text::user_html_nolink($saved_user) . "</a>";
-        foreach ($ustatus->errors() as $e)
+        foreach ($ustatus->problems() as $e)
             $errors[] = '<span class="lineno">' . $filename . $csv->lineno() . ":</span> " . $e;
     }
 
@@ -265,7 +276,7 @@ function parseBulkFile($text, $filename) {
     else if (count($success))
         $successMsg = "Saved " . plural($success, "account") . ": " . commajoin($success) . ".";
     if (count($errors))
-        $errorMsg = "<div class='parseerr'><p>" . join("</p>\n<p>", $errors) . "</p></div>";
+        $errorMsg = '<div class="parseerr"><p>' . join("</p>\n<p>", $errors) . "</p></div>";
     if (count($success) && count($errors))
         $Conf->confirmMsg($successMsg . "<br />$errorMsg");
     else if (count($success))
@@ -277,25 +288,25 @@ function parseBulkFile($text, $filename) {
     return empty($errors);
 }
 
-if (!$Qreq->post_ok())
-    /* do nothing */;
-else if ($Qreq->savebulk && $newProfile && $Qreq->has_file("bulk")) {
+if (!$Qreq->post_ok()) {
+    // do nothing
+} else if ($Qreq->savebulk && $newProfile && $Qreq->has_file("bulk")) {
     if (($text = $Qreq->file_contents("bulk")) === false)
         Conf::msg_error("Internal error: cannot read file.");
     else
         parseBulkFile($text, $Qreq->file_filename("bulk"));
     $Qreq->bulkentry = "";
-    SelfHref::redirect($Qreq, ["anchor" => "bulk"]);
+    $Conf->self_redirect($Qreq, ["anchor" => "bulk"]);
 } else if ($Qreq->savebulk && $newProfile) {
     $success = true;
     if ($Qreq->bulkentry && $Qreq->bulkentry !== "Enter users one per line")
         $success = parseBulkFile($Qreq->bulkentry, "");
     if (!$success)
-        $Conf->save_session("profile_bulkentry", array($Now, $Qreq->bulkentry));
-    SelfHref::redirect($Qreq, ["anchor" => "bulk"]);
+        $Me->save_session("profile_bulkentry", array($Now, $Qreq->bulkentry));
+    $Conf->self_redirect($Qreq, ["anchor" => "bulk"]);
 } else if (isset($Qreq->save)) {
     assert($Acct->is_empty() === $newProfile);
-    $cj = (object) ["id" => $Acct->has_database_account() ? $Acct->contactId : "new"];
+    $cj = (object) ["id" => $Acct->has_account_here() ? $Acct->contactId : "new"];
     $UserStatus->set_user($Acct);
     $UserStatus->parse_request_group("", $cj, $Qreq);
     if ($newProfile)
@@ -322,13 +333,15 @@ else if ($Qreq->savebulk && $newProfile && $Qreq->has_file("bulk")) {
             }
             if ($UserStatus->has_warning())
                 $xcj["warning_fields"] = $UserStatus->problem_fields();
-            $Conf->save_session("profile_redirect", $xcj);
-            SelfHref::redirect($Qreq);
+            $Me->save_session("profile_redirect", $xcj);
+            $Conf->self_redirect($Qreq);
         }
     }
-} else if (isset($Qreq->merge) && !$newProfile
-           && $Acct->contactId == $Me->contactId)
+} else if (isset($Qreq->merge)
+           && !$newProfile
+           && $Acct->contactId == $Me->contactId) {
     go(hoturl("mergeaccounts"));
+}
 
 function databaseTracks($who) {
     global $Conf;
@@ -367,7 +380,7 @@ function databaseTracks($who) {
 }
 
 function textArrayPapers($pids) {
-    return commajoin(preg_replace('/(\d+)/', "<a href='" . hoturl("paper", "p=\$1&amp;ls=" . join("+", $pids)) . "'>\$1</a>", $pids));
+    return commajoin(preg_replace('/(\d+)/', '<a href="' . hoturl("paper", "p=\$1&amp;ls=" . join("+", $pids)) . "\">\$1</a>", $pids));
 }
 
 if (isset($Qreq->delete) && !Dbl::has_error() && $Qreq->post_ok()) {
@@ -375,7 +388,7 @@ if (isset($Qreq->delete) && !Dbl::has_error() && $Qreq->post_ok()) {
         Conf::msg_error("Only administrators can delete accounts.");
     else if ($Acct->contactId == $Me->contactId)
         Conf::msg_error("You aren’t allowed to delete your own account.");
-    else if ($Acct->has_database_account()) {
+    else if ($Acct->has_account_here()) {
         $tracks = databaseTracks($Acct->contactId);
         if (!empty($tracks->soleAuthor))
             Conf::msg_error("This account can’t be deleted since it is sole contact for " . pluralx($tracks->soleAuthor, "paper") . " " . textArrayPapers($tracks->soleAuthor) . ". You will be able to delete the account after deleting those papers or adding additional paper contacts.");
@@ -407,16 +420,16 @@ if (isset($Qreq->delete) && !Dbl::has_error() && $Qreq->post_ok()) {
 function echo_modes($hlbulk) {
     global $Me, $Acct, $newProfile;
     echo '<div class="psmode">',
-        '<div class="', ($hlbulk == 0 ? "papmodex" : "papmode"), '">',
-        Ht::link($newProfile || $Me->email == $Acct->email ? "Your profile" : "Profile", selfHref(["u" => null])),
-        '</div><div class="', ($hlbulk == 1 ? "papmodex" : "papmode"), '">';
+        '<div class="papmode', ($hlbulk == 0 ? " active" : ""), '">',
+        Ht::link($newProfile || $Me->email == $Acct->email ? "Your profile" : "Profile", $Me->conf->selfurl(null, ["u" => null])),
+        '</div><div class="papmode', ($hlbulk == 1 ? " active" : ""), '">';
     if ($newProfile)
-        echo Ht::link("New account", "", ["class" => "ui tla has-focus-history", "data-fold-target" => "9c"]);
+        echo Ht::link("New account", "", ["class" => "ui tla"]);
     else
         echo Ht::link("New account", hoturl("profile", "u=new"));
-    echo '</div><div class="', ($hlbulk == 2 ? "papmodex" : "papmode"), '">';
+    echo '</div><div class="papmode', ($hlbulk == 2 ? " active" : ""), '">';
     if ($newProfile)
-        echo Ht::link("Bulk update", "#bulk", ["class" => "ui tla has-focus-history", "data-fold-target" => "9o"]);
+        echo Ht::link("Bulk update", "#bulk", ["class" => "ui tla"]);
     else
         echo Ht::link("Bulk update", hoturl("profile", "u=new#bulk"));
     echo '</div></div><hr class="c" style="margin-bottom:24px" />', "\n";
@@ -425,9 +438,7 @@ function echo_modes($hlbulk) {
 
 // set session list
 if (!$newProfile
-    && isset($_COOKIE["hotlist-info"])
-    && ($list = SessionList::decode_info_string($_COOKIE["hotlist-info"]))
-    && $list->list_type() === "u"
+    && ($list = SessionList::load_cookie("u"))
     && $list->set_current_id($Acct->contactId)) {
     $Conf->set_active_list($list);
 }
@@ -441,45 +452,52 @@ if ($newProfile) {
 }
 $Conf->header($title, "account", ["action_bar" => actionBar("account")]);
 
-$useRequest = !$Acct->has_database_account() && isset($Qreq->watchreview);
-if ($UserStatus->has_error())
+$useRequest = !$Acct->has_account_here() && isset($Qreq->watchreview);
+if ($UserStatus->has_error()) {
     $need_highlight = $useRequest = true;
-
-if (!$UserStatus->has_error() && $Conf->session("freshlogin") === "redirect")
-    $Conf->save_session("freshlogin", null);
-// Set warnings
-if (!$newProfile) {
-    if (!$Acct->firstName && !$Acct->lastName) {
-        $UserStatus->warning_at("firstName", "Please enter your name.");
-        $UserStatus->warning_at("lastName", false);
-    }
-    if (!$Acct->affiliation)
-        $UserStatus->warning_at("affiliation", "Please enter your affiliation (use “None” or “Unaffiliated” if you have none).");
-    if ($Acct->is_pc_member()) {
-        if (!$Acct->collaborators)
-            $UserStatus->warning_at("collaborators", "Please enter your recent collaborators and other affiliations. This information can help detect conflicts of interest. Enter “None” if you have none.");
-        if ($Conf->topic_map() && !$Acct->topic_interest_map())
-            $UserStatus->warning_at("topics", "Please enter your topic interests. We use topic interests to improve the paper assignment process.");
-    }
+} else if ($Me->session("freshlogin")) {
+    $Me->save_session("freshlogin", null);
 }
 
-
+// obtain user json
 $UserStatus->set_user($Acct);
 $userj = $UserStatus->user_json(["include_password" => true]);
-if (!$useRequest && $Me->privChair && $Acct->is_empty()
+if (!$useRequest
+    && $Me->privChair
+    && $Acct->is_empty()
     && ($Qreq->role === "chair" || $Qreq->role === "pc")) {
     $userj->roles = (object) [$Qreq->role => true];
 }
 
+// set warnings about user json
+if (!$newProfile) {
+    if (!isset($userj->firstName) && !isset($userj->lastName)) {
+        $UserStatus->warning_at("firstName", "Please enter your name.");
+        $UserStatus->warning_at("lastName", false);
+    }
+    if (!isset($userj->affiliation)) {
+        $UserStatus->warning_at("affiliation", "Please enter your affiliation (use “None” or “Unaffiliated” if you have none).");
+    }
+    if ($Acct->is_pc_member()) {
+        if (!isset($userj->collaborators)) {
+            $UserStatus->warning_at("collaborators", "Please enter your recent collaborators and other affiliations. This information can help detect conflicts of interest. Enter “None” if you have none.");
+        }
+        if ($Conf->has_topics() && !isset($userj->topics)) {
+            $UserStatus->warning_at("topics", "Please enter your topic interests. We use topic interests to improve the paper assignment process.");
+        }
+    }
+}
+
+// compute current form json
 if ($useRequest) {
     $UserStatus->ignore_msgs = true;
-    $formcj = (object) ["id" => $Acct->has_database_account() ? $Acct->contactId : "new"];
+    $formcj = (object) ["id" => $Acct->has_account_here() ? $Acct->contactId : "new"];
     $UserStatus->parse_request_group("", $formcj, $Qreq);
 } else {
     $formcj = $userj;
 }
-if (($prdj = $Conf->session("profile_redirect"))) {
-    $Conf->save_session("profile_redirect", null);
+if (($prdj = $Me->session("profile_redirect"))) {
+    $Me->save_session("profile_redirect", null);
     foreach ($prdj as $k => $v) {
         if ($k === "warning_fields") {
             foreach ($v as $k)
@@ -491,40 +509,40 @@ if (($prdj = $Conf->session("profile_redirect"))) {
 }
 
 $form_params = array();
-if ($newProfile)
+if ($newProfile) {
     $form_params[] = "u=new";
-else if ($Me->contactId != $Acct->contactId)
+} else if ($Me->contactId != $Acct->contactId) {
     $form_params[] = "u=" . urlencode($Acct->email);
-if (isset($Qreq->ls))
+}
+if (isset($Qreq->ls)) {
     $form_params[] = "ls=" . urlencode($Qreq->ls);
-if ($newProfile)
-    echo '<div id="foldbulk" class="fold9' . ($Qreq->savebulk ? "o" : "c") . ' js-fold-focus"><div class="fn9">';
+}
 
-echo Ht::form(hoturl_post("profile", join("&amp;", $form_params)),
-              array("id" => "profile-form")),
-    // Don't want chrome to autofill the password changer.
-    // But chrome defaults to autofilling the password changer
-    // unless we supply an earlier password input.
-    Ht::password("chromefooler", "", ["class" => "ignore-diff hidden"]),
-    Ht::hidden("profile_contactid", $Acct->contactId);
-if (isset($Qreq->redirect))
-    echo Ht::hidden("redirect", $Qreq->redirect);
-if ($Me->privChair)
-    echo Ht::hidden("whichpassword", "");
-
-if ($newProfile)
+if ($newProfile) {
     echo_modes(1);
-else if ($Me->privChair)
+} else if ($Me->privChair) {
     echo_modes(0);
+}
+
+echo '<div class="is-tla active" id="tla-default">',
+    Ht::form(hoturl_post("profile", join("&amp;", $form_params)),
+             ["id" => "profile-form", "class" => "need-unload-protection"]),
+    Ht::hidden("profile_contactid", $Acct->contactId);
+if (isset($Qreq->redirect)) {
+    echo Ht::hidden("redirect", $Qreq->redirect);
+}
+if ($Me->privChair) {
+    echo Ht::hidden("whichpassword", "");
+}
 
 if ($UserStatus->has_messages()) {
     $status = 0;
     $msgs = [];
     foreach ($UserStatus->messages(true) as $m) {
         $status = max($m[2], $status);
-        $msgs[] = '<div class="mmm">' . $m[1] . '</div>';
+        $msgs[] = $m[1];
     }
-    echo '<div class="msgs-wide">', Ht::xmsg($status, join("", $msgs)), "</div>\n";
+    echo '<div class="msgs-wide">', Ht::msg($msgs, $status), "</div>\n";
 }
 
 echo '<div id="foldaccount" class="';
@@ -547,28 +565,28 @@ if ($UserStatus->global_user() && false) {
         '</span>Update global profile</label></div></div>';
 }
 
-$buttons = [Ht::submit("save", $newProfile ? "Create account" : "Save changes", ["class" => "btn btn-primary"]),
-    Ht::submit("cancel", "Cancel", ["class" => "btn"])];
+$buttons = [Ht::submit("save", $newProfile ? "Create account" : "Save changes", ["class" => "btn-primary"]),
+    Ht::submit("cancel", "Cancel")];
 
 if ($Me->privChair && !$newProfile && $Me->contactId != $Acct->contactId) {
     $tracks = databaseTracks($Acct->contactId);
-    $args = ["class" => "btn ui"];
+    $args = ["class" => "ui"];
     if (!empty($tracks->soleAuthor)) {
         $args["class"] .= " js-cannot-delete-user";
-        $args["data-sole-author"] = pluralx($tracks->soleAuthor, "paper") . " " . textArrayPapers($tracks->soleAuthor);
+        $args["data-sole-author"] = pluralx($tracks->soleAuthor, "submission") . " " . textArrayPapers($tracks->soleAuthor);
     } else {
         $args["class"] .= " js-delete-user";
         $x = $y = array();
         if (!empty($tracks->author)) {
-            $x[] = "contact for " . pluralx($tracks->author, "paper") . " " . textArrayPapers($tracks->author);
+            $x[] = "contact for " . pluralx($tracks->author, "submission") . " " . textArrayPapers($tracks->author);
             $y[] = "delete " . pluralx($tracks->author, "this") . " " . pluralx($tracks->author, "authorship association");
         }
         if (!empty($tracks->review)) {
-            $x[] = "reviewer for " . pluralx($tracks->review, "paper") . " " . textArrayPapers($tracks->review);
+            $x[] = "reviewer for " . pluralx($tracks->review, "submission") . " " . textArrayPapers($tracks->review);
             $y[] = "<strong>permanently delete</strong> " . pluralx($tracks->review, "this") . " " . pluralx($tracks->review, "review");
         }
         if (!empty($tracks->comment)) {
-            $x[] = "commenter for " . pluralx($tracks->comment, "paper") . " " . textArrayPapers($tracks->comment);
+            $x[] = "commenter for " . pluralx($tracks->comment, "submission") . " " . textArrayPapers($tracks->comment);
             $y[] = "<strong>permanently delete</strong> " . pluralx($tracks->comment, "this") . " " . pluralx($tracks->comment, "comment");
         }
         if (!empty($x)) {
@@ -584,70 +602,69 @@ if (!$newProfile && $Acct->contactId == $Me->contactId)
 echo Ht::actions($buttons, ["class" => "aab aabr aabig"]);
 
 echo "</div>\n", // foldaccount
-    "</form>\n";
+    "</form></div>";
 
 if ($newProfile) {
-    echo '</div><div class="fx9">';
-    echo Ht::form(hoturl_post("profile", join("&amp;", $form_params))),
-        "<div class='profiletext", ($UserStatus->has_error() ? " alert" : ""), "'>\n",
+    echo '<div class="is-tla" id="tla-bulk">';
+    echo Ht::form(hoturl_post("profile", join("&amp;", $form_params) . "#bulk")),
+        '<div class="profiletext', ($UserStatus->has_error() ? " alert" : ""), "\">\n",
         // Don't want chrome to autofill the password changer.
         // But chrome defaults to autofilling the password changer
         // unless we supply an earlier password input.
         Ht::password("chromefooler", "", ["class" => "ignore-diff hidden"]);
-    echo_modes(2);
 
     $bulkentry = $Qreq->bulkentry;
     if ($bulkentry === null
-        && ($session_bulkentry = $Conf->session("profile_bulkentry"))
+        && ($session_bulkentry = $Me->session("profile_bulkentry"))
         && is_array($session_bulkentry) && $session_bulkentry[0] > $Now - 5) {
         $bulkentry = $session_bulkentry[1];
-        $Conf->save_session("profile_bulkentry", null);
+        $Me->save_session("profile_bulkentry", null);
     }
-    echo '<div class="f-i">',
+    echo '<div class="lg">',
         Ht::textarea("bulkentry", $bulkentry,
                      ["rows" => 1, "cols" => 80, "placeholder" => "Enter users one per line", "class" => "want-focus need-autogrow"]),
-        '</div>';
+        '<div class="g"><strong>OR</strong> &nbsp;',
+        '<input type="file" name="bulk" size="30" /></div></div>';
 
-    echo '<div class="g"><strong>OR</strong> &nbsp;',
-        '<input type="file" name="bulk" size="30" /></div>';
+    echo '<div class="lg">', Ht::submit("savebulk", "Save accounts", ["class" => "btn-primary"]), '</div>';
 
-    echo '<div>', Ht::submit("savebulk", "Save accounts", ["class" => "btn btn-primary"]), '</div>';
-
-    echo "<p>Enter or upload CSV user data with header. For example:</p>\n",
+    echo "<p>Enter or upload CSV data with header, such as:</p>\n",
         '<pre class="entryexample">
 name,email,affiliation,roles
 John Adams,john@earbox.org,UC Berkeley,pc
 "Adams, John Quincy",quincy@whitehouse.gov
 </pre>', "\n",
         '<p>Or just enter an email address per line.</p>',
-        '<p>Supported CSV fields include:</p><table>',
-        '<tr><td class="lmcaption"><code>name</code></td>',
-          '<td>User name</td></tr>',
-        '<tr><td class="lmcaption"><code>first</code></td>',
-          '<td>First name</td></tr>',
-        '<tr><td class="lmcaption"><code>last</code></td>',
-          '<td>Last name</td></tr>',
-        '<tr><td class="lmcaption"><code>affiliation</code></td>',
-          '<td>Affiliation</td></tr>',
-        '<tr><td class="lmcaption"><code>roles</code></td>',
-          '<td>User roles: blank, “<code>pc</code>”, “<code>chair</code>”, or “<code>sysadmin</code>”</td></tr>',
-        '<tr><td class="lmcaption"><code>tags</code></td>',
-          '<td>PC tags (space-separated)</td></tr>',
-        '<tr><td class="lmcaption"><code>add_tags</code>, <code>remove_tags</code></td>',
-          '<td>PC tags to add or remove</td></tr>',
-        '<tr><td class="lmcaption"><code>collaborators</code></td>',
-          '<td>Collaborators</td></tr>',
-        '<tr><td class="lmcaption"><code>follow</code></td>',
-          '<td>Email notification: blank, “<code>reviews</code>”, “<code>allreviews</code>”</td></tr>',
-        "</table>\n";
+        '<p>Supported CSV fields include:</p>',
+        '<div class="ctable no-hmargin">',
+        '<dl class="ctelt dd"><dt><code>email</code></dt>',
+        '<dd>Email</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>name</code></dt>',
+        '<dd>User name</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>first</code></dt>',
+        '<dd>First name (given name)</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>last</code></dt>',
+        '<dd>Last name (family name)</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>affiliation</code></dt>',
+        '<dd>Affiliation</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>roles</code></dt>',
+        '<dd>User roles: “<code>pc</code>”, “<code>chair</code>”, “<code>sysadmin</code>”, or “<code>none</code>”</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>tags</code></dt>',
+        '<dd>PC tags (space-separated)</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>add_tags</code>, <code>remove_tags</code></dt>',
+        '<dd>PC tags to add or remove</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>collaborators</code></dt>',
+        '<dd>Collaborators</dd></dl>',
+        '<dl class="ctelt dd"><dt><code>follow</code></dt>',
+        '<dd>Email notification: blank, “<code>reviews</code>”, “<code>allreviews</code>”, “<code>none</code>”</dd></dl>',
+        "</div>\n";
 
-    echo '</div></form></div></div>';
+    echo '</div></form></div>';
 }
 
 
-Ht::stash_script('focus_within($("#profile-form"))');
-if ($newProfile)
-    Ht::stash_script("focus_fold.hash(true)");
-else
-    Ht::stash_script('hiliter_children("#profile-form",true)');
+Ht::stash_script("addClass(document.body,\"want-hash-focus\")");
+if (!$newProfile) {
+    Ht::stash_script('hiliter_children("#profile-form")');
+}
 $Conf->footer();

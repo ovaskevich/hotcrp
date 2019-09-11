@@ -1,28 +1,36 @@
 <?php
-$ConfSitePATH = preg_replace(',/batch/[^/]+,', '', __FILE__);
-require_once("$ConfSitePATH/src/init.php");
 
-$arg = getopt("hakn:", array("help", "active", "kill", "name:"));
+$arg = getopt("hakm:n:", array("help", "active", "kill", "name:", "match:"));
 if (isset($arg["h"]) || isset($arg["help"])) {
-    fwrite(STDOUT, "Usage: php batch/s3transfer.php [--active] [--kill]\n");
+    fwrite(STDOUT, "Usage: php batch/s3transfer.php [--active] [--kill] [-m MATCH]\n");
     exit(0);
 }
+
+$ConfSitePATH = preg_replace(',/batch/[^/]+,', '', __FILE__);
+require_once("$ConfSitePATH/src/init.php");
 
 $active = false;
 if (isset($arg["a"]) || isset($arg["active"]))
     $active = array_flip($Conf->active_document_ids());
 $kill = isset($arg["k"]) || isset($arg["kill"]);
+$match = false;
+if (isset($arg["m"]) || isset($arg["match"]))
+    $match = new DocumentHashMatcher(isset($arg["m"]) ? $arg["m"] : $arg["match"]);
 
 if (!$Conf->setting_data("s3_bucket")) {
     fwrite(STDERR, "* S3 is not configured for this conference\n");
     exit(1);
 }
 
-$result = $Conf->qe_raw("select paperStorageId from PaperStorage where paperStorageId>1");
+$result = $Conf->qe_raw("select paperStorageId, sha1 from PaperStorage where paperStorageId>1");
 $sids = array();
-while (($row = edb_row($result)))
-    $sids[] = (int) $row[0];
+while (($row = edb_row($result))) {
+    if (!$match || $match->test_hash(Filer::hash_as_text($row[1])))
+        $sids[] = (int) $row[0];
+}
+Dbl::free($result);
 
+Filer::$no_touch = true;
 $failures = 0;
 foreach ($sids as $sid) {
     if ($active !== false && !isset($active[$sid]))

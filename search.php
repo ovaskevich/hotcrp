@@ -1,6 +1,6 @@
 <?php
 // search.php -- HotCRP paper search page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 require_once("src/papersearch.php");
@@ -31,7 +31,7 @@ if (isset($Qreq->q))
 if (isset($Qreq->q) && $Qreq->q === "(All)")
     $Qreq->q = "";
 if ((isset($Qreq->qa) || isset($Qreq->qo) || isset($Qreq->qx)) && !isset($Qreq->q))
-    $Qreq->q = PaperSearch::canonical_query((string) $Qreq->qa, $Qreq->qo, $Qreq->qx, $Conf);
+    $Qreq->q = PaperSearch::canonical_query((string) $Qreq->qa, $Qreq->qo, $Qreq->qx, $Qreq->qt, $Conf);
 else
     unset($Qreq->qa, $Qreq->qo, $Qreq->qx);
 
@@ -58,9 +58,8 @@ if ($Qreq->redisplay) {
     foreach ($Qreq as $k => $v)
         if (substr($k, 0, 4) == "show" && $v)
             $pld .= substr($k, 4) . " ";
-    $Conf->save_session("pldisplay", $pld);
+    $Me->save_session("pldisplay", $pld);
 }
-PaperList::change_display($Me, "pl");
 if ($Qreq->scoresort)
     $Qreq->scoresort = ListSorter::canonical_short_score_sort($Qreq->scoresort);
 else if ($Qreq->sort
@@ -68,15 +67,13 @@ else if ($Qreq->sort
          && $s->score)
     $Qreq->scoresort = ListSorter::canonical_short_score_sort($s->score);
 if ($Qreq->scoresort)
-    $Conf->save_session("scoresort", $Qreq->scoresort);
-if (!$Conf->session("scoresort"))
-    $Conf->save_session("scoresort", ListSorter::default_score_sort($Conf));
+    Session_API::setsession($Me, "scoresort=" . $Qreq->scoresort);
 if ($Qreq->redisplay) {
     if (isset($Qreq->forceShow) && !$Qreq->forceShow && $Qreq->showforce)
         $forceShow = 0;
     else
         $forceShow = $Qreq->forceShow || $Qreq->showforce ? 1 : null;
-    SelfHref::redirect($Qreq, ["anchor" => "view", "forceShow" => $forceShow]);
+    $Conf->self_redirect($Qreq, ["anchor" => "view", "forceShow" => $forceShow]);
 }
 
 
@@ -85,7 +82,7 @@ function savesearch() {
     global $Conf, $Me, $Qreq;
 
     $name = simplify_whitespace(defval($Qreq, "ssname", ""));
-    $tagger = new Tagger;
+    $tagger = new Tagger($Me);
     if (!$tagger->check($name, Tagger::NOPRIVATE | Tagger::NOCHAIR | Tagger::NOVALUE)) {
         if ($name == "")
             return Conf::msg_error("Saved search name missing.");
@@ -112,16 +109,15 @@ function savesearch() {
 
     if ($Qreq->deletesearch) {
         Dbl::qe_raw("delete from Settings where name='ss:" . sqlq($name) . "'");
-        SelfHref::redirect($Qreq);
+        $Conf->self_redirect($Qreq);
     } else {
         Dbl::qe_raw("insert into Settings (name, value, data) values ('ss:" . sqlq($name) . "', " . $Me->contactId . ", '" . sqlq(json_encode_db($arr)) . "') on duplicate key update value=values(value), data=values(data)");
-        SelfHref::redirect($Qreq, ["q" => "ss:" . $name, "qa" => null, "qo" => null, "qx" => null]);
+        $Conf->self_redirect($Qreq, ["q" => "ss:" . $name, "qa" => null, "qo" => null, "qx" => null]);
     }
 }
 
 if (($Qreq->savesearch || $Qreq->deletesearch) && $Me->isPC && $Qreq->post_ok()) {
     savesearch();
-    $Qreq->tab = "savedsearches";
 }
 
 
@@ -131,7 +127,7 @@ if ($Qreq->ajax)
 
 
 // set display options, including forceShow if chair
-$pldisplay = $Conf->session("pldisplay");
+$pldisplay = $Me->session("pldisplay");
 if ($Me->privChair && !isset($Qreq->forceShow)
     && preg_match('/\b(show:|)force\b/', $pldisplay)) {
     $Qreq->forceShow = 1;
@@ -150,7 +146,7 @@ $pl = new PaperList($Search, ["sort" => true, "report" => "pl", "display" => $Qr
 if (isset($Qreq->forceShow))
     $pl->set_view("force", !!$Qreq->forceShow);
 if (isset($Qreq->q)) {
-    $pl->set_table_id_class("foldpl", "pltable_full", "p#");
+    $pl->set_table_id_class("foldpl", "pltable-fullw", "p#");
     $pl->set_selection($SSel);
     $pl->qopts["options"] = true; // get efficient access to `has(OPTION)`
     $pl_text = $pl->table_html($Qreq->t, ["fold_session_prefix" => "pldisplay.", "list" => true]);
@@ -160,16 +156,7 @@ if (isset($Qreq->q)) {
 
 
 // set up the search form
-if ($Qreq->redisplay)
-    $activetab = 3;
-else if (isset($Qreq->qa) || defval($Qreq, "qt", "n") != "n")
-    $activetab = 2;
-else
-    $activetab = 1;
-if ($activetab == 3 && $pl->count == 0)
-    $activetab = 1;
-
-$tselect = PaperSearch::searchTypeSelector($tOpt, $Qreq->t, 1);
+$tselect = PaperSearch::searchTypeSelector($tOpt, $Qreq->t, ["tabindex" => 1]);
 
 
 // SEARCH FORMS
@@ -191,14 +178,10 @@ class Search_DisplayOptions {
     }
     function checkbox_item($column, $type, $title, $options = []) {
         global $pl;
-        $x = '<div class="dispopt-checkitem"';
-        if (get($options, "indent"))
-            $x .= ' style="padding-left:2em"';
-        unset($options["indent"]);
-        $options["class"] = "dispopt-checkctrl paperlist-display";
-        $x .= '><span class="dispopt-check">'
+        $options["class"] = "uich js-plinfo";
+        $x = '<label class="checki"><span class="checkc">'
             . Ht::checkbox("show$type", 1, !$pl->is_folded($type), $options)
-            . '&nbsp;</span>' . Ht::label($title) . '</div>';
+            . '</span>' . $title . '</label>';
         $this->item($column, $x);
     }
 }
@@ -208,8 +191,6 @@ $display_options = new Search_DisplayOptions;
 // Create checkboxes
 
 if ($pl_text) {
-    Ht::stash_script("$(document).on(\"change\",\"input.paperlist-display\",plinfo.checkbox_change)");
-
     // Abstract
     if ($pl->has("abstract"))
         $display_options->checkbox_item(1, "abstract", "Abstracts");
@@ -225,24 +206,24 @@ if ($pl_text) {
         if ($Me->privChair && $viewAllAuthors)
             $display_options_extra .=
                 Ht::checkbox("showanonau", 1, !$pl->is_folded("au"),
-                             ["id" => "showau_hidden", "class" => "paperlist-display hidden"]);
+                             ["id" => "showau_hidden", "class" => "uich js-plinfo hidden"]);
     } else if ($Me->privChair && $Conf->subBlindAlways()) {
         $display_options->checkbox_item(1, "anonau", "Authors (deblinded)", ["id" => "showau", "disabled" => !$pl->has("anonau")]);
         $display_options_extra .=
             Ht::checkbox("showau", 1, !$pl->is_folded("anonau"),
-                         ["id" => "showau_hidden", "class" => "paperlist-display hidden"]);
+                         ["id" => "showau_hidden", "class" => "uich js-plinfo hidden"]);
     }
     if (!$Conf->subBlindAlways() || $viewAcceptedAuthors || $viewAllAuthors || $Me->privChair)
-        $display_options->checkbox_item(1, "aufull", "Full author info", ["id" => "showaufull", "indent" => true]);
+        $display_options->checkbox_item(1, "aufull", "Full author info", ["id" => "showaufull"]);
     if ($Me->privChair
         && !$Conf->subBlindNever()
         && (!$Conf->subBlindAlways() || $viewAcceptedAuthors || $viewAllAuthors))
-        $display_options->checkbox_item(1, "anonau", "Deblinded authors", ["disabled" => !$pl->has("anonau"), "indent" => true]);
+        $display_options->checkbox_item(1, "anonau", "Deblinded authors", ["disabled" => !$pl->has("anonau")]);
     if ($pl->has("collab"))
-        $display_options->checkbox_item(1, "collab", "Collaborators", ["indent" => true]);
+        $display_options->checkbox_item(1, "collab", "Collaborators");
 
     // Abstract group
-    if ($pl->has("topics"))
+    if ($Conf->has_topics())
         $display_options->checkbox_item(1, "topics", "Topics");
 
     // Row numbers
@@ -251,7 +232,9 @@ if ($pl_text) {
 
     // Options
     /*foreach ($Conf->paper_opts->option_list() as $ox)
-        if ($pl->has("opt$ox->id") && $ox->list_display(null))
+        if ($pl->has("opt$ox->id")
+            && $ox->list_display(null)
+            && $ox->example_searches())
             $display_options->checkbox_item(10, $ox->search_keyword(), $ox->name);*/
 
     // Reviewers group
@@ -267,7 +250,6 @@ if ($pl_text) {
         $opt = array("disabled" => ($Qreq->t == "a" && !$Me->privChair));
         $display_options->checkbox_item(20, "tags", "Tags", $opt);
         if ($Me->privChair) {
-            $opt["indent"] = true;
             foreach ($Conf->tags() as $t)
                 if ($t->vote || $t->approval || $t->rank)
                     $display_options->checkbox_item(20, "tagreport:{$t->tag}", "#~{$t->tag} report", $opt);
@@ -280,17 +262,16 @@ if ($pl_text) {
         $display_options->checkbox_item(20, "shepherd", "Shepherds");
 
     // Scores group
-    $rf = $Conf->review_form();
-    $revViewScore = $Me->permissive_view_score_bound($Qreq->t == "a");
-    foreach ($rf->forder as $f)
-        if ($f->view_score > $revViewScore && $f->has_options)
+    foreach ($Conf->review_form()->user_visible_fields($Me) as $f) {
+        if ($f->has_options)
             $display_options->checkbox_item(30, $f->search_keyword(), $f->name_html);
+    }
     if (!empty($display_options->items[30])) {
         $display_options->set_header(30, "<strong>Scores:</strong>");
-        $sortitem = '<div class="dispopt-item" style="margin-top:1ex">Sort by: &nbsp;'
+        $sortitem = '<div class="mt-2">Sort by: &nbsp;'
             . Ht::select("scoresort", ListSorter::score_sort_selector_options(),
-                         ListSorter::canonical_long_score_sort($Conf->session("scoresort")),
-                         ["id" => "scoresort", "style" => "font-size:100%"])
+                         ListSorter::canonical_long_score_sort(ListSorter::default_score_sort($Me)),
+                         ["id" => "scoresort"])
             . '<a class="help" href="' . hoturl("help", "t=scoresort") . '" target="_blank" title="Learn more">?</a></div>';
         $display_options->item(30, $sortitem);
     }
@@ -298,39 +279,32 @@ if ($pl_text) {
     // Formulas group
     $named_formulas = $Conf->viewable_named_formulas($Me, $Qreq->t == "a");
     foreach ($named_formulas as $formula)
-        $display_options->checkbox_item(40, "formula:" . $formula->name, htmlspecialchars($formula->name));
+        $display_options->checkbox_item(40, "formula:" . $formula->abbreviation(), htmlspecialchars($formula->name));
     if ($named_formulas)
         $display_options->set_header(40, "<strong>Formulas:</strong>");
     if ($Me->isPC && $Qreq->t != "a") {
-        $display_options->item(40, '<div class="dispopt-item"><a class="ui js-edit-formulas" href="">Edit formulas</a></div>');
+        $display_options->item(40, '<div class="mt-2"><a class="ui js-edit-formulas" href="">Edit formulas</a></div>');
     }
 }
 
 
-echo '<div id="searchform" class="linelinks tablinks', $activetab, ' clearfix">',
-    '<div class="tlx"><div class="tld1">';
+echo '<div id="searchform" class="clearfix">',
+    '<div class="tlx"><div class="tld is-tla active" id="tla-default">';
 
 // Basic search
 echo Ht::form(hoturl("search"), ["method" => "get"]),
     Ht::entry("q", (string) $Qreq->q,
               ["size" => 40, "style" => "width:30em", "tabindex" => 1,
-               "class" => "papersearch want-focus",
-               "placeholder" => "(All)"]),
-    " &nbsp;in &nbsp;$tselect &nbsp;\n",
-    Ht::submit("Search", ["tabindex" => 1]),
+               "class" => "papersearch want-focus need-suggest",
+               "placeholder" => "(All)", "aria-label" => "Search"]),
+    " &nbsp;in &nbsp;",
+    PaperSearch::searchTypeSelector($tOpt, $Qreq->t, ["tabindex" => 1]),
+    " &nbsp;\n", Ht::submit("Search", ["tabindex" => 1]),
     "</form>";
 
-echo '</div><div class="tld2">';
+echo '</div><div class="tld is-tla" id="tla-advanced">';
 
 // Advanced search
-echo Ht::form(hoturl("search"), ["method" => "get"]),
-    "<table><tr>
-  <td class=\"rxcaption\">Search</td>
-  <td class=\"lentry\">$tselect</td>
-</tr>
-<tr>
-  <td class=\"rxcaption\">Using these fields</td>
-  <td class=\"lentry\">";
 $qtOpt = array("ti" => "Title",
                "ab" => "Abstract");
 if ($Me->privChair || $Conf->subBlindNever()) {
@@ -350,38 +324,30 @@ if ($Me->isPC) {
     $qtOpt["re"] = "Reviewers";
     $qtOpt["tag"] = "Tags";
 }
-echo Ht::select("qt", $qtOpt, $Qreq->get("qt", "n")),
-    "</td>
-</tr>
-<tr><td colspan=\"2\"><div class='g'></div></td></tr>
-<tr>
-  <td class='rxcaption'>With <b>all</b> the words</td>
-  <td class='lentry'>",
-    Ht::entry("qa", htmlspecialchars($Qreq->get("qa", $Qreq->get("q", ""))), ["size" => 40, "style" => "width:30em", "class" => "want-focus"]),
-    "</td>
-</tr><tr>
-  <td class='rxcaption'>With <b>any</b> of the words</td>
-  <td class='lentry'>",
-    Ht::entry("qo", htmlspecialchars($Qreq->get("qo", "")), ["size" => 40, "style" => "width:30em"]),
-    "</td>
-</tr><tr>
-  <td class='rxcaption'><b>Without</b> the words</td>
-  <td class='lentry'>",
-    Ht::entry("qx", htmlspecialchars($Qreq->get("qx", "")), ["size" => 40, "style" => "width:30em"]),
-    "</td>
-</tr>
-<tr><td colspan=\"2\"><div class='g'></div></td></tr>
-<tr>
-  <td class='lxcaption'></td>
-  <td class=\"lentry\" style=\"padding-bottom:4px\"><div class=\"aab\">",
+
+echo Ht::form(hoturl("search"), ["method" => "get"]),
+    '<div class="d-inline-block">',
+    '<div class="entryi medium"><label for="htctl-advanced-q">Search</label>',
+    PaperSearch::searchTypeSelector($tOpt, $Qreq->t, ["id" => "htctl-advanced-q"]), '</div>',
+    '<div class="entryi medium"><label for="htctl-advanced-qt">Using these fields</label>',
+    Ht::select("qt", $qtOpt, $Qreq->get("qt", "n"), ["id" => "htctl-advanced-qt"]), '</div>',
+    '<hr class="g">',
+    '<div class="entryi medium"><label for="htctl-advanced-qa">With <b>all</b> the words</label>',
+    Ht::entry("qa", $Qreq->get("qa", $Qreq->get("q", "")), ["id" => "htctl-advanced-qa", "size" => 60, "class" => "papersearch want-focus need-suggest"]), '</div>',
+    '<div class="entryi medium"><label for="htctl-advanced-qo">With <b>any</b> of the words</label>',
+    Ht::entry("qo", $Qreq->get("qo", ""), ["id" => "htctl-advanced-qo", "size" => 60]), '</div>',
+    '<div class="entryi medium"><label for="htctl-advanced-qx"><b>Without</b> the words</label>',
+    Ht::entry("qx", $Qreq->get("qx", ""), ["id" => "htctl-advanced-qx", "size" => 60]), '</div>',
+    '<hr class="g">',
+    '<div class="entryi medium"><label></label><div class="entry">',
     Ht::submit("Search"),
-    '<div style="float:right;font-size:x-small">',
+    '<div class="d-inline-block padlb" style="font-size:69%">',
     Ht::link("Search help", hoturl("help", "t=search")),
     ' <span class="barsep">·</span> ',
     Ht::link("Search keywords", hoturl("help", "t=keywords")),
-    '</div></div>
-  </td>
-</tr></table></form>';
+    '</div></div>',
+    '</div>',
+    '</div></form>';
 
 echo "</div>";
 
@@ -389,8 +355,8 @@ function echo_request_as_hidden_inputs($specialscore = false) {
     global $pl, $pl_text, $Qreq;
     foreach (array("q", "qa", "qo", "qx", "qt", "t", "sort") as $x)
         if (isset($Qreq[$x])
-            && ($x != "q" || !isset($Qreq->qa))
-            && ($x != "sort" || !$specialscore || !$pl_text))
+            && ($x !== "q" || !isset($Qreq->qa))
+            && ($x !== "sort" || !$specialscore || !$pl_text))
             echo Ht::hidden($x, $Qreq[$x]);
     if ($specialscore && $pl_text)
         echo Ht::hidden("sort", $pl->sortdef(true));
@@ -401,7 +367,7 @@ $ss = array();
 if ($Me->isPC || $Me->privChair) {
     $ss = $Conf->saved_searches();
     if (count($ss) > 0 || $pl_text) {
-        echo "<div class='tld4' style='padding-bottom:1ex'>";
+        echo '<div class="tld is-tla" id="tla-saved-searches" style="padding-bottom:1ex">';
         ksort($ss);
         if (count($ss)) {
             $n = 0;
@@ -413,27 +379,27 @@ if ($Me->isPC || $Me->privChair) {
                 foreach (array("qt", "t", "sort") as $k)
                     if (isset($sv->$k))
                         $arest .= "&amp;" . $k . "=" . urlencode($sv->$k);
-                echo "<a href=\"", hoturl("search", "q=ss%3A" . urlencode($sn) . $arest), "\">", htmlspecialchars($sn), "</a><div class='fx' style='padding-bottom:0.5ex;font-size:smaller'>",
+                echo "<a href=\"", hoturl("search", "q=ss%3A" . urlencode($sn) . $arest), "\">", htmlspecialchars($sn), '</a><div class="fx" style="padding-bottom:0.5ex;font-size:smaller">',
                     "Definition: “<a href=\"", hoturl("search", "q=" . urlencode(defval($sv, "q", "")) . $arest), "\">", htmlspecialchars($sv->q), "</a>”";
                 if ($Me->privChair || !defval($sv, "owner") || $sv->owner == $Me->contactId)
-                    echo " <span class='barsep'>·</span> ",
-                        "<a href=\"", SelfHref::make($Qreq, ["deletesearch" => 1, "ssname" => $sn, "post" => post_value()]), "\">Delete</a>";
+                    echo ' <span class="barsep">·</span> ',
+                        "<a href=\"", $Conf->selfurl($Qreq, ["deletesearch" => 1, "ssname" => $sn, "post" => post_value()]), "\">Delete</a>";
                 echo "</div></td></tr></table>";
                 ++$n;
             }
-            echo "<div class='g'></div>\n";
+            echo '<hr class="g">';
         }
         echo Ht::form(hoturl_post("search", "savesearch=1"));
         echo_request_as_hidden_inputs(true);
         echo "<table id=\"ssearchnew\" class=\"has-fold foldc\">",
             "<tr><td>", foldupbutton(), "</td>",
-            "<td><a class='ui q fn js-foldup' href='#'>New saved search</a><div class='fx'>",
+            '<td><a class="ui q fn js-foldup" href="">New saved search</a><div class="fx">',
             "Save ";
         if ($Qreq->q)
             echo "search “", htmlspecialchars($Qreq->q), "”";
         else
             echo "empty search";
-        echo " as:<br />ss:<input type='text' name='ssname' value='' size='20' /> &nbsp;",
+        echo ' as:<br>ss:<input type="text" name="ssname" value="" size="20"> &nbsp;',
             Ht::submit("Save"),
             "</div></td></tr></table>",
             "</form>";
@@ -446,12 +412,12 @@ if ($Me->isPC || $Me->privChair) {
 
 // Display options
 if ($pl->count > 0) {
-    echo "<div class='tld3' style='padding-bottom:1ex'>";
+    echo '<div class="tld is-tla" id="tla-view" style="padding-bottom:1ex">';
 
     echo Ht::form(hoturl_post("search", "redisplay=1"), array("id" => "foldredisplay", "class" => "fn3 fold5c"));
     echo_request_as_hidden_inputs();
 
-    echo '<div class="searchctable">';
+    echo '<div class="search-ctable">';
     ksort($display_options->items);
     foreach ($display_options->items as $column => $items) {
         if (empty($items))
@@ -465,18 +431,18 @@ if ($pl->count > 0) {
     echo "</div>\n";
 
     // "Redisplay" row
-    echo "<div style='padding-top:2ex'><table style='margin:0 0 0 auto'><tr>";
+    echo '<div style="padding-top:2ex"><table style="margin:0 0 0 auto"><tr>';
 
     // Conflict display
     if ($Me->privChair)
-        echo "<td class='padlb'>",
+        echo '<td class="padlb">',
             Ht::checkbox("showforce", 1, !!$Qreq->forceShow,
-                         ["id" => "showforce", "class" => "paperlist-display"]),
+                         ["id" => "showforce", "class" => "uich js-plinfo"]),
             "&nbsp;", Ht::label("Override conflicts", "showforce"), "</td>";
 
-    echo "<td class='padlb'>";
+    echo '<td class="padlb">';
     if ($Me->privChair)
-        echo Ht::button("Change default view", ["class" => "btn ui js-edit-view-options"]), "&nbsp; ";
+        echo Ht::button("Change default view", ["class" => "ui js-edit-view-options"]), "&nbsp; ";
     echo Ht::submit("Redisplay", array("id" => "redisplay"));
 
     echo "</td></tr></table>", $display_options_extra, "</div>";
@@ -491,32 +457,34 @@ echo "</div>";
 
 // Tab selectors
 echo '<div class="tllx"><table><tr>',
-  "<td><div class='tll1'><a class='ui tla has-focus-history' href=\"\">Search</a></div></td>
-  <td><div class='tll2'><a class='ui tla nw has-focus-history' href=\"#advanced\">Advanced search</a></div></td>\n";
+  '<td><div class="tll active"><a class="ui tla" href="">Search</a></div></td>
+  <td><div class="tll"><a class="ui tla nw" href="#advanced">Advanced search</a></div></td>', "\n";
 if ($ss)
-    echo "  <td><div class='tll4'><a class='ui tla nw has-focus-history' href=\"#savedsearches\">Saved searches</a></div></td>\n";
+    echo '  <td><div class="tll"><a class="ui tla nw" href="#saved-searches">Saved searches</a></div></td>', "\n";
 if ($pl->count > 0)
-    echo "  <td><div class='tll3'><a class='ui tla nw has-focus-history' href=\"#view\">View options</a></div></td>\n";
+    echo '  <td><div class="tll"><a class="ui tla nw" href="#view">View options</a></div></td>', "\n";
 echo "</tr></table></div></div>\n\n";
 if ($pl->count == 0)
-    Ht::stash_script("focus_fold.call(\$(\"#searchform .tll$activetab\")[0])");
-Ht::stash_script("focus_fold.hash()");
+    Ht::stash_script("addClass(document.body,\"want-hash-focus\")");
 echo Ht::unstash();
 
 
 if ($pl_text) {
-    if ($Me->has_hidden_papers())
+    if ($Me->has_hidden_papers()
+        && !empty($Me->hidden_papers)
+        && $Me->is_actas_user()) {
         $pl->error_html[] = $Conf->_("Papers #%s are totally hidden when viewing the site as another user.", numrangejoin(array_keys($Me->hidden_papers)), count($Me->hidden_papers));
+    }
     if (!empty($Search->warnings) || !empty($pl->error_html)) {
         echo '<div class="msgs-wide">';
         $Conf->warnMsg(array_merge($Search->warnings, $pl->error_html), true);
         echo '</div>';
     }
 
-    echo "<div class='maintabsep'></div>\n\n<div class='pltable_full_ctr'>";
+    echo "<div class=\"maintabsep\"></div>\n\n<div class=\"pltable-fullw-container\">";
 
     if ($pl->has("sel")) {
-        echo Ht::form(SelfHref::make($Qreq, ["post" => post_value(), "forceShow" => null]), ["id" => "sel"]),
+        echo Ht::form($Conf->selfurl($Qreq, ["post" => post_value(), "forceShow" => null]), ["id" => "sel"]),
             Ht::hidden("defaultact", "", array("id" => "defaultact")),
             Ht::hidden("forceShow", (string) $Qreq->forceShow, ["id" => "forceShow"]),
             Ht::hidden_default_submit("default", 1);
@@ -540,6 +508,6 @@ if ($pl_text) {
         echo "</form>";
     echo "</div>\n";
 } else
-    echo "<div class='g'></div>\n";
+    echo '<hr class="g">';
 
 $Conf->footer();

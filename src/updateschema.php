@@ -1,6 +1,6 @@
 <?php
 // updateschema.php -- HotCRP function for updating old schemata
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 function update_schema_create_review_form($conf) {
     if (!($result = $conf->ql("select * from ReviewFormField where fieldName!='outcome'")))
@@ -36,7 +36,8 @@ function update_schema_create_review_form($conf) {
             $rfj->$fname->options[$row->level - 1] = $row->description;
     }
 
-    return $conf->save_setting("review_form", 1, $rfj);
+    $conf->save_setting("review_form", 1, $rfj);
+    return true;
 }
 
 function update_schema_create_options($conf) {
@@ -124,7 +125,8 @@ function update_schema_create_options($conf) {
         $opsj->$oid = $opj;
     }
 
-    return $conf->save_setting("options", 1, $opsj);
+    $conf->save_setting("options", 1, $opsj);
+    return true;
 }
 
 function update_schema_transfer_address($conf) {
@@ -210,6 +212,10 @@ function update_schema_drop_keys_if_exist($conf, $table, $key) {
         return $conf->ql("alter table `$table` " . join(", ", $drops));
     else
         return true;
+}
+
+function update_schema_check_column_exists($conf, $table, $column) {
+    return Dbl::fetch_ivalue($conf->dblink, "select exists (select * from information_schema.columns where table_schema=database() and `table_name`='$table' and `column_name`='$column') from dual");
 }
 
 function update_schema_mimetype_extensions($conf) {
@@ -324,6 +330,100 @@ function update_schema_selector_options($conf) {
             $oids[] = $opt->id;
     return empty($oids)
         || $conf->ql("update PaperOption set value=value+1 where optionId?a", $oids);
+}
+
+function update_schema_missing_review_ordinals($conf) {
+    $pids = Dbl::fetch_first_columns($conf->dblink, "select distinct paperId from PaperReview where reviewSubmitted>0 and reviewAuthorModified>0 and reviewOrdinal=0");
+    if (empty($pids))
+        return true;
+    $rf = $conf->review_form();
+    foreach ($conf->paper_set(["paperId" => $pids, "tags" => true]) as $prow) {
+        $prow->ensure_full_reviews();
+        $next_ordinal = $next_displayed = 0;
+        $update_rrows = [];
+        foreach ($prow->reviews_by_id() as $rrow) {
+            $next_ordinal = max($next_ordinal, $rrow->reviewOrdinal);
+            if ($rrow->reviewOrdinal > 0)
+                $next_displayed = max($next_displayed, $rrow->timeDisplayed);
+            if ($rrow->reviewSubmitted > 0
+                && $rrow->reviewModified > 0
+                && $rrow->reviewOrdinal == 0
+                && $rf->nonempty_view_score($rrow) >= VIEWSCORE_AUTHORDEC)
+                $update_rrows[] = $rrow;
+        }
+        assert(count($update_rrows) <= 1);
+        if ($update_rrows) {
+            $rrow = $update_rrows[0];
+            $new_displayed = max($rrow->timeDisplayed, $next_displayed + 1);
+            $conf->qe("update PaperReview set reviewOrdinal=?, timeDisplayed=? where paperId=? and reviewId=?", $next_ordinal + 1, $new_displayed, $prow->paperId, $rrow->reviewId);
+        }
+    }
+    return true;
+}
+
+function update_schema_clean_options_json($conf) {
+    $oj = $conf->setting_json("options");
+    if ($oj && is_object($oj)) {
+        $ol = [];
+        foreach (get_object_vars($oj) as $kk => $vv) {
+            if (!isset($vv->id))
+                $vv->id = (int) $kk;
+            $ol[] = $vv;
+        }
+        if (empty($ol))
+            $conf->save_setting("options", null);
+        else
+            $conf->save_setting("options", 1, json_encode($ol));
+    }
+    return true;
+}
+
+function update_schema_set_review_time_displayed($conf) {
+    $pids = Dbl::fetch_first_columns($conf->dblink, "select distinct paperId from PaperReview where (reviewSubmitted is not null or reviewOrdinal!=0) and timeDisplayed=0");
+    if (empty($pids)) {
+        return true;
+    }
+
+    $cleanf = Dbl::make_multi_ql_stager($conf->dblink);
+    foreach ($conf->paper_set(["paperId" => $pids]) as $prow) {
+        $rrows = array_values(array_filter($prow->reviews_by_id(), function ($r) {
+            return $r->reviewSubmitted || $r->reviewOrdinal;
+        }));
+        usort($rrows, function ($a, $b) {
+            if ($a->timeDisplayed && $b->timeDisplayed
+                && $a->timeDisplayed != $b->timeDisplayed) {
+                return $a->timeDisplayed < $b->timeDisplayed ? -1 : 1;
+            } else if ($a->reviewOrdinal && $b->reviewOrdinal) {
+                return $a->reviewOrdinal < $b->reviewOrdinal ? -1 : 1;
+            } else if ($a->reviewSubmitted != $b->reviewSubmitted) {
+                if ($a->reviewSubmitted != 0 && $b->reviewSubmitted != 0) {
+                    return $a->reviewSubmitted < $b->reviewSubmitted ? -1 : 1;
+                } else {
+                    return $a->reviewSubmitted != 0 ? -1 : 1;
+                }
+            } else {
+                return $a->reviewId < $b->reviewId ? -1 : 1;
+            }
+        });
+
+        $rt = array_map(function ($r) {
+            return +$r->timeDisplayed ? : +$r->reviewSubmitted ? : +$r->reviewModified;
+        }, $rrows);
+        $last = 0;
+        foreach ($rrows as $i => $rrow) {
+            if (!$rrow->timeDisplayed) {
+                $t = max($rt[$i], $last);
+                for ($j = $i + 1; $j < count($rrows); ++$j) {
+                    $t = min($t, $rt[$j]);
+                }
+                $cleanf("update PaperReview set timeDisplayed=? where paperId=? and reviewId=?", [$t, $prow->paperId, $rrow->reviewId]);
+                $rrow->timeDisplayed = $t;
+            }
+            $last = +$rrow->timeDisplayed;
+        }
+    }
+    $cleanf(true);
+    return true;
 }
 
 function updateSchema($conf) {
@@ -1305,10 +1405,13 @@ set ordinal=(t.maxOrdinal+1) where commentId=$row[1]");
         }
         $conf->update_schema_version(177);
     }
-    if ($conf->sversion == 177
-        && $conf->ql("alter table PaperStorage drop `mimetypeid`")
-        && $conf->ql("drop table if exists `Mimetype`"))
-        $conf->update_schema_version(178);
+    if ($conf->sversion == 177) {
+        set_time_limit(300); // might take a while
+        if ((!update_schema_check_column_exists($conf, "PaperStorage", "mimetypeid")
+             || $conf->ql("alter table PaperStorage drop `mimetypeid`"))
+            && $conf->ql("drop table if exists `Mimetype`"))
+            $conf->update_schema_version(178);
+    }
     if ($conf->sversion == 178
         && $conf->ql("delete from Settings where name='papersub'")) {
         $conf->update_papersub_setting(0);
@@ -1391,13 +1494,15 @@ set ordinal=(t.maxOrdinal+1) where commentId=$row[1]");
         && $conf->ql("alter table PaperReview drop key `reviewNeedsSubmit`")
         && $conf->ql("alter table PaperReview drop key `paperId`"))
         $conf->update_schema_version(195);
-    if ($conf->sversion == 195
-        && $conf->ql("alter table PaperStorage add `inactive` tinyint(1) NOT NULL DEFAULT '0'")
-        && $conf->ql("update PaperStorage set inactive=1")
-        && $conf->ql("update PaperStorage join Paper on (Paper.paperId=PaperStorage.paperId and Paper.paperStorageId=PaperStorage.paperStorageId) set PaperStorage.inactive=0")
-        && $conf->ql("update PaperStorage join Paper on (Paper.paperId=PaperStorage.paperId and Paper.finalPaperStorageId=PaperStorage.paperStorageId) set PaperStorage.inactive=0")
-        && $conf->ql("update PaperStorage join PaperOption on (PaperOption.paperId=PaperStorage.paperId and PaperOption.value=PaperStorage.paperStorageId) set PaperStorage.inactive=0"))
-        $conf->update_schema_version(196);
+    if ($conf->sversion == 195) {
+        set_time_limit(300);
+        if ($conf->ql("alter table PaperStorage add `inactive` tinyint(1) NOT NULL DEFAULT '0'")
+            && $conf->ql("update PaperStorage set inactive=1")
+            && $conf->ql("update PaperStorage join Paper on (Paper.paperId=PaperStorage.paperId and Paper.paperStorageId=PaperStorage.paperStorageId) set PaperStorage.inactive=0")
+            && $conf->ql("update PaperStorage join Paper on (Paper.paperId=PaperStorage.paperId and Paper.finalPaperStorageId=PaperStorage.paperStorageId) set PaperStorage.inactive=0")
+            && $conf->ql("update PaperStorage join PaperOption on (PaperOption.paperId=PaperStorage.paperId and PaperOption.value=PaperStorage.paperStorageId) set PaperStorage.inactive=0"))
+            $conf->update_schema_version(196);
+    }
     if ($conf->sversion == 196
         && $conf->ql("drop table if exists `DocumentLink`")
         && $conf->ql("create table `DocumentLink` (
@@ -1414,6 +1519,110 @@ set ordinal=(t.maxOrdinal+1) where commentId=$row[1]");
     if ($conf->sversion == 198
         && update_schema_selector_options($conf))
         $conf->update_schema_version(199);
+    if ($conf->sversion == 199
+        && update_schema_missing_review_ordinals($conf))
+        $conf->update_schema_version(200);
+    if ($conf->sversion == 200
+        && $conf->ql("alter table ActionLog change `destContactId` `destContactId` int(11) DEFAULT NULL")
+        && $conf->ql("update ActionLog set destContactId=null where destContactId=0 or destContactId=contactId")
+        && $conf->ql("alter table ActionLog add `trueContactId` int(11) DEFAULT NULL"))
+        $conf->update_schema_version(201);
+    if ($conf->sversion == 201
+        && $conf->ql("alter table PaperReviewRefused add `timeRequested` bigint(11) DEFAULT NULL")
+        && $conf->ql("alter table PaperReviewRefused add `refusedBy` int(11) DEFAULT NULL"))
+        $conf->update_schema_version(202);
+    if ($conf->sversion == 202
+        && $conf->ql("alter table ReviewRequest add `timeRequested` bigint(11) DEFAULT NULL"))
+        $conf->update_schema_version(203);
+    if ($conf->sversion == 203
+        && $conf->ql("alter table PaperReviewRefused add `timeRefused` bigint(11) DEFAULT NULL"))
+        $conf->update_schema_version(204);
+    if ($conf->sversion == 204
+        && $conf->ql("alter table PaperReviewRefused add `email` varchar(120) DEFAULT NULL")
+        && $conf->ql("update PaperReviewRefused join ContactInfo using (contactId) set PaperReviewRefused.email=ContactInfo.email")
+        && $conf->ql("delete from PaperReviewRefused where email is null")
+        && $conf->ql("alter table PaperReviewRefused change `email` `email` varchar(120) NOT NULL")
+        && $conf->ql("alter table PaperReviewRefused drop primary key")
+        && $conf->ql("alter table PaperReviewRefused add primary key (`paperId`,`email`)"))
+        $conf->update_schema_version(205);
+    if ($conf->sversion == 205
+        && $conf->ql("alter table PaperReviewRefused add `reviewRound` int(1) DEFAULT NULL"))
+        $conf->update_schema_version(206);
+    if ($conf->sversion == 206
+        && $conf->ql("alter table PaperReviewRefused add `firstName` varbinary(120) DEFAULT NULL")
+        && $conf->ql("alter table PaperReviewRefused add `lastName` varbinary(120) DEFAULT NULL")
+        && $conf->ql("alter table PaperReviewRefused add `affiliation` varbinary(2048) DEFAULT NULL"))
+        $conf->update_schema_version(207);
+    if ($conf->sversion == 207
+        && $conf->ql("alter table ActionLog add `timestamp` bigint(11) DEFAULT NULL")
+        && $conf->ql("update ActionLog set timestamp=unix_timestamp(time) where timestamp IS NULL"))
+        $conf->update_schema_version(208);
+    if ($conf->sversion == 208
+        && $conf->ql("update ActionLog set timestamp=unix_timestamp(time) where timestamp IS NULL")
+        && $conf->ql("alter table ActionLog change `timestamp` `timestamp` bigint(11) NOT NULL")
+        && $conf->ql("alter table ActionLog drop `time`")
+        && $conf->ql("alter table ActionLog add `data` varbinary(8192) DEFAULT NULL"))
+        $conf->update_schema_version(209);
+    if ($conf->sversion == 209) {
+        $conf->ql("update Settings set name=concat('opt.', substr(name, 5)) where name like 'ova.%'");
+        $conf->update_schema_version(210);
+    }
+    if ($conf->sversion == 210) {
+        $conf->ql("update Settings set data=replace(data, '#', '') where name='tracks'");
+        $conf->update_schema_version(211);
+    }
+    if ($conf->sversion == 211) {
+        $conf->ql("update Settings set name='msg.resp_instrux_0' where name='msg.resp_instrux'");
+        $conf->update_schema_version(212);
+    }
+    if ($conf->sversion == 212
+        && $conf->ql("update PaperConflict set conflictType=(64 + conflictType - 9) where conflictType>=9 and conflictType<64"))
+        $conf->update_schema_version(213);
+    if ($conf->sversion == 213
+        && update_schema_clean_options_json($conf))
+        $conf->update_schema_version(214);
+    if ($conf->sversion == 214
+        && $conf->ql("alter table PaperReview add `data` varbinary(8192) DEFAULT NULL"))
+        $conf->update_schema_version(215);
+    if ($conf->sversion == 215
+        && $conf->ql("alter table PaperReviewRefused add `data` varbinary(8192) DEFAULT NULL"))
+        $conf->update_schema_version(216);
+    if ($conf->sversion == 216
+        && $conf->ql("alter table PaperReviewRefused add `reviewType` tinyint(1) NOT NULL DEFAULT '0'"))
+        $conf->update_schema_version(217);
+    if ($conf->sversion == 217) {
+        if ($conf->setting("extrev_approve")
+            && $conf->setting("pcrev_editdelegate")) {
+            $conf->ql("delete from Settings where name='extrev_approve'");
+            $conf->save_setting("pcrev_editdelegate", 2);
+        }
+        $conf->update_schema_version(218);
+    }
+    if ($conf->sversion == 218) {
+        if (($mb = $conf->setting_data("mailbody_requestreview"))) {
+            $mb1 = str_replace("/review/%NUMBER%?accept=1&%LOGINURLPARTS%", "/review/%NUMBER%?cap=%REVIEWACCEPTOR%&accept=1", $mb);
+            $mb1 = str_replace("/review/%NUMBER%?decline=1&%LOGINURLPARTS%", "/review/%NUMBER%?cap=%REVIEWACCEPTOR%&decline=1", $mb1);
+            if ($mb1 !== $mb) {
+                $conf->save_setting("mailbody_requestreview", 1, $mb1);
+            }
+        }
+        $conf->update_schema_version(219);
+    }
+    if ($conf->sversion == 219
+        && $conf->ql("alter table MailLog add `status` tinyint(1) NOT NULL DEFAULT '0'"))
+        $conf->update_schema_version(220);
+    if ($conf->sversion == 220
+        && $conf->ql("update PaperReview set reviewNeedsSubmit=0 where reviewNeedsSubmit>0 and timeApprovalRequested<0"))
+        $conf->update_schema_version(221);
+    if ($conf->sversion == 221
+        && $conf->ql("alter table PaperComment drop column `paperStorageId`"))
+        $conf->update_schema_version(222);
+    if ($conf->sversion == 222
+        && $conf->ql("update PaperComment set timeDisplayed=if(timeNotified=0,timeModified,timeNotified) where timeDisplayed=0 and (commentType&" . COMMENTTYPE_DRAFT . ")=0"))
+        $conf->update_schema_version(223);
+    if ($conf->sversion == 223
+        && update_schema_set_review_time_displayed($conf))
+        $conf->update_schema_version(224);
 
     $conf->ql("delete from Settings where name='__schema_lock'");
     Conf::$g = $old_conf_g;

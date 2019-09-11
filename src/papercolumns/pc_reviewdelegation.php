@@ -1,6 +1,6 @@
 <?php
 // pc_reviewdelegation.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ReviewDelegation_PaperColumn extends PaperColumn {
     private $requester;
@@ -22,7 +22,7 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
         $rx = [];
         $row->ensure_reviewer_names();
         $old_overrides = $pl->user->add_overrides(Contact::OVERRIDE_CONFLICT);
-        foreach ($row->reviews_by_display() as $rrow) {
+        foreach ($row->reviews_by_display($pl->user) as $rrow) {
             if ($rrow->reviewType == REVIEW_EXTERNAL
                 && $rrow->requestedBy == $this->requester->contactId) {
                 if (!$pl->user->can_view_review_assignment($row, $rrow))
@@ -32,24 +32,29 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
                 else
                     $t = "review";
                 $ranal = $pl->make_review_analysis($rrow, $row);
-                $description = $ranal->description_text();
-                if ($rrow->reviewOrdinal)
-                    $description = rtrim("#" . unparseReviewOrdinal($rrow) . " " . $description);
-                $description = $ranal->wrap_link($description, "uu nw");
-                if (!$rrow->reviewSubmitted && $rrow->reviewNeedsSubmit >= 0)
-                    $description = '<strong class="overdue">' . $description . '</strong>';
-                $t .= ", $description";
-                if (!$rrow->reviewSubmitted) {
+                $d = $rrow->status_description();
+                if ($rrow->reviewOrdinal) {
+                    $d = rtrim("#" . unparseReviewOrdinal($rrow) . " " . $d);
+                }
+                $d = $ranal->wrap_link($d, "uu nw");
+                if (!$rrow->reviewSubmitted
+                    && $rrow->timeApprovalRequested == 0) {
+                    if ($rrow->reviewNeedsSubmit >= 0) {
+                        $d = '<strong class="overdue">' . $d . '</strong>';
+                    }
                     $pl->mark_has("need_review");
                     $row->ensure_reviewer_last_login();
-                    if (!$rrow->reviewLastLogin)
-                        $t .= ' <span class="hint">(never logged in)</span>';
-                    else if ($rrow->reviewLastLogin >= $Now - 259200)
-                        $t .= ' <span class="hint">(last site activity ' . plural(round(($Now - $rrow->reviewLastLogin) / 3600), "hour") . ' ago)</span>';
-                    else
-                        $t .= ' <span class="hint">(last site activity ' . plural(round(($Now - $rrow->reviewLastLogin) / 86400), "day") . ' ago)</span>';
+                    if (!$rrow->reviewLastLogin) {
+                        $login = 'never logged in';
+                    } else {
+                        $login = 'activity ' . $pl->conf->unparse_time_relative($rrow->reviewLastLogin);
+                    }
+                    $d .= ' <span class="hint">(' . $login . ')</span>';
+                } else if (!$rrow->reviewSubmitted
+                           && $rrow->timeApprovalRequested > 0) {
+                    $d = '<strong>' . $d . '</strong>';
                 }
-                $rx[] = $t;
+                $rx[] = $t . ', ' . $d;
             }
         }
         $pl->user->set_overrides($old_overrides);

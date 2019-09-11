@@ -1,6 +1,6 @@
 <?php
 // search/st_decision.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Decision_SearchTerm extends SearchTerm {
     private $match;
@@ -10,8 +10,7 @@ class Decision_SearchTerm extends SearchTerm {
         $this->match = $match;
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
-        $flag = $sword->quoted ? Text::SEARCH_NO_SPECIAL : Text::SEARCH_UNPRIVILEGE_EXACT;
-        $dec = PaperSearch::decision_matchexpr($srch->conf, $word, $flag);
+        $dec = PaperSearch::decision_matchexpr($srch->conf, $word, $sword->quoted);
         if (is_array($dec) && empty($dec)) {
             $srch->warn("“" . htmlspecialchars($word) . "” doesn’t match a decision.");
             $dec[] = -10000000;
@@ -26,7 +25,7 @@ class Decision_SearchTerm extends SearchTerm {
         return $srch->user->can_view_decision($row)
             && CountMatcher::compare_using($row->outcome, $this->match);
     }
-    function compile_edit_condition(PaperInfo $row, PaperSearch $srch) {
+    function compile_condition(PaperInfo $row, PaperSearch $srch) {
         return $this->exec($row, $srch);
     }
 }

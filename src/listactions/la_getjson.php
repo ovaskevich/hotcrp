@@ -1,6 +1,6 @@
 <?php
 // listactions/la_getjson.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class GetJson_ListAction extends ListAction {
     private $iszip;
@@ -28,15 +28,14 @@ class GetJson_ListAction extends ListAction {
         foreach ($user->paper_set($ssel, ["topics" => true, "options" => true]) as $prow) {
             $pj1 = $ps->paper_json($prow);
             if ($pj1)
-                $pj[$prow->paperId] = $pj1;
+                $pj[] = $pj1;
             else {
-                $pj[$prow->paperId] = (object) ["pid" => $prow->paperId, "error" => "You don’t have permission to administer this paper."];
+                $pj[] = (object) ["pid" => $prow->paperId, "error" => "You don’t have permission to administer this paper."];
                 if ($this->iszip)
                     $this->zipdoc->warnings[] = "#$prow->paperId: You don’t have permission to administer this paper.";
             }
         }
         $user->set_overrides($old_overrides);
-        $pj = array_values($ssel->reorder($pj));
         if (count($pj) == 1) {
             $pj = $pj[0];
             $pj_filename = $user->conf->download_prefix . "paper" . $ssel->selection_at(0) . "-data.json";

@@ -87,7 +87,9 @@ if ($ziparchive) {
             if (!str_starts_with($ziparchive->getNameIndex($i), $dirprefix))
                 $dirprefix = "";
     }
-    $content_file_prefix = $dirprefix . ($dirprefix ? "/" : "");
+    $content_file_prefix = $dirprefix;
+    if ($content_file_prefix !== "" && !str_ends_with($content_file_prefix, "/"))
+        $content_file_prefix .= "/";
     // find "*-data.json" file
     $data_filename = $json_filename = [];
     for ($i = 0; $i < $ziparchive->numFiles; ++$i) {
@@ -141,16 +143,19 @@ if ($jp === null) {
 }
 
 function on_document_import($docj, PaperOption $o, PaperStatus $pstatus) {
-    global $ziparchive;
+    global $ziparchive, $content_file_prefix;
     if (isset($docj->content_file)
         && is_string($docj->content_file)
         && $ziparchive) {
         $content = $ziparchive->getFromName($docj->content_file);
+        if ($content === false)
+            $content = $ziparchive->getFromName($content_file_prefix . $docj->content_file);
         if ($content === false) {
             $pstatus->error_at_option($o, "{$docj->content_file}: Could not read");
             return false;
         }
         $docj->content = $content;
+        unset($docj->content_file);
     }
 }
 
@@ -194,7 +199,7 @@ foreach ($jp as &$j) {
 
     foreach ($arg["f"] as $f) {
         if ($j)
-            $j = call_user_func($f, $j, $Conf, $ziparchive);
+            $j = call_user_func($f, $j, $Conf, $ziparchive, $content_file_prefix);
     }
     if (!$j) {
         fwrite(STDERR, $pidtext . $titletext . "filtered out\n");
@@ -218,7 +223,7 @@ foreach ($jp as &$j) {
     if (!$quiet)
         fwrite(STDERR, $pid ? "saved\n" : "failed\n");
     $prefix = $pidtext . ": ";
-    foreach ($ps->messages() as $msg)
+    foreach ($ps->landmarked_messages() as $msg)
         fwrite(STDERR, $prefix . htmlspecialchars_decode($msg) . "\n");
     if ($pid)
         ++$nsuccesses;
@@ -230,7 +235,7 @@ foreach ($jp as &$j) {
 
     // XXX more validation here
     if ($pid && isset($j->reviews) && is_array($j->reviews) && $reviews) {
-        $prow = $Conf->paperRow(["paperId" => $pid], $site_contact);
+        $prow = $Conf->fetch_paper($pid, $site_contact);
         foreach ($j->reviews as $reviewindex => $reviewj) {
             if ($tf->parse_json($reviewj)
                 && isset($tf->req["reviewerEmail"])

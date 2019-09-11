@@ -1,5 +1,5 @@
 // settings.js -- HotCRP JavaScript library for settings
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 function next_lexicographic_permutation(i, size) {
     var y = (i & -i) || 1, c = i + y, highbit = 1 << size;
@@ -36,6 +36,7 @@ handle_ui.on("js-settings-option-description", function () {
 
 handle_ui.on("js-settings-option-presence", function (event) {
     foldup.call(this, null, {n: 5, f: false});
+    foldup.call(this, null, {n: 9, f: false});
     if (document.activeElement === this)
         $(this).closest(".settings-opt").find(".settings-opt-presence").focus();
 });
@@ -112,6 +113,17 @@ function settings_option_move_enable() {
 }
 
 
+handle_ui.on("js-settings-banal-pagelimit", function (evt) {
+    var s = $.trim(this.value),
+        empty = s === "" || s.toUpperCase() === "N/A",
+        $ur = $(this).closest(".has-fold").find(".settings-banal-unlimitedref");
+    $ur.find("label").toggleClass("dim", empty);
+    $ur.find("input").prop("disabled", empty);
+    if (evt && evt.type === "change" && empty)
+        $ur.find("input").prop("checked", false);
+});
+
+
 handle_ui.on("js-settings-add-decision-type", function (event) {
     var $t = $("#settings-decision-types"), next = 1;
     while ($t.find("input[name=dec_name_" + next + "]").length)
@@ -156,9 +168,8 @@ handle_ui.on("js-settings-add-track", function () {
     var $j = jQuery("#trackgroup" + i);
     $j.html(jQuery("#trackgroup0").html().replace(/_track0/g, "_track" + i));
     mktemptext($j);
+    $j.find(".need-suggest").each(suggest);
     $j.find("input[name^=name]").focus();
-    suggest($j.find(".settings-track-name"), taghelp_tset);
-    suggest($j.find(".settings-track-perm-tag"), pc_tag_completion);
 });
 
 handle_ui.on("js-settings-copy-topics", function () {
@@ -233,68 +244,28 @@ function get_fid(elt) {
     return elt.id.replace(/^.*_/, "");
 }
 
+function unparse_option(fieldj, idx) {
+    if (fieldj.option_letter) {
+        var cc = fieldj.option_letter.charCodeAt(0);
+        return String.fromCharCode(cc + fieldj.options.length - idx);
+    } else
+        return idx.toString();
+}
+
 function options_to_text(fieldj) {
-    var cc = 49, ccdelta = 1, i, t = [];
+    var i, t = [];
     if (!fieldj.options)
         return "";
-    if (fieldj.option_letter) {
-        cc = fieldj.option_letter.charCodeAt(0) + fieldj.options.length - 1;
-        ccdelta = -1;
-    }
-    for (i = 0; i != fieldj.options.length; ++i, cc += ccdelta)
-        t.push(String.fromCharCode(cc) + ". " + fieldj.options[i]);
-    fieldj.option_letter && t.reverse();
-    fieldj.allow_empty && t.push("No entry");
-    t.length && t.push(""); // get a trailing newline
+    for (i = 0; i != fieldj.options.length; ++i)
+        t.push(unparse_option(fieldj, i + 1) + ". " + fieldj.options[i]);
+    if (fieldj.option_letter)
+        t.reverse();
+    if (fieldj.allow_empty)
+        t.push("No entry");
+    if (t.length)
+        t.push(""); // get a trailing newline
     return t.join("\n");
 }
-
-/* parse HTML form into JSON review form description -- currently unused
-function parse_field(fid) {
-    var fieldj = {name: $("#shortName_" + fid).val()}, x;
-    if ((x = $("#order_" + fid).val()))
-        fieldj.position = x|0;
-    if ((x = $.trim($("#description_" + fid).val())) !== "")
-        fieldj.description = x;
-    if ((x = $("#options_" + fid).val()) != "pc")
-        fieldj.visibility = x;
-    if (original[fid].options) {
-        if (!text_to_options(fieldj, $("#options_" + fid).val()))
-            return false;
-        x = $("#option_class_prefix_" + fid).val() || "sv";
-        if ($("#option_class_prefix_flipped_" + fid).val())
-            x = colors[(colors.indexOf(x) || 0) ^ 2];
-        if (x != "sv")
-            fieldj.option_class_prefix = x;
-    }
-    return fieldj;
-}
-
-function text_to_options(fieldj, text) {
-    var lines = $.split(/[\r\n\v]+/), i, s, cc, xlines = [], m;
-    for (i in lines)
-        if ((s = $.trim(lines[i])) !== "")
-            xlines.push(s);
-    xlines.sort();
-    if (xlines.length >= 1 && xlines.length <= 9
-        && /^[1A-Z](?:[.]|\s)\s*\S/.test(xlines[0]))
-        cc = xlines[0].charCodeAt(0);
-    else
-        return false;
-    lines = [];
-    for (i = 0; i < xlines.length; ++i)
-        if ((m = /^[1-9A-Z](?:[.]|\s)\s*(\S.*)\z/.exec(xlines[i]))
-            && xlines[i].charCodeAt(0) == cc + i)
-            lines.push(m[1]);
-        else
-            return false;
-    if (cc != 49) {
-        lines.reverse();
-        fieldj.option_letter = String.fromCharCode(cc + lines.length - 1);
-    }
-    fieldj.options = lines;
-    return true;
-} */
 
 function option_class_prefix(fieldj) {
     var sv = fieldj.option_class_prefix || "sv";
@@ -355,33 +326,33 @@ var revfield_template = '<div id="revfield_$" class="settings-revfield f-contain
   <div class="f-horizontal">\
     <div class="f-i">\
       <label for="authorView_$">Visibility</label>\
-      <select name="authorView_$" id="authorView_$" class="reviewfield_authorView">\
+      <span class="select"><select name="authorView_$" id="authorView_$" class="reviewfield_authorView">\
         <option value="au">Shown to authors</option>\
         <option value="pc">Hidden from authors</option>\
         <option value="audec">Hidden from authors until decision</option>\
         <option value="admin">Shown only to administrators</option>\
-      </select>\
+      </select></span>\
     </div>\
     <div class="f-i reviewrow_options">\
       <label for="option_class_prefix_$">Colors</label>\
-      <select name="option_class_prefix_$" id="option_class_prefix_$" class="reviewfield_option_class_prefix"></select>\
+      <span class="select"><select name="option_class_prefix_$" id="option_class_prefix_$" class="reviewfield_option_class_prefix"></select></span>\
 <input type="hidden" name="option_class_prefix_flipped_$" id="option_class_prefix_flipped_$" value="" />\
     </div>\
     <div class="f-i reviewrow_rounds">\
       <label for="round_list_$">Rounds</label>\
-      <select name="round_list_$" id="round_list_$" class="reviewfield_round_list"></select>\
+      <span class="select"><select name="round_list_$" id="round_list_$" class="reviewfield_round_list"></select></span>\
     </div>\
   </div>\
   <div class="f-i">\
     <label for="description_$">Description</label>\
     <textarea name="description_$" id="description_$" class="reviewtext need-tooltip" rows="2" data-tooltip-info="settings-review-form" data-tooltip-type="focus"></textarea></div>\
   <div class="f-i reviewrow_options">\
-    <label for="options_$">Options</label>\
+    <label for="options_$">Choices</label>\
     <textarea name="options_$" id="options_$" class="reviewtext need-tooltip" rows="6" data-tooltip-info="settings-review-form" data-tooltip-type="focus"></textarea></div>\
   <div class="f-i">\
-    <button id="moveup_$" class="btn btn-sm revfield_moveup" type="button">Move up</button><span class="sep"></span>\
-<button id="movedown_$" class="btn btn-sm revfield_movedown" type="button">Move down</button><span class="sep"></span>\
-<button id="remove_$" class="btn btn-sm revfield_remove" type="button">Delete from form</button><span class="sep"></span>\
+    <button id="moveup_$" class="btn-sm revfield_moveup" type="button">Move up</button><span class="sep"></span>\
+<button id="movedown_$" class="btn-sm revfield_movedown" type="button">Move down</button><span class="sep"></span>\
+<button id="remove_$" class="btn-sm revfield_remove" type="button">Delete from form</button><span class="sep"></span>\
 <input type="hidden" name="order_$" id="order_$" class="revfield_order" value="0" />\
   </div>\
 </div></div>';
@@ -405,17 +376,13 @@ tooltip.add_builder("settings-option", function (info) {
         x = "#option_caption_name";
     else if (/^optecs/.test(this.name))
         x = "#option_caption_condition_search";
-    return $.extend({dir: "h", content: $(x).html()}, info);
+    return $.extend({dir: "h", content: $(x).html(), className: "gray"}, info);
 });
 
 function option_value_html(fieldj, value) {
-    var cc = 48, ccdelta = 1, t, n;
+    var t, n;
     if (!value || value < 0)
         return ["", "No entry"];
-    if (fieldj.option_letter) {
-        cc = fieldj.option_letter.charCodeAt(0) + fieldj.options.length;
-        ccdelta = -1;
-    }
     t = '<span class="rev_num sv';
     if (value <= fieldj.options.length) {
         if (fieldj.options.length > 1)
@@ -424,7 +391,7 @@ function option_value_html(fieldj, value) {
             n = 1;
         t += " " + (fieldj.option_class_prefix || "sv") + n;
     }
-    return [t + '">' + String.fromCharCode(cc + value * ccdelta) + '.</span>',
+    return [t + '">' + unparse_option(fieldj, value) + '.</span>',
             escape_entities(fieldj.options[value - 1] || "Unknown")];
 }
 
@@ -557,12 +524,10 @@ function rfs(data) {
     for (i = 0; i != fieldorder.length; ++i)
         append_field(fieldorder[i], i + 1);
     $("#reviewform_container").on("click", "a.settings-field-folder", view_unfold);
-    $("#reviewform_container").on("fold", ".settings-revfield", function (evt, opts) {
-        if (!opts.f) {
-            $(this).find("textarea").css("height", "auto").autogrow();
-            $(this).find("input[type=text]").autogrow();
-            mktemptext($(this));
-        }
+    $("#reviewform_container").on("unfold", ".settings-revfield", function (evt, opts) {
+        $(this).find("textarea").css("height", "auto").autogrow();
+        $(this).find("input[type=text]").autogrow();
+        mktemptext($(this));
     });
 
     // highlight errors, apply request
@@ -638,7 +603,7 @@ function add_dialog(fid, focus) {
         add_field(fid);
         template && fill_field(fid, samples[template - 1], false);
         $("#shortName_" + fid)[0].focus();
-        popup_close($d);
+        $d.close();
         event.preventDefault();
     }
     function click() {
@@ -647,7 +612,9 @@ function add_dialog(fid, focus) {
             template += dir;
             if (template < 0)
                 template = samples.length;
-            while (template && samples[template - 1] && !samples[template - 1].options != !has_options)
+            while (template
+                   && samples[template - 1]
+                   && !samples[template - 1].options !== !has_options)
                 template += dir;
             render_template();
         }
@@ -663,13 +630,13 @@ function add_dialog(fid, focus) {
         hc.push('<h2>' + (has_options ? "Add score field" : "Add text field") + '</h2>');
         hc.push('<p>Choose a template for the new field.</p>');
         hc.push('<table style="width:500px;max-width:90%;margin-bottom:2em"><tbody><tr>', '</tr></tbody></table>');
-        hc.push('<td style="text-align:left"><button name="prev" type="button" class="btn need-tooltip" data-tooltip="Previous template">&lt;</button></td>');
+        hc.push('<td style="text-align:left"><button name="prev" type="button" class="need-tooltip" data-tooltip="Previous template">&lt;</button></td>');
         hc.push('<td class="newreviewfield-template-name" style="text-align:center"></td>');
-        hc.push('<td style="text-align:right"><button name="next" type="button" class="btn need-tooltip" data-tooltip="Next template">&gt;</button></td>');
+        hc.push('<td style="text-align:right"><button name="next" type="button" class="need-tooltip" data-tooltip="Next template">&gt;</button></td>');
         hc.pop();
         hc.push('<div class="newreviewfield-template" style="width:500px;max-width:90%;min-height:6em"></div>');
-        hc.push_actions(['<button type="submit" name="add" class="btn btn-primary want-focus">Create field</button>',
-            '<button type="button" name="cancel" class="btn">Cancel</button>']);
+        hc.push_actions(['<button type="submit" name="add" class="btn-primary want-focus">Create field</button>',
+            '<button type="button" name="cancel">Cancel</button>']);
         $d = hc.show();
         render_template();
         $d.find(".newreviewfield-template-name").on("click", change_template);
@@ -724,19 +691,6 @@ handle_ui.on("js-settings-resp-round-new", function () {
     j.html(jQuery("#response_n").html().replace(/_n\"/g, "_" + i + "\""));
     mktemptext(j);
     j.find("textarea").css({height: "auto"}).autogrow().val(jQuery("#response_n textarea").val());
-    suggest(j.find(".papersearch"), taghelp_q);
+    j.find(".need-suggest").each(suggest);
     return false;
 });
-
-
-(function ($) {
-function handle() {
-    var $self = $(this);
-    fold($self.find(".settings-radioitem"), true);
-    fold($self.find(".js-settings-radio:checked").closest(".settings-radioitem"), false);
-}
-$(document).on("change", ".js-settings-radio", function (event) {
-    handle.call($(event.target).closest(".settings-radio")[0]);
-});
-$(function () { $(".settings-radio").each(handle); });
-})($);

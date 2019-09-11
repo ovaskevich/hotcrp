@@ -1,6 +1,6 @@
 <?php
 // pc_conflictmatch.php -- HotCRP paper columns for author/collaborator match
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ConflictMatch_PaperColumn extends PaperColumn {
     private $contact;
@@ -32,27 +32,27 @@ class ConflictMatch_PaperColumn extends PaperColumn {
     function _conflict_match($user, $matcher, $conflict, $aunum, $why) {
         $aumatcher = new AuthorMatcher($conflict);
         if ($aunum) {
-            $pfx = "<em>Author #$aunum</em> ";
+            $pfx = "<em>author #$aunum</em> ";
             if ($matcher->nonauthor) {
                 $match = $aumatcher->highlight($matcher);
                 if (!$matcher->name())
                     $match = "All " . $match;
-                $this->_potconf[$aunum][] = [$pfx . $matcher->highlight($conflict), "Author matches PC collaborator " . $match];
+                $this->_potconf[$aunum][] = [$pfx . $matcher->highlight($conflict), "matches PC collaborator " . $match];
             } else if ($why == AuthorMatcher::MATCH_AFFILIATION) {
-                $this->_potconf[$aunum][] = [$pfx . htmlspecialchars($conflict->name()) . " (" . $matcher->highlight($conflict->affiliation) . ")", "Author matches PC affiliation " . $aumatcher->highlight($user->affiliation)];
+                $this->_potconf[$aunum][] = [$pfx . htmlspecialchars($conflict->name()) . " (" . $matcher->highlight($conflict->affiliation) . ")", "matches PC affiliation " . $aumatcher->highlight($user->affiliation)];
             } else {
-                $this->_potconf[$aunum][] = [$pfx . $matcher->highlight($conflict), "Author matches PC " . $aumatcher->highlight($user)];
+                $this->_potconf[$aunum][] = [$pfx . $matcher->highlight($conflict), "matches PC " . $aumatcher->highlight($user)];
             }
         } else {
             $num = "x" . count($this->_potconf);
-            $pfx = "<em>Collaborator</em> ";
+            $pfx = "<em>collaborator</em> ";
             if (!$conflict->name())
                 $pfx .= "All ";
             $pfx .= $matcher->highlight($conflict);
             if ($why == AuthorMatcher::MATCH_AFFILIATION) {
-                $this->_potconf[$num][] = [$pfx, "Paper collaborator matches PC affiliation " . $aumatcher->highlight($user->affiliation)];
+                $this->_potconf[$num][] = [$pfx, "matches PC affiliation " . $aumatcher->highlight($user->affiliation)];
             } else {
-                $this->_potconf[$num][] = [$pfx, "Paper collaborator matches PC " . $aumatcher->highlight($user)];
+                $this->_potconf[$num][] = [$pfx, "matches PC " . $aumatcher->highlight($user)];
             }
         }
     }
@@ -72,7 +72,7 @@ class ConflictMatch_PaperColumn extends PaperColumn {
             if (count($cx) > 1) {
                 $n = $len = false;
                 foreach ($cx as $c) {
-                    $thislen = strlen(preg_replace('{>[^<]*<}', "", $c[0]));
+                    $thislen = strlen(preg_replace('{<[^>]*>[^<]*</[^>]*>}', "", $c[0]));
                     if ($n === false || $thislen < $len) {
                         $n = $c[0];
                         $len = $thislen;
@@ -87,18 +87,18 @@ class ConflictMatch_PaperColumn extends PaperColumn {
         return join(" ", $ch);
     }
 
-    static function expand($name, Conf $conf, $xfj, $m) {
-        if (!($fj = (array) $conf->basic_paper_column("potentialconflict", $conf->xt_user)))
+    static function expand($name, $user, $xfj, $m) {
+        if (!($fj = (array) $user->conf->basic_paper_column("potentialconflict", $user)))
             return null;
         $rs = [];
-        foreach (ContactSearch::make_pc($m[1], $conf->xt_user)->ids as $cid) {
-            $u = $conf->cached_user_by_id($cid);
+        foreach (ContactSearch::make_pc($m[1], $user)->ids as $cid) {
+            $u = $user->conf->cached_user_by_id($cid);
             $fj["name"] = "potentialconflict:" . $u->email;
             $fj["user"] = $u->email;
             $rs[] = (object) $fj;
         }
         if (empty($rs))
-            $conf->xt_factory_error("No PC member matches “" . htmlspecialchars($m[1]) . "”.");
+            $user->conf->xt_factory_error("No PC member matches “" . htmlspecialchars($m[1]) . "”.");
         return $rs;
     }
 }

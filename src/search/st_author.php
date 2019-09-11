@@ -1,6 +1,6 @@
 <?php
 // search/st_author.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Author_SearchTerm extends SearchTerm {
     private $csm;
@@ -26,7 +26,7 @@ class Author_SearchTerm extends SearchTerm {
                 $word = null;
                 $count = "=0";
             } else if (trim($word) !== "")
-                $cids = $srch->matching_special_contacts($word, false, false);
+                $cids = $srch->matching_special_uids($word, false, false);
         }
         return new Author_SearchTerm($count, $cids, $word, $sword->quoted);
     }
@@ -71,47 +71,5 @@ class Author_SearchTerm extends SearchTerm {
         parent::extract_metadata($top, $srch);
         if ($this->regex)
             $srch->regex["au"][] = $this->regex;
-    }
-}
-
-class AuthorMatch_SearchTerm extends SearchTerm {
-    private $field;
-    private $matcher;
-
-    function __construct($type, $matcher) {
-        parent::__construct($type);
-        $this->field = TextMatch_SearchTerm::$map[substr($type, 0, 2)];
-        $this->matcher = $matcher;
-    }
-    static function parse($word, SearchWord $sword) {
-        $type = $sword->kwdef->name;
-        if ($word === "any" && $sword->kwexplicit && !$sword->quoted)
-            return new TextMatch_SearchTerm(substr($type, 0, 2), true, false);
-        if (($matcher = AuthorMatcher::make_string_guess($word)))
-            return new AuthorMatch_SearchTerm($type, $matcher);
-        else
-            return new False_SearchTerm;
-    }
-
-    function sqlexpr(SearchQueryInfo $sqi) {
-        $sqi->add_column($this->field, "Paper.{$this->field}");
-        return "Paper.{$this->field}!=''";
-    }
-    function exec(PaperInfo $row, PaperSearch $srch) {
-        $field = $this->field;
-        if ($row->$field === ""
-            || !$srch->user->allow_view_authors($row))
-            return false;
-        if (!$row->field_match_pregexes($this->matcher->general_pregexes(), $field))
-            return false;
-        $l = $this->type === "aumatch" ? $row->author_list() : $row->collaborator_list();
-        foreach ($l as $au)
-            if ($this->matcher->test($au, true))
-                return true;
-        return false;
-    }
-    function extract_metadata($top, PaperSearch $srch) {
-        parent::extract_metadata($top, $srch);
-        $srch->regex[substr($this->type, 0, 2)][] = $this->matcher->general_pregexes();
     }
 }

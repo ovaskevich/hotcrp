@@ -1,17 +1,18 @@
 <?php
 // src/settings/s_reviewform.php -- HotCRP review form definition page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ReviewForm_SettingParser extends SettingParser {
     private $nrfj;
+    private $byname;
     private $option_error;
 
     public static $setting_prefixes = ["shortName_", "description_", "order_", "authorView_", "options_", "option_class_prefix_"];
 
     private function check_options(SettingValues $sv, $fid, $fj) {
-        $text = cleannl($sv->req["options_$fid"]);
+        $text = cleannl($sv->reqv("options_$fid"));
         $letters = ($text && ord($text[0]) >= 65 && ord($text[0]) <= 90);
-        $expect = ($letters ? "[A-Z]" : "[1-9]");
+        $expect = ($letters ? "[A-Z]" : "[1-9][0-9]*");
 
         $opts = array();
         $lowonum = 10000;
@@ -20,10 +21,9 @@ class ReviewForm_SettingParser extends SettingParser {
         foreach (explode("\n", $text) as $line) {
             $line = trim($line);
             if ($line != "") {
-                if ((preg_match("/^($expect)\\.\\s*(\\S.*)/", $line, $m)
-                     || preg_match("/^($expect)\\s+(\\S.*)/", $line, $m))
+                if (preg_match("/^($expect)[\\.\\s]\\s*(\\S.*)/", $line, $m)
                     && !isset($opts[$m[1]])) {
-                    $onum = ($letters ? ord($m[1]) : (int) $m[1]);
+                    $onum = $letters ? ord($m[1]) : intval($m[1]);
                     $lowonum = min($lowonum, $onum);
                     $opts[$onum] = $m[2];
                 } else if (preg_match('/^(?:0\.\s*)?No entry$/i', $line))
@@ -57,33 +57,42 @@ class ReviewForm_SettingParser extends SettingParser {
     }
 
     private function populate_field($fj, ReviewField $f, SettingValues $sv, $fid) {
-        $sn = simplify_whitespace(get($sv->req, "shortName_$fid", ""));
+        $sn = simplify_whitespace($sv->reqv("shortName_$fid", ""));
         if ($sn === "<None>" || $sn === "<New field>" || $sn === "Field name")
             $sn = "";
 
-        if (isset($sv->req["order_$fid"]))
-            $pos = cvtnum(get($sv->req, "order_$fid"));
+        if ($sv->has_reqv("order_$fid"))
+            $pos = cvtnum($sv->reqv("order_$fid"));
         else
             $pos = get($fj, "position", -1);
         if ($pos > 0 && $sn == ""
-            && isset($sv->req["description_$fid"])
-            && trim($sv->req["description_$fid"]) === ""
+            && $sv->has_reqv("description_$fid")
+            && trim($sv->reqv("description_$fid")) === ""
             && (!$f->has_options
-                || (isset($sv->req["options_$fid"])
-                    ? trim($sv->req["options_$fid"]) === ""
+                || ($sv->has_reqv("options_$fid")
+                    ? trim($sv->reqv("options_$fid")) === ""
                     : empty($fj->options))))
             $pos = -1;
 
-        if ($sn !== "")
+        if ($sn !== "") {
             $fj->name = $sn;
-        else if ($pos > 0)
-            $sv->error_at("shortName_$fid", "Missing review field name.");
+        }
+        if ($pos > 0) {
+            if ($sn === "") {
+                $sv->error_at("shortName_$fid", "Missing review field name.");
+            } else if (isset($this->byname[strtolower($sn)])) {
+                $sv->error_at("shortName_$fid", "Cannot reuse review field name “" . htmlspecialchars($sn) . "”.");
+                $sv->error_at("shortName_" . $this->byname[strtolower($sn)], false);
+            } else {
+                $this->byname[strtolower($sn)] = $fid;
+            }
+        }
 
-        if (isset($sv->req["authorView_$fid"]))
-            $fj->visibility = $sv->req["authorView_$fid"];
+        if ($sv->has_reqv("authorView_$fid"))
+            $fj->visibility = $sv->reqv("authorView_$fid");
 
-        if (isset($sv->req["description_$fid"])) {
-            $x = CleanHTML::basic_clean($sv->req["description_$fid"], $err);
+        if ($sv->has_reqv("description_$fid")) {
+            $x = CleanHTML::basic_clean($sv->reqv("description_$fid"), $err);
             if ($x !== false) {
                 $fj->description = trim($x);
                 if ($fj->description === "")
@@ -99,26 +108,26 @@ class ReviewForm_SettingParser extends SettingParser {
 
         if ($f->has_options) {
             $ok = true;
-            if (isset($sv->req["options_$fid"]))
+            if ($sv->has_reqv("options_$fid"))
                 $ok = $this->check_options($sv, $fid, $fj);
             if ((!$ok || count($fj->options) < 2) && $pos > 0) {
-                $sv->error_at("options_$fid", htmlspecialchars($sn) . ": Invalid options.");
+                $sv->error_at("options_$fid", htmlspecialchars($sn) . ": Invalid choices.");
                 if ($this->option_error)
                     $sv->error_at(null, $this->option_error);
                 $this->option_error = false;
             }
-            if (isset($sv->req["option_class_prefix_$fid"])) {
+            if ($sv->has_reqv("option_class_prefix_$fid")) {
                 $prefixes = ["sv", "svr", "sv-blpu", "sv-publ", "sv-viridis", "sv-viridisr"];
-                $pindex = array_search($sv->req["option_class_prefix_$fid"], $prefixes) ? : 0;
-                if (get($sv->req, "option_class_prefix_flipped_$fid"))
+                $pindex = array_search($sv->reqv("option_class_prefix_$fid"), $prefixes) ? : 0;
+                if ($sv->reqv("option_class_prefix_flipped_$fid"))
                     $pindex ^= 1;
                 $fj->option_class_prefix = $prefixes[$pindex];
             }
         }
 
-        if (isset($sv->req["round_list_$fid"])) {
+        if ($sv->reqv("round_list_$fid")) {
             $fj->round_mask = 0;
-            foreach (explode(" ", trim($sv->req["round_list_$fid"])) as $round_name)
+            foreach (explode(" ", trim($sv->reqv("round_list_$fid"))) as $round_name)
                 if ($round_name !== "")
                     $fj->round_mask |= 1 << (int) $sv->conf->round_number($round_name, false);
         }
@@ -134,14 +143,14 @@ class ReviewForm_SettingParser extends SettingParser {
         }
         for ($i = 1; ; ++$i) {
             $fid = sprintf("s%02d", $i);
-            if (isset($sv->req["shortName_$fid"]) || isset($sv->req["order_$fid"]))
+            if ($sv->has_reqv("shortName_$fid") || $sv->has_reqv("order_$fid"))
                 $fs[$fid] = true;
             else if (strcmp($fid, $max_fields["s"]) > 0)
                 break;
         }
         for ($i = 1; ; ++$i) {
             $fid = sprintf("t%02d", $i);
-            if (isset($sv->req["shortName_$fid"]) || isset($sv->req["order_$fid"]))
+            if ($sv->has_reqv("shortName_$fid") || $sv->has_reqv("order_$fid"))
                 $fs[$fid] = true;
             else if (strcmp($fid, $max_fields["t"]) > 0)
                 break;
@@ -151,7 +160,8 @@ class ReviewForm_SettingParser extends SettingParser {
 
     function parse(SettingValues $sv, Si $si) {
         $this->nrfj = (object) array();
-        $this->option_error = "Review fields with options must have at least two choices, numbered sequentially from 1 (higher numbers are better) or lettered with consecutive uppercase letters (lower letters are better). Example: <pre>1. Low quality
+        $this->byname = [];
+        $this->option_error = "Score fields must have at least two choices, numbered sequentially from 1 (higher numbers are better) or lettered with consecutive uppercase letters (lower letters are better). Example: <pre>1. Low quality
 2. Medium quality
 3. High quality</pre>";
 
@@ -159,8 +169,8 @@ class ReviewForm_SettingParser extends SettingParser {
         foreach (self::requested_fields($sv) as $fid => $x) {
             $finfo = ReviewInfo::field_info($fid, $sv->conf);
             if (!$finfo) {
-                if (isset($sv->req["order_$fid"]) && $sv->req["order_$fid"] > 0)
-                    $sv->error_at("shortName_$fid", htmlspecialchars($sv->req["shortName_$fid"]) . ": Too many review fields. You must delete some other fields before adding this one.");
+                if ($sv->has_reqv("order_$fid") && $sv->reqv("order_$fid") > 0)
+                    $sv->error_at("shortName_$fid", "Too many review fields. You must delete some other fields before adding this one.");
                 continue;
             }
             if (isset($rf->fmap[$finfo->id]))
@@ -168,7 +178,7 @@ class ReviewForm_SettingParser extends SettingParser {
             else
                 $f = new ReviewField($finfo, $sv->conf);
             $fj = $f->unparse_json(true);
-            if (isset($sv->req["shortName_$fid"])) {
+            if ($sv->has_reqv("shortName_$fid")) {
                 $this->populate_field($fj, $f, $sv, $fid);
                 $xf = clone $f;
                 $xf->assign($fj);
@@ -281,7 +291,7 @@ class ReviewForm_SettingParser extends SettingParser {
                 && $nf->displayed && $nf->view_score >= VIEWSCORE_AUTHORDEC)
                 $assign_ordinal = true;
             foreach (self::$setting_prefixes as $fx)
-                unset($sv->req[$fx . $nf->short_id]);
+                $sv->unset_req($fx . $nf->short_id);
         }
         $sv->conf->invalidate_caches(["rf" => true]);
         // reset existing review values
@@ -292,7 +302,7 @@ class ReviewForm_SettingParser extends SettingParser {
             $updates = $this->clear_nonexisting_options($clear_options, $sv->conf);
             if (!empty($updates)) {
                 sort($updates);
-                $sv->warning_at(null, "Your changes invalidated some existing review scores.  The invalid scores have been reset to “Unknown”.  The relevant fields were: " . join(", ", $updates) . ".");
+                $sv->warning_at(null, "Your changes invalidated some existing review scores. The invalid scores have been reset to “Unknown”.  The relevant fields were: " . join(", ", $updates) . ".");
             }
         }
         // reset all word counts if author visibility changed
@@ -333,8 +343,8 @@ static function render(SettingValues $sv) {
     if ($sv->use_req())
         foreach (array_keys(ReviewForm_SettingParser::requested_fields($sv)) as $fid) {
             foreach (ReviewForm_SettingParser::$setting_prefixes as $fx)
-                if (isset($sv->req["$fx$fid"]))
-                    $req["$fx$fid"] = $sv->req["$fx$fid"];
+                if ($sv->has_reqv("$fx$fid"))
+                    $req["$fx$fid"] = $sv->reqv("$fx$fid");
         }
 
     Ht::stash_html('<div id="review_form_caption_description" class="hidden">'
@@ -411,9 +421,9 @@ submitted. Add a “<code>No entry</code>” line to make the score optional.</p
     echo Ht::hidden("has_review_form", 1),
         "<div id=\"reviewform_container\"></div>",
         "<div id=\"reviewform_removedcontainer\"></div>",
-        Ht::button("Add score field", ["class" => "btn settings-add-review-field score"]),
-        "<span class='sep'></span>",
-        Ht::button("Add text field", ["class" => "btn settings-add-review-field"]);
+        Ht::button("Add score field", ["class" => "settings-add-review-field score"]),
+        "<span class=\"sep\"></span>",
+        Ht::button("Add text field", ["class" => "settings-add-review-field"]);
     Ht::stash_script('$("button.settings-add-review-field").on("click", function () { review_form_settings.add(hasClass(this,"score")?1:0) })');
 }
 }

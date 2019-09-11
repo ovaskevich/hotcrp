@@ -21,20 +21,17 @@ Prerequisites
 HotCRP runs on Unix, including Mac OS X. It requires the following
 software:
 
-* Nginx, http://nginx.org/ or Apache, http://apache.org/
+* Nginx, http://nginx.org/ \
   (You may be able to use another web server that works with PHP.)
 * PHP version 5.6 or higher, http://php.net/
-  - Including MySQL support
+  - Including MySQL support, php-fpm, php-gmp, and php-intl
 * MySQL version 5 or higher, http://mysql.org/
 * The zip compressor, http://www.info-zip.org/
 * Poppler’s version of pdftohtml, http://poppler.freedesktop.org/ (only
   required for format checking)
 
-Apache is preloaded on most Linux distributions. You may need to install
-additional packages, such as php71, php71-fpm, php71-mysqlnd, zip,
-poppler-utils, and sendmail or postfix. You may need to restart the Apache web
-server after installing these packages (`sudo apachectl graceful` or `sudo
-apache2ctl graceful`). If using nginx, you will need php-fpm.
+You may need to install additional packages, such as php71, php71-fpm,
+php71-intl, php71-mysqlnd, zip, poppler-utils, and sendmail or postfix.
 
 Installation
 ------------
@@ -49,6 +46,11 @@ decide on a name for your database (no spaces allowed).
     The username and password information for the conference database is
 stored in `conf/options.php`, which HotCRP marks as world-unreadable. You must
 ensure that your PHP can read this file.
+
+    If you don’t want to run `lib/createdb.sh`, you will have to create your
+own database and user, initialize the database with the contents of
+`src/schema.sql`, and create `conf/options.php` (use `src/distoptions.php`
+as a guide).
 
 2. Edit `conf/options.php`, which is annotated to guide you.
 (`lib/createdb.sh` creates this file based on `src/distoptions.php`.)
@@ -72,37 +74,6 @@ point at a HotCRP installation in /home/kohler/hotcrp (assuming
 
     You may also set up separate `location` blocks so that Nginx
 serves files under `images/`, `scripts/`, and `stylesheets/` directly.
-
-    **Apache**: Generally you must add a `<Directory>` to `httpd.conf`
-(or one of its inclusions) for the HotCRP directory, and an `Alias`
-redirecting your preferred URL path to that directory. This example
-makes `/testconf` point at a HotCRP installation in
-/home/kohler/hotcrp:
-
-        # Apache 2.2 and earlier:
-        <Directory "/home/kohler/hotcrp">
-            Options Indexes Includes FollowSymLinks
-            AllowOverride all
-            Order allow,deny
-            Allow from all
-        </Directory>
-        Alias /testconf /home/kohler/hotcrp
-        
-        # Apache 2.4 and later:
-        <Directory "/home/kohler/hotcrp">
-            Options Indexes Includes FollowSymLinks
-            AllowOverride all
-            Require all granted
-        </Directory>
-        Alias /testconf /home/kohler/hotcrp
-
-    Note that the first argument to Alias should NOT end in a slash.
-The `AllowOverride all` directive is required.
-
-    Everything under HotCRP’s URL path (here, `/testconf`) should be
-served by HotCRP. This normally happens automatically. However, if
-the URL path is `/`, you may need to turn off your server’s default
-handlers for subdirectories such as `/doc`.
 
 4. Update PHP settings.
 
@@ -157,14 +128,11 @@ You can set up everything else through the web site itself.
 
   - Uploaded papers and reviews are limited in size by several PHP
     configuration variables, set by default to 15 megabytes in the HotCRP
-    directory’s `.htaccess` (or `.user.ini` if you are using php-fpm).
+    directory’s `.user.ini` (or `.htaccess` if using Apache).
 
   - HotCRP PHP scripts can take a lot of memory, particularly if they're
-    doing things like generating MIME-encoded mail messages.  By default
+    doing things like generating MIME-encoded mail messages. By default
     HotCRP sets the PHP memory limit to 128MB.
-
-  - HotCRP benefits from Apache’s `mod_expires` and `mod_rewrite`
-    modules; consider enabling them.
 
   - Most HotCRP settings are assigned in the conference database’s
     Settings table. The Settings table can also override values in
@@ -196,56 +164,6 @@ preserving `conf/options.php`. For instance, using GNU tar:
     % cd HOTCRPINSTALLATION
     % tar --strip=1 -xf ~/hotcrp-NEWVERSION.tar.gz
 
-Multiconference support
------------------------
-
-HotCRP can run multiple conferences from a single installation. The
-last directory component of the URL will define the conference ID.
-For instance:
-
-    http://read.seas.harvard.edu/conferences/testconf/doc/testconf-paper1.pdf
-                                             ^^^^^^^^
-                                           conference ID
-
-The conference ID can only contain characters in `[-_.A-Za-z0-9]`, and
-it must not start with a period. HotCRP will check for funny
-conference IDs and replace them with `__invalid__`.
-
-To turn on multiconference support:
-
-1. Set your Web server to use the HotCRP install directory for all relevant
-   URLs. For Apache, this may require an `Alias` directive per conference.
-
-2. Set `$Opt["multiconference"]` to true in `conf/options.php`. This will set
-   the conference ID to the last directory component as described above.
-   Alternately, set `$Opt["multiconferenceAnalyzer"]` to a regular expression,
-   a space, and a replacement pattern. HotCRP matches the full input URL to
-   the regex, then uses the replacement pattern as the conference ID. For
-   example, this setting will use "conf_CONFNAME" as the conference ID for a
-   URL like "http://CONFNAME.crap.com/":
-
-        $Opt["multiconferenceAnalyzer"] = '\w+://([^./]+)\.crap\.com\.?/ conf_$1';
-
-3. Set HotCRP options to locate the options relevant for each conference. The
-   best mechanism is to use `$Opt["include"]` to include a conference-specific
-   options file. For example (note the single quotes):
-
-        $Opt["include"] = 'conf/options-${confid}.php';
-
-    The `${confid}` substring is replaced with the conference ID. HotCRP will
-refuse to proceed if the conference-specific options file doesn’t exist. To
-ignore nonexistent options files, use wildcards:
-
-        $Opt["include"] = 'conf/[o]ptions-${confid}.php';
-
-    `${confid}` replacement is also performed on these $Opt settings: dbName,
-dbUser, dbPassword, sessionName, downloadPrefix, conferenceSite, paperSite,
-defaultPaperSite, contactName, contactEmail, emailFrom, emailSender, emailCc,
-emailReplyTo, and docstore.
-
-4. Each conference needs its own database. Create one using the
-   `lib/createdb.sh` script (the `-c CONFIGFILE` option will be useful).
-
 License
 -------
 
@@ -255,7 +173,7 @@ LICENSE file for full license terms.
 Authors
 -------
 
-Eddie Kohler, Harvard/UCLA
+Eddie Kohler, Harvard
 
 * HotCRP is based on CRP, which was written by Dirk Grunwald,
   University of Colorado

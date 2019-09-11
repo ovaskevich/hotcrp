@@ -1,6 +1,6 @@
 <?php
 // pc_topics.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Topics_PaperColumn extends PaperColumn {
     private $interest_contact;
@@ -26,24 +26,7 @@ class Topics_PaperColumn extends PaperColumn {
         return !isset($row->topicIds) || $row->topicIds == "";
     }
     function content(PaperList $pl, PaperInfo $row) {
-        if (!($tmap = $row->named_topic_map()))
-            return "";
-        $out = $interests = [];
-        if ($this->interest_contact)
-            $interests = $this->interest_contact->topic_interest_map();
-        $sep = rtrim($row->conf->topic_separator()) . '</span> ';
-        foreach ($tmap as $tid => $tname) {
-            if (!empty($out))
-                $out[] = $sep;
-            $t = '<span class="topicsp';
-            if (($i = get($interests, $tid)))
-                $t .= ' topic' . $i;
-            if (strlen($tname) <= 50)
-                $t .= ' nw';
-            $out[] = $t . '">' . htmlspecialchars($tname);
-        }
-        $out[] = '</span>';
-        return join("", $out);
+        return $pl->conf->topic_set()->unparse_list_html($row->topic_list(), $this->interest_contact ? $this->interest_contact->topic_interest_map() : null);
     }
     function text(PaperList $pl, PaperInfo $row) {
         return $row->unparse_topics_text();

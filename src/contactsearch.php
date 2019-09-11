@@ -1,6 +1,6 @@
 <?php
 // papersearch.php -- HotCRP helper class for searching for users
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ContactSearch {
     const F_QUOTED = 1;
@@ -32,7 +32,7 @@ class ContactSearch {
         if ($this->ids === false
             && ($this->type & self::F_TAG)
             && !($this->type & self::F_QUOTED)
-            && $this->user->can_view_contact_tags()) {
+            && $this->user->can_view_user_tags()) {
             $this->ids = $this->check_pc_tag();
         }
         if ($this->ids === false
@@ -52,25 +52,30 @@ class ContactSearch {
     private function check_simple() {
         if (strcasecmp($this->text, "me") == 0
             && (!($this->type & self::F_PC)
-                || ($this->user->roles & Contact::ROLE_PC))) {
+                || ($this->user->roles & Contact::ROLE_PCLIKE))) {
             return [$this->user->contactId];
         }
         if ($this->user->can_view_pc()) {
             if ($this->text === ""
-                || strcasecmp($this->text, "pc") == 0) {
+                || strcasecmp($this->text, "pc") === 0) {
                 return array_keys($this->conf->pc_members());
             } else if (($this->type & self::F_PC)
-                       && (strcasecmp($this->text, "any") == 0
-                           || strcasecmp($this->text, "all") == 0)
+                       && (strcasecmp($this->text, "any") === 0
+                           || strcasecmp($this->text, "all") === 0)
                            || $this->text === "*") {
                 return array_keys($this->conf->pc_members_and_admins());
-            } else if (strcasecmp($this->text, "chair") == 0) {
-                $chairs = [];
-                foreach ($this->conf->pc_members() as $p) {
-                    if ($p->roles & Contact::ROLE_CHAIR)
-                        $chairs[] = $p->contactId;
+            } else if (strcasecmp($this->text, "chair") === 0
+                       || strcasecmp($this->text, "admin") === 0) {
+                $flags = Contact::ROLE_CHAIR;
+                if (strcasecmp($this->text, "admin") === 0) {
+                    $flags |= Contact::ROLE_ADMIN;
                 }
-                return $chairs;
+                $cids = [];
+                foreach ($this->conf->pc_members() as $p) {
+                    if ($p->roles & $flags)
+                        $cids[] = $p->contactId;
+                }
+                return $cids;
             }
         }
         return false;
@@ -87,7 +92,8 @@ class ContactSearch {
             $x = substr($x, 1);
         }
 
-        if ($this->conf->pc_tag_exists($x)) {
+        if ($this->conf->pc_tag_exists($x)
+            && $this->user->can_view_user_tag($x)) {
             $a = array();
             foreach ($this->conf->pc_members() as $cid => $pc) {
                 if ($pc->has_tag($x))
@@ -102,7 +108,7 @@ class ContactSearch {
                 return Dbl::fetch_first_columns($result);
             }
         } else if ($need) {
-            $this->warn_html = "No such PC tag “" . htmlspecialchars($this->text) . "”.";
+            $this->warn_html = "No users are tagged “" . htmlspecialchars($this->text) . "”.";
             return array();
         } else
             return false;
@@ -208,7 +214,7 @@ class ContactSearch {
                 } else if ($Me->contactId == $cid && $Me->conf === $this->conf) {
                     $this->contacts[] = $Me;
                 } else {
-                    $this->contacts[] = $this->conf->user_by_id($cid);
+                    $this->contacts[] = $this->conf->cached_user_by_id($cid);
                 }
             }
         }

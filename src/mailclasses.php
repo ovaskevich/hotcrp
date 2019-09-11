@@ -1,6 +1,6 @@
 <?php
 // mailclasses.php -- HotCRP mail tool
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class MailRecipients {
     private $conf;
@@ -118,8 +118,8 @@ class MailRecipients {
         $this->defsel("pc_group", "Program committee", self::F_GROUP);
         $selcount = count($this->sel);
         $this->defsel("pc", "Program committee", self::F_ANYPC | self::F_NOPAPERS);
-        foreach ($this->conf->pc_tags() as $t)
-            if ($t != "pc")
+        foreach ($this->contact->viewable_user_tags() as $t)
+            if ($t !== "pc")
                 $this->defsel("pc:$t", "#$t program committee", self::F_ANYPC | self::F_NOPAPERS);
         if (count($this->sel) == $selcount + 1)
             unset($this->sel["pc_group"]);
@@ -240,8 +240,13 @@ class MailRecipients {
 
         // additional manager limit
         if (!$this->contact->privChair
-            && !($this->selflags[$this->type] & self::F_ANYPC))
-            $where[] = "Paper.managerContactId=" . $this->contact->contactId;
+            && !($this->selflags[$this->type] & self::F_ANYPC)) {
+            if ($this->conf->check_any_admin_tracks($this->contact)) {
+                $ps = new PaperSearch($this->contact, ["q" => "", "t" => "admin"]);
+                $where[] = "Paper.paperId" . sql_in_numeric_set($ps->paper_ids());
+            } else
+                $where[] = "Paper.managerContactId=" . $this->contact->contactId;
+        }
 
         // reviewer limit
         if (!preg_match('_\A(new|unc|c|allc|)(pc|ext|myext|)rev\z_',
@@ -285,28 +290,34 @@ class MailRecipients {
         // reviewer match
         if ($revmatch) {
             // Submission status
-            if ($revmatch[1] == "c")
+            if ($revmatch[1] == "c") {
                 $where[] = "PaperReview.reviewSubmitted>0";
-            else if ($revmatch[1] == "unc" || $revmatch[1] == "new")
+            } else if ($revmatch[1] == "unc" || $revmatch[1] == "new") {
                 $where[] = "PaperReview.reviewSubmitted is null and PaperReview.reviewNeedsSubmit!=0 and Paper.timeSubmitted>0";
-            if ($revmatch[1] == "new")
+            }
+            if ($revmatch[1] == "new") {
                 $where[] = "PaperReview.timeRequested>PaperReview.timeRequestNotified";
+            }
             if ($revmatch[1] == "allc") {
                 $joins[] = "left join (select contactId, max(if(reviewNeedsSubmit!=0 and timeSubmitted>0,1,0)) anyReviewNeedsSubmit from PaperReview join Paper on (Paper.paperId=PaperReview.paperId) group by contactId) AllReviews on (AllReviews.contactId=ContactInfo.contactId)";
                 $where[] = "AllReviews.anyReviewNeedsSubmit=0";
             }
-            if ($this->newrev_since)
+            if ($this->newrev_since) {
                 $where[] = "PaperReview.timeRequested>=$this->newrev_since";
+            }
             // Withdrawn papers may not count
-            if ($revmatch[1] == "")
+            if ($revmatch[1] == "") {
                 $where[] = "(Paper.timeSubmitted>0 or PaperReview.reviewSubmitted>0)";
+            }
             // Review type
-            if ($revmatch[2] == "ext" || $revmatch[2] == "myext")
+            if ($revmatch[2] == "myext") {
                 $where[] = "PaperReview.reviewType=" . REVIEW_EXTERNAL;
-            else if ($revmatch[2] == "pc")
-                $where[] = "PaperReview.reviewType>" . REVIEW_EXTERNAL;
-            if ($revmatch[2] == "myext")
                 $where[] = "PaperReview.requestedBy=" . $this->contact->contactId;
+            } else if ($revmatch[2] == "ext") {
+                $where[] = "PaperReview.reviewType=" . REVIEW_EXTERNAL;
+            } else if ($revmatch[2] == "pc") {
+                $where[] = "PaperReview.reviewType>" . REVIEW_EXTERNAL;
+            }
         }
 
         // query construction

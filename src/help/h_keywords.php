@@ -1,6 +1,6 @@
 <?php
 // src/help/h_keywords.php -- HotCRP help functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Keywords_HelpTopic {
     static function render($hth) {
@@ -8,20 +8,20 @@ class Keywords_HelpTopic {
         if ($hth->conf->subBlindNever())
             $aunote = "";
         else if (!$hth->conf->subBlindAlways())
-            $aunote = "<br /><span class='hint'>Search uses fields visible to the searcher. For example, PC member searches do not examine anonymous authors.</span>";
+            $aunote = "<br /><span class=\"hint\">Search uses fields visible to the searcher. For example, PC member searches do not examine anonymous authors.</span>";
         else
-            $aunote = "<br /><span class='hint'>Search uses fields visible to the searcher. For example, PC member searches do not examine authors.</span>";
+            $aunote = "<br /><span class=\"hint\">Search uses fields visible to the searcher. For example, PC member searches do not examine authors.</span>";
 
         // does a reviewer tag exist?
         $retag = meaningful_pc_tag($hth->user) ? : "";
 
         echo $hth->table(true);
         echo $hth->tgroup("Basics");
-        echo $hth->search_trow("", "all papers in the search category");
+        echo $hth->search_trow("", "all submissions in the search category");
         echo $hth->search_trow("story", "“story” in title, abstract, authors$aunote");
-        echo $hth->search_trow("119", "paper #119");
-        echo $hth->search_trow("1 2 5 12-24 kernel", "papers in the numbered set with “kernel” in title, abstract, authors");
-        echo $hth->search_trow("\"802\"", "“802” in title, abstract, authors (not paper #802)");
+        echo $hth->search_trow("119", "submission #119");
+        echo $hth->search_trow("1 2 5 12-24 kernel", "submissions in the numbered set with “kernel” in title, abstract, authors");
+        echo $hth->search_trow("\"802\"", "“802” in title, abstract, authors (not submission #802)");
         echo $hth->search_trow("very new", "“very” <em>and</em> “new” in title, abstract, authors");
         echo $hth->search_trow("very AND new", "the same");
         echo $hth->search_trow("\"very new\"", "the phrase “very new” in title, abstract, authors");
@@ -45,37 +45,46 @@ class Keywords_HelpTopic {
         echo $hth->tgroup("Topics");
         echo $hth->search_trow("topic:link", "selected topics match “link”");
 
-        $oex = array();
-        foreach ($hth->conf->paper_opts->option_list() as $o)
-            $oex = array_merge($oex, $o->example_searches());
+        $opts = array_filter($hth->conf->paper_opts->option_list(), function ($o) { return $o->form_position() !== false; });
+        usort($opts, function ($a, $b) {
+            if ($a->final !== $b->final)
+                return $a->final ? 1 : -1;
+            else
+                return PaperOption::compare($a, $b);
+        });
+
+        $oex = [];
+        foreach ($opts as $o)
+            $oex = array_merge($o->example_searches(), $oex);
+
         if (!empty($oex)) {
             echo $hth->tgroup("Submission fields");
             foreach ($oex as $extype => $oex) {
                 if ($extype === "has") {
-                    $desc = "paper has “" . htmlspecialchars($oex[1]->title) . "” submission field";
+                    $desc = "submission has “" . $oex[1]->title_html() . "” set";
                     $oabbr = array();
-                    foreach ($hth->conf->paper_opts->option_list() as $ox)
-                        if ($ox !== $oex[1])
+                    foreach ($opts as $ox)
+                        if ($ox !== $oex[1] && get($ox->example_searches(), "has"))
                             $oabbr[] = "“has:" . htmlspecialchars($ox->search_keyword()) . "”";
-                    if (count($oabbr))
-                        $desc .= '<div class="hint">Other field ' . pluralx(count($oabbr), "search") . ': ' . commajoin($oabbr) . '</div>';
+                    if (!empty($oabbr))
+                        $desc .= '<div class="hint">Other field ' . pluralx(count($oabbr), "search") . ': ' . join(", ", $oabbr) . '</div>';
                 } else if ($extype === "yes")
-                    $desc = "same meaning; abbreviations also accepted";
+                    $desc = "submission has “" . $oex[1]->title_html() . "” set";
                 else if ($extype === "numeric")
-                    $desc = "paper’s “" . htmlspecialchars($oex[1]->title) . "” field has value &gt; 100";
+                    $desc = "submission’s “" . $oex[1]->title_html() . "” field has value &gt; 100";
                 else if ($extype === "selector")
-                    $desc = "paper’s “" . htmlspecialchars($oex[1]->title) . "” field has value “" . htmlspecialchars($oex[1]->example_selector_option()) . "”";
+                    $desc = "submission’s “" . $oex[1]->title_html() . "” field has value “" . htmlspecialchars($oex[2]) . "”";
                 else if ($extype === "attachment-count")
-                    $desc = "paper has more than 2 “" . htmlspecialchars($oex[1]->title) . "” attachments";
+                    $desc = "submission has more than 2 “" . $oex[1]->title_html() . "” attachments";
                 else if ($extype === "attachment-filename")
-                    $desc = "paper has an “" . htmlspecialchars($oex[1]->title) . "” attachment with a .gif extension";
+                    $desc = "submission has an “" . $oex[1]->title_html() . "” attachment with a .gif extension";
                 else
                     continue;
                 echo $hth->search_trow($oex[0], $desc);
             }
         }
 
-        echo $hth->tgroup("<a href=\"" . hoturl("help", "t=tags") . "\">Tags</a>");
+        echo $hth->tgroup($hth->help_link("Tags", "tags"));
         echo $hth->search_trow("#discuss", "tagged “discuss” (“tag:discuss” also works)");
         echo $hth->search_trow("-#discuss", "not tagged “discuss”");
         echo $hth->search_trow("order:discuss", "tagged “discuss”, sort by tag order (“rorder:” for reverse order)");
@@ -139,20 +148,20 @@ class Keywords_HelpTopic {
         echo $hth->tgroup("Shepherds");
         echo $hth->search_trow("shep:fdabek", "“fdabek” (in name/email) is shepherd (“none” and “any” also work)");
         echo $hth->tgroup("Conflicts");
-        echo $hth->search_trow("conflict:me", "you have a conflict with the paper");
-        echo $hth->search_trow("conflict:fdabek", "“fdabek” (in name/email) has a conflict with the paper<br /><span class='hint'>This search is only available to chairs and to PC members who can see the paper’s author list.</span>");
-        echo $hth->search_trow("conflict:pc", "some PC member has a conflict with the paper");
-        echo $hth->search_trow("conflict:pc>2", "at least three PC members have conflicts with the paper");
-        echo $hth->search_trow("reconflict:\"1 2 3\"", "a reviewer of paper 1, 2, or 3 has a conflict with the paper");
+        echo $hth->search_trow("conflict:me", "you have a conflict with the submission");
+        echo $hth->search_trow("conflict:fdabek", "“fdabek” (in name/email) has a conflict with the submission<br /><span class=\"hint\">This search is only available to chairs and to PC members who can see the submission’s author list.</span>");
+        echo $hth->search_trow("conflict:pc", "some PC member has a conflict with the submission");
+        echo $hth->search_trow("conflict:pc>2", "at least three PC members have conflicts with the submission");
+        echo $hth->search_trow("reconflict:\"1 2 3\"", "a reviewer of submission 1, 2, or 3 has a conflict with the submission");
         echo $hth->tgroup("Preferences");
         echo $hth->search_trow("pref:3", "you have preference 3");
         echo $hth->search_trow("pref:pc:X", "a PC member’s preference has expertise “X” (expert)");
         echo $hth->search_trow("pref:fdabek>0", "“fdabek” (in name/email) has preference &gt;&nbsp;0<br /><span class=\"hint\">Administrators can search preferences by name; PC members can only search preferences for the PC as a whole.</span>");
         echo $hth->tgroup("Status");
-        echo $hth->search_trow(["q" => "status:sub", "t" => "all"], "paper is submitted for review");
-        echo $hth->search_trow(["q" => "status:unsub", "t" => "all"], "paper is neither submitted nor withdrawn");
-        echo $hth->search_trow(["q" => "status:withdrawn", "t" => "all"], "paper has been withdrawn");
-        echo $hth->search_trow("has:final", "final copy uploaded");
+        echo $hth->search_trow(["q" => "status:ready", "t" => "all"], "submission is ready for review");
+        echo $hth->search_trow(["q" => "status:incomplete", "t" => "all"], "submission is incomplete (neither ready nor withdrawn)");
+        echo $hth->search_trow(["q" => "status:withdrawn", "t" => "all"], "submission has been withdrawn");
+        echo $hth->search_trow("has:final", "final version uploaded");
 
         foreach ($hth->conf->decision_map() as $dnum => $dname)
             if ($dnum)
@@ -168,9 +177,10 @@ class Keywords_HelpTopic {
         echo $hth->search_trow("dec:none", "decision unspecified");
 
         // find names of review fields to demonstrate syntax
-        $farr = array(array(), array());
-        foreach ($hth->conf->all_review_fields() as $f)
+        $farr = [[], []];
+        foreach ($hth->conf->review_form()->user_visible_fields($hth->user) as $f) {
             $farr[$f->has_options ? 0 : 1][] = $f;
+        }
         if (!empty($farr[0]) || !empty($farr[1]))
             echo $hth->tgroup("Review fields");
         if (count($farr[0])) {
@@ -222,10 +232,10 @@ class Keywords_HelpTopic {
 
         if (count($farr[0])) {
             $r = $farr[0][0];
-            echo $hth->tgroup("<a href=\"" . hoturl("help", "t=formulas") . "\">Formulas</a>");
+            echo $hth->tgroup($hth->help_link("Formulas", "formulas"));
             echo $hth->search_trow("formula:all({$r->search_keyword()}={$r->typical_score()})",
-                "all reviews have $r->name_html score {$r->typical_score()}<br />"
-                . "<span class='hint'><a href=\"" . hoturl("help", "t=formulas") . "\">Formulas</a> can express complex numerical queries across review scores and preferences.</span>");
+                "all reviews have $r->name_html score {$r->typical_score()}<br />",
+                "<span class=\"hint\">", $hth->help_link("Formulas", "formulas"), " can express complex numerical queries across review scores and preferences.</span>");
             echo $hth->search_trow("f:all({$r->search_keyword()}={$r->typical_score()})", "“f” is shorthand for “formula”");
             echo $hth->search_trow("formula:var({$r->search_keyword()})>0.5", "variance in {$r->search_keyword()} is above 0.5");
             echo $hth->search_trow("formula:any({$r->search_keyword()}={$r->typical_score()} && pref<0)", "at least one reviewer had $r->name_html score {$r->typical_score()} and review preference &lt; 0");
@@ -236,15 +246,15 @@ class Keywords_HelpTopic {
         echo $hth->search_trow("hide:title", "hide title in the results");
         if (count($farr[0])) {
             $r = $farr[0][0];
-            echo $hth->search_trow("show:max({$r->search_keyword()})", "show a <a href=\"" . hoturl("help", "t=formulas") . "\">formula</a>");
+            echo $hth->search_trow("show:max({$r->search_keyword()})", "show a " . $hth->help_link("formula", "formulas"));
             echo $hth->search_trow("sort:{$r->search_keyword()}", "sort by score");
             echo $hth->search_trow("sort:\"{$r->search_keyword()} variance\"", "sort by score variance");
         }
         echo $hth->search_trow("sort:-status", "sort by reverse status");
         echo $hth->search_trow("edit:#discuss", "edit the values for tag “#discuss”");
-        echo $hth->search_trow("search1 THEN search2", "like “search1 OR search2”, but papers matching “search1” are grouped together and appear earlier in the sorting order");
+        echo $hth->search_trow("search1 THEN search2", "like “search1 OR search2”, but submissions matching “search1” are grouped together and appear earlier in the sorting order");
         echo $hth->search_trow("1-5 THEN 6-10 show:compact", "display searches in compact columns");
-        echo $hth->search_trow("search1 HIGHLIGHT search2", "search for “search1”, but <span class=\"taghh highlightmark\">highlight</span> papers in that list that match “search2” (also try HIGHLIGHT:pink, HIGHLIGHT:green, HIGHLIGHT:blue)");
+        echo $hth->search_trow("search1 HIGHLIGHT search2", "search for “search1”, but <span class=\"taghh highlightmark\">highlight</span> submissions in that list that match “search2” (also try HIGHLIGHT:pink, HIGHLIGHT:green, HIGHLIGHT:blue)");
 
         echo $hth->end_table();
     }

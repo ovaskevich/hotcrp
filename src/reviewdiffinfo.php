@@ -1,6 +1,6 @@
 <?php
 // reviewdiffinfo.php -- HotCRP class representing review diffs
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ReviewDiffInfo {
     public $conf;
@@ -8,7 +8,7 @@ class ReviewDiffInfo {
     public $rrow;
     private $fields = [];
     private $newv = [];
-    public $view_score = VIEWSCORE_FALSE;
+    public $view_score = VIEWSCORE_EMPTY;
     public $notify = false;
     public $notify_author = false;
     static private $use_xdiff = null;
@@ -27,7 +27,6 @@ class ReviewDiffInfo {
     function add_view_score($view_score) {
         if ($view_score > $this->view_score) {
             if ($view_score === VIEWSCORE_AUTHORDEC
-                && $this->prow->outcome != 0
                 && $this->prow->can_author_view_decision()) {
                 $view_score = VIEWSCORE_AUTHOR;
             }
@@ -35,7 +34,7 @@ class ReviewDiffInfo {
         }
     }
     function nonempty() {
-        return $this->view_score > VIEWSCORE_FALSE;
+        return $this->view_score > VIEWSCORE_EMPTY;
     }
     function fields() {
         return $this->fields;

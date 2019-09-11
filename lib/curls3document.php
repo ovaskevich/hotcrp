@@ -1,6 +1,6 @@
 <?php
 // curls3document.php -- S3 access using curl functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class CurlS3Document extends S3Result {
     public $s3;
@@ -12,12 +12,15 @@ class CurlS3Document extends S3Result {
     public $runindex;
     private $method;
     private $args;
+    private $tries;
+    private $start;
+    private $first_start;
 
     function __construct(S3Document $s3, $skey, $method, $args, $dstream) {
         $this->s3 = $s3;
         $this->curlh = curl_init();
-        curl_setopt($this->curlh, CURLOPT_CONNECTTIMEOUT, 5);
-        curl_setopt($this->curlh, CURLOPT_TIMEOUT, 15);
+        curl_setopt($this->curlh, CURLOPT_CONNECTTIMEOUT, 3);
+        curl_setopt($this->curlh, CURLOPT_TIMEOUT, 6);
         $this->hstream = fopen("php://memory", "w+b");
         curl_setopt($this->curlh, CURLOPT_WRITEHEADER, $this->hstream);
         $this->dstream = $dstream;
@@ -32,8 +35,9 @@ class CurlS3Document extends S3Result {
         $this->clear_result();
         if (++$this->runindex > 1) {
             curl_setopt($this->curlh, CURLOPT_FRESH_CONNECT, true);
-            curl_setopt($this->curlh, CURLOPT_CONNECTTIMEOUT, 10);
-            curl_setopt($this->curlh, CURLOPT_TIMEOUT, 30);
+            $tf = $this->runindex > 2 ? 2 : 1;
+            curl_setopt($this->curlh, CURLOPT_CONNECTTIMEOUT, 6 * $tf);
+            curl_setopt($this->curlh, CURLOPT_TIMEOUT, 15 * $tf);
             rewind($this->hstream);
             ftruncate($this->hstream, 0);
             rewind($this->dstream);
@@ -44,6 +48,9 @@ class CurlS3Document extends S3Result {
         curl_setopt($this->curlh, CURLOPT_CUSTOMREQUEST, $hdr["method"]);
         curl_setopt($this->curlh, CURLOPT_POSTFIELDS, $hdr["content"]);
         curl_setopt($this->curlh, CURLOPT_HTTPHEADER, $hdr["header"]);
+        $this->start = microtime(true);
+        if ($this->first_start === null)
+            $this->first_start = $this->start;
     }
 
     function exec() {
@@ -56,19 +63,24 @@ class CurlS3Document extends S3Result {
         $hstr = preg_replace('/(?:\r\n?|\n)[ \t]+/s', " ", $hstr);
         $this->parse_response_lines(preg_split('/\r\n?|\n/', $hstr));
         $this->status = curl_getinfo($this->curlh, CURLINFO_RESPONSE_CODE);
-        if (($this->status === null || $this->status === 500)
-            && (S3Document::$retry_timeout_allowance <= 0 || $this->runindex >= 5)) {
-            trigger_error("S3 error: $this->method $this->skey: failed", E_USER_WARNING);
-            $this->status = false;
+        if ($this->status === 0)
+            $this->status = null;
+        if ($this->status === null || $this->status === 500) {
+            $now = microtime(true);
+            $this->tries[] = [$this->runindex, round(($now - $this->start) * 1000) / 1000, round(($now - $this->first_start) * 1000) / 1000, $this->status, curl_errno($this->curlh)];
+            if (S3Document::$retry_timeout_allowance <= 0 || $this->runindex >= 5) {
+                trigger_error("S3 error: $this->method $this->skey: curl failed " . json_encode($this->tries), E_USER_WARNING);
+                $this->status = false;
+            }
         }
+        return $this->status !== null && $this->status !== 500;
     }
 
     function run() {
         while (true) {
             $this->prepare();
             $this->exec();
-            $this->parse_result();
-            if ($this->status !== null && $this->status !== 500)
+            if ($this->parse_result())
                 return;
             $timeout = 0.005 * (1 << $this->runindex);
             S3Document::$retry_timeout_allowance -= $timeout;

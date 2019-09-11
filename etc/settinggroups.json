@@ -62,8 +62,11 @@
         "render_callback": "Decisions_SettingParser::render"
     },
     {
-        "name": "decisions/final-versions", "position": 100,
-        "title": "Final versions",
+        "name": "decisions/final-versions-title", "position": 100,
+        "title": "Final versions"
+    },
+    {
+        "name": "decisions/final-versions", "position": 105,
         "render_callback": "FinalVersions_SettingParser::render",
         "crosscheck_callback": "FinalVersions_SettingParser::crosscheck"
     },
@@ -151,6 +154,10 @@
         "render_option_property_callback": "Options_SettingRenderer::render_presence_property"
     },
     {
+        "name": "options/properties/required", "position": 31,
+        "render_option_property_callback": "Options_SettingRenderer::render_required_property"
+    },
+    {
         "name": "options/properties/visibility", "position": 40,
         "render_option_property_callback": "Options_SettingRenderer::render_visibility_property"
     },
@@ -204,8 +211,7 @@
     },
     {
         "name": "tracks/permissions/viewrev", "position": 30,
-        "render_track_permission_callback": "Tracks_SettingRenderer::render_viewrev_permission",
-        "default_unfolded": true
+        "render_track_permission_callback": "Tracks_SettingRenderer::render_viewrev_permission"
     },
     {
         "name": "users", "position": 100,

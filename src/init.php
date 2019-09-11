@@ -1,6 +1,6 @@
 <?php
 // init.php -- HotCRP initialization (test or site)
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 define("HOTCRP_VERSION", "2.102");
 
@@ -10,14 +10,16 @@ define("REVIEW_PRIMARY", 4);
 define("REVIEW_SECONDARY", 3);
 define("REVIEW_PC", 2);
 define("REVIEW_EXTERNAL", 1);
+define("REVIEW_REQUEST", -1);
+define("REVIEW_REFUSAL", -2);
 
 define("CONFLICT_NONE", 0);
 define("CONFLICT_PCMARK", 1); /* unused */
 define("CONFLICT_AUTHORMARK", 2);
 define("CONFLICT_MAXAUTHORMARK", 7);
 define("CONFLICT_CHAIRMARK", 8);
-define("CONFLICT_AUTHOR", 9);
-define("CONFLICT_CONTACTAUTHOR", 10);
+define("CONFLICT_AUTHOR", 64);
+define("CONFLICT_CONTACTAUTHOR", 65);
 
 define("REV_RATINGS_PC", 0);
 define("REV_RATINGS_PC_EXTERNAL", 1);
@@ -27,26 +29,27 @@ define("DTYPE_SUBMISSION", 0);
 define("DTYPE_FINAL", -1);
 define("DTYPE_COMMENT", -2);
 
-define("VIEWSCORE_FALSE", -3);
+define("VIEWSCORE_EMPTY", -3);         // score no one can see
 define("VIEWSCORE_ADMINONLY", -2);
 define("VIEWSCORE_REVIEWERONLY", -1);
 define("VIEWSCORE_PC", 0);
 define("VIEWSCORE_AUTHORDEC", 1);
 define("VIEWSCORE_AUTHOR", 2);
-define("VIEWSCORE_MAX", 3);
+define("VIEWSCORE_EMPTYBOUND", 3);     // bound that can see nothing
 
 define("COMMENTTYPE_DRAFT", 1);
 define("COMMENTTYPE_BLIND", 2);
 define("COMMENTTYPE_RESPONSE", 4);
 define("COMMENTTYPE_BYAUTHOR", 8);
 define("COMMENTTYPE_BYSHEPHERD", 16);
+define("COMMENTTYPE_HASDOC", 32);
 define("COMMENTTYPE_ADMINONLY", 0x00000);
 define("COMMENTTYPE_PCONLY", 0x10000);
 define("COMMENTTYPE_REVIEWER", 0x20000);
 define("COMMENTTYPE_AUTHOR", 0x30000);
 define("COMMENTTYPE_VISIBILITY", 0xFFF0000);
 
-define("TAG_REGEX_NOTWIDDLE", '[a-zA-Z@*_:.][-a-zA-Z0-9!@*_:.\/]*');
+define("TAG_REGEX_NOTWIDDLE", '[a-zA-Z@*_:.][-+a-zA-Z0-9!@*_:.\/]*');
 define("TAG_REGEX", '~?~?' . TAG_REGEX_NOTWIDDLE);
 define("TAG_MAXLEN", 80);
 define("TAG_INDEXBOUND", 2147483646);
@@ -79,23 +82,26 @@ class SiteLoader {
     static $map = [
         "AbbreviationClass" => "lib/abbreviationmatcher.php",
         "AssignmentCountSet" => "src/assignmentset.php",
+        "AssignmentParser" => "src/assignmentset.php",
         "AutoassignerCosts" => "src/autoassigner.php",
         "BanalSettings" => "src/settings/s_subform.php",
         "CapabilityManager" => "src/capability.php",
+        "Collator" => "lib/collatorshim.php",
         "ContactCountMatcher" => "src/papersearch.php",
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
+        "FeatureRender" => "src/paperoption.php", // XXX
+        "FieldRender" => "src/paperoption.php",
         "FormatChecker" => "src/formatspec.php",
+        "HashAnalysis" => "lib/filer.php",
         "JsonSerializable" => "lib/json.php",
         "LoginHelper" => "lib/login.php",
         "MailPreparation" => "lib/mailer.php",
         "MimeText" => "lib/mailer.php",
         "NameInfo" => "lib/text.php",
         "NumericOrderPaperColumn" => "src/papercolumn.php",
-        "Option_SearchTerm" => "src/search/st_option.php",
         "PaperInfoSet" => "src/paperinfo.php",
         "PaperOptionList" => "src/paperoption.php",
-        "Review_Assigner" => "src/assignmentset.php",
         "ReviewField" => "src/review.php",
         "ReviewFieldInfo" => "src/review.php",
         "ReviewForm" => "src/review.php",
@@ -103,6 +109,8 @@ class SiteLoader {
         "ReviewValues" => "src/review.php",
         "SearchSplitter" => "src/papersearch.php",
         "SearchTerm" => "src/papersearch.php",
+        "SearchWord" => "src/papersearch.php",
+        "SettingParser" => "src/settingvalues.php",
         "TagAnno" => "lib/tagger.php",
         "TagInfo" => "lib/tagger.php",
         "TagMap" => "lib/tagger.php",
@@ -112,11 +120,13 @@ class SiteLoader {
 
     static $suffix_map = [
         "_api.php" => ["api_", "api"],
+        "_assigner.php" => ["a_", "assigners"],
         "_assignmentparser.php" => ["a_", "assigners"],
         "_helptopic.php" => ["h_", "help"],
         "_listaction.php" => ["la_", "listactions"],
         "_papercolumn.php" => ["pc_", "papercolumns"],
         "_papercolumnfactory.php" => ["pc_", "papercolumns"],
+        "_partial.php" => ["p_", "partials"],
         "_searchterm.php" => ["st_", "search"],
         "_settingrenderer.php" => ["s_", "settings"],
         "_settingparser.php" => ["s_", "settings"],
@@ -165,7 +175,7 @@ if (function_exists("libxml_disable_entity_loader"))
     libxml_disable_entity_loader(true);
 
 
-// Set up conference options (also used in mailer.php)
+// Set up conference options
 function expand_includes_once($file, $includepath, $globby) {
     foreach ($file[0] === "/" ? [""] : $includepath as $idir) {
         $try = $idir . $file;
@@ -245,6 +255,7 @@ function read_included_options(&$files) {
 }
 
 function expand_json_includes_callback($includelist, $callback) {
+    global $Conf;
     $includes = [];
     foreach (is_array($includelist) ? $includelist : [$includelist] as $k => $str) {
         $expandable = null;
@@ -271,15 +282,15 @@ function expand_json_includes_callback($includelist, $callback) {
                 if ($x === null)
                     error_log("$landmark: Invalid JSON: " . Json::last_error_msg());
             }
-            if ($x === null)
-                continue;
             $entry = $x;
         }
         foreach (is_array($entry) ? $entry : [$entry] as $k => $v) {
+            if ($v === null || $v === false)
+                continue;
             if (is_object($v))
                 $v->__subposition = ++Conf::$next_xt_subposition;
             if (!call_user_func($callback, $v, $k, $landmark))
-                error_log("$landmark: Invalid expansion " . json_encode($v) . ".");
+                error_log(($Conf ? "$Conf->dbname: " : "") . "$landmark: Invalid expansion " . json_encode($v) . ".");
         }
     }
 }

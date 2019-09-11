@@ -1,6 +1,6 @@
 <?php
 // search/st_tag.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class TagSearchMatcher {
     public $tags = [];
@@ -180,12 +180,31 @@ class Tag_SearchTerm extends SearchTerm {
             $this->tag1nz = $row->tag_value($this->tag1) != 0;
         return $ok;
     }
-    function compile_edit_condition(PaperInfo $row, PaperSearch $srch) {
-        if (!$this->tag1
-            || $srch->conf->tags()->is_autosearch($this->tag1))
-            return null;
+    function compile_condition(PaperInfo $row, PaperSearch $srch) {
+        $child = [];
+        $tags = $row->searchable_tags($srch->user);
+        // autosearch tags are special, splice in their search defs
+        foreach ($srch->conf->tags()->filter("autosearch") as $dt)
+            if ($this->tsm->evaluate($srch->user, " {$dt->tag}#0")) {
+                $newsrch = new PaperSearch($srch->user, $dt->autosearch);
+                $newec = $newsrch->term()->compile_condition($row, $newsrch);
+                if ($newec === null)
+                    return null;
+                else if ($newec === true)
+                    return true;
+                else if ($newec !== false)
+                    $child[] = $newec;
+                $tags = str_replace(" {$dt->tag}#0", "", $tags);
+            }
+        // now complete
+        if ($this->tsm->evaluate($srch->user, $tags))
+            return true;
+        else if (empty($child))
+            return false;
+        else if (count($child) === 1)
+            return $child[0];
         else
-            return $this->tsm->evaluate($srch->user, $row->searchable_tags($srch->user));
+            return (object) ["type" => "or", "child" => $child];
     }
     function default_sorter($top, $thenmap, PaperSearch $srch) {
         if ($top && $this->tag1) {
@@ -215,7 +234,7 @@ class Color_SearchTerm {
                     if (!$dt->is_style($t, TagMap::STYLE_BG))
                         continue;
                 } else {
-                    if (array_search($known_style, $dt->styles($t)) === false)
+                    if (array_search($known_style, $dt->styles($t, 0, false)) === false)
                         continue;
                 }
                 $tm->tags[] = $t;

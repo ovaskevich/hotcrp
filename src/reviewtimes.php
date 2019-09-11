@@ -1,6 +1,6 @@
 <?php
 // src/reviewtimes.php -- HotCRP review form definition page
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class ReviewTimes {
     private $conf;
@@ -8,9 +8,30 @@ class ReviewTimes {
     private $r;
     private $dl;
 
+    private function count_review($prow, $rrow) {
+        // no external reviews
+        if ($rrow->reviewType < REVIEW_PC)
+            return false;
+        // only completed reviews for withdrawn/unsubmitted papers
+        if ($prow->timeSubmitted <= 0)
+            return $rrow->reviewSubmitted > 0;
+        // yes for modified or assigned reviews;
+        // no for unmodified self-assigned reviews
+        if ($rrow->reviewType > REVIEW_PC
+            || $rrow->reviewModified)
+            return true;
+        if ($rrow->requestedBy == $rrow->contactId
+            || $rrow->requestedBy == 0)
+            return false;
+        $u1 = $this->conf->cached_user_by_id($rrow->contactId, true);
+        $u2 = $this->conf->cached_user_by_id($rrow->requestedBy, true);
+        return !$u1 || !$u2 || !$u1->privChair || !$u2->privChair;
+    }
+
     function __construct(Contact $user) {
         $this->conf = $user->conf;
         $this->user = $user;
+        $this->conf->pc_members_and_admins(); // to cache them
         $overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
 
         $this->dl = [];
@@ -28,11 +49,7 @@ class ReviewTimes {
                 continue;
             }
             foreach ($prow->reviews_by_id() as $rrow) {
-                if ($rrow->reviewType > REVIEW_PC
-                    || ($rrow->reviewType == REVIEW_PC
-                        && ($rrow->reviewSubmitted
-                            || ($rrow->requestedBy != $rrow->contactId
-                                && $rrow->requestedBy != 0)))) {
+                if ($this->count_review($prow, $rrow)) {
                     $viewable = $user->privChair
                         || ($user->can_view_review_assignment($prow, $rrow)
                             && $user->can_view_review_identity($prow, $rrow));
@@ -93,23 +110,17 @@ class ReviewTimes {
         if (count($nass))
             $heavy_boundary = 0.66 * $nass[(int) (0.8 * count($nass))];
 
-        $contacts = $this->conf->pc_members();
-        $need_contacts = [];
         foreach ($this->r as $cid => $x)
-            if (!isset($contacts[$cid]) && ctype_digit($cid))
-                $need_contacts[] = $cid;
-        if (count($need_contacts)) {
-            $result = $this->conf->q("select firstName, lastName, affiliation, email, contactId, roles, contactTags, disabled from ContactInfo where contactId ?a", $need_contacts);
-            while (($row = Contact::fetch($result, $this->conf)))
-                $contacts[$row->contactId] = $row;
-        }
+            if (is_int($cid) || ctype_digit($cid))
+                $this->conf->cached_user_by_id($cid, true);
+        $this->conf->load_missing_cached_users();
 
         $users = array();
         $tags = $this->user->can_view_reviewer_tags();
         foreach ($this->r as $cid => $x)
-            if ($cid != "conflicts") {
+            if ($cid !== "conflicts") {
                 $users[$cid] = $u = (object) array();
-                $p = get($contacts, $cid);
+                $p = $this->conf->cached_user_by_id($cid, true);
                 if ($p)
                     $u->name = Text::name_text($p);
                 if (count($x) < $heavy_boundary)
@@ -118,6 +129,6 @@ class ReviewTimes {
                     $u->color_classes = $t;
             }
 
-        return (object) array("reviews" => $this->r, "deadlines" => $this->dl, "users" => $users);
+        return (object) ["type" => "procrastination", "reviews" => $this->r, "deadlines" => $this->dl, "users" => $users];
     }
 }

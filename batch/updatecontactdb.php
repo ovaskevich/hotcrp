@@ -1,6 +1,5 @@
 <?php
 $ConfSitePATH = preg_replace(',/batch/[^/]+,', '', __FILE__);
-require_once("$ConfSitePATH/src/init.php");
 require_once("$ConfSitePATH/lib/getopt.php");
 
 $arg = getopt_rest($argv, "hn:pu", ["help", "name:", "papers", "users", "collaborators"]);
@@ -12,15 +11,17 @@ if (isset($arg["h"]) || isset($arg["help"])
            "Usage: php batch/updatecontactdb.php [-n CONFID] [--papers] [--users] [--collaborators]\n");
     exit($status);
 }
-if (!opt("contactdb_dsn")) {
-    fwrite(STDERR, "Conference has no contactdb_dsn\n");
-    exit(1);
-}
 $users = isset($arg["u"]) || isset($arg["users"]);
 $papers = isset($arg["p"]) || isset($arg["papers"]);
 $collaborators = isset($arg["collaborators"]);
 if (!$users && !$papers && !$collaborators)
     $users = $papers = true;
+
+require_once("$ConfSitePATH/src/init.php");
+if (!$Conf->opt("contactdb_dsn")) {
+    fwrite(STDERR, "Conference has no contactdb_dsn\n");
+    exit(1);
+}
 
 $cdb = $Conf->contactdb();
 $result = Dbl::ql($cdb, "select * from Conferences where `dbname`=?", $Conf->dbname);
@@ -54,15 +55,17 @@ if ($users) {
     $cdbids = [];
     $qv = [];
     while (($u = Contact::fetch($result, $Conf))) {
+        $cdb_roles = $u->contactdb_roles();
+        if ($cdb_roles == 0)
+            continue;
         $cdbu = get($cdb_users, $u->email);
         $cdbid = $cdbu ? (int) $cdbu->contactDbId : 0;
-        $cdb_roles = $u->contactdb_roles();
         if ($cdbu
             && (int) $cdbu->roles === $cdb_roles
             && $cdbu->activity_at)
             /* skip */;
         else if ($cdbu && $cdbu->password !== null)
-            $qv[] = [$cdbid, $confid, $cdb_roles, $u->lastLogin ? : $u->creationTime];
+            $qv[] = [$cdbid, $confid, $cdb_roles, $u->creationTime];
         else
             $cdbid = $u->contactdb_update();
         if ($cdbid)

@@ -1,23 +1,21 @@
 <?php
 // contact.php -- HotCRP helper class representing system users
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Contact_Update {
     public $qv = [];
     public $cdb_qf = [];
-    public $changing_email;
-    function __construct($changing_email) {
-        $this->changing_email = $changing_email;
-    }
 }
 
 class Contact {
     static public $rights_version = 1;
-    static public $trueuser_privChair = null;
+    static public $true_user;
     static public $allow_nonexistent_properties = false;
+    static public $next_xid = -1;
 
     public $contactId = 0;
     public $contactDbId = 0;
+    public $contactXid = 0;
     public $conf;
     public $confid;
 
@@ -29,6 +27,7 @@ class Contact {
     public $preferredEmail = "";
     public $sorter = "";
     public $sort_position;
+    public $name_analysis;
 
     public $affiliation = "";
     public $country;
@@ -43,6 +42,7 @@ class Contact {
     private $_contactdb_user = false;
 
     public $disabled = false;
+    private $_disabled;
     public $activity_at = false;
     private $lastLogin;
     public $creationTime = 0;
@@ -73,6 +73,7 @@ class Contact {
     private $_is_lead;
     private $_is_explicit_manager;
     private $_dangerous_track_mask;
+    private $_has_approvable;
     private $_can_view_pc;
     public $is_site_contact = false;
     private $_rights_version = 0;
@@ -80,15 +81,15 @@ class Contact {
     public $isPC = false;
     public $privChair = false;
     public $contactTags;
-    public $tracker_kiosk_state = false;
-    const CAP_AUTHORVIEW = 1;
-    private $capabilities;
+    public $tracker_kiosk_state = 0;
+    private $_capabilities;
     private $_review_tokens;
     private $_activated = false;
     const OVERRIDE_CONFLICT = 1;
     const OVERRIDE_TIME = 2;
-    const OVERRIDE_TAG_CHECKS = 4;
-    const OVERRIDE_EDIT_CONDITIONS = 8;
+    const OVERRIDE_CHECK_TIME = 4;
+    const OVERRIDE_TAG_CHECKS = 8;
+    const OVERRIDE_EDIT_CONDITIONS = 16;
     private $_overrides = 0;
     public $hidden_papers;
     private $_aucollab_matchers;
@@ -103,15 +104,14 @@ class Contact {
     static private $status_info_cache = array();
 
 
-    function __construct($trueuser = null, Conf $conf = null) {
+    function __construct($user = null, Conf $conf = null) {
         global $Conf;
         $this->conf = $conf ? : $Conf;
-        if ($trueuser)
-            $this->merge($trueuser);
-        else if ($this->contactId || $this->contactDbId)
+        if ($user) {
+            $this->merge($user);
+        } else if ($this->contactId || $this->contactDbId) {
             $this->db_load();
-        else if ($this->conf->opt("disableNonPC"))
-            $this->disabled = true;
+        }
     }
 
     static function fetch($result, Conf $conf) {
@@ -128,51 +128,62 @@ class Contact {
             $user = (object) $user;
         if (!isset($user->dsn) || $user->dsn == $this->conf->dsn) {
             if (isset($user->contactId))
-                $this->contactId = (int) $user->contactId;
+                $this->contactId = $this->contactXid = (int) $user->contactId;
         }
         if (isset($user->contactDbId))
             $this->contactDbId = (int) $user->contactDbId;
-        if (isset($user->firstName) && isset($user->lastName))
+        if (isset($user->firstName) && isset($user->lastName)) {
             $name = $user;
-        else
+        } else {
             $name = Text::analyze_name($user);
+        }
         $this->firstName = get_s($name, "firstName");
         $this->lastName = get_s($name, "lastName");
-        if (isset($user->unaccentedName))
+        if (isset($user->unaccentedName)) {
             $this->unaccentedName = $user->unaccentedName;
-        else if (isset($name->unaccentedName))
+        } else if (isset($name->unaccentedName)) {
             $this->unaccentedName = $name->unaccentedName;
-        else
+        } else {
             $this->unaccentedName = Text::unaccented_name($name);
+        }
         foreach (["email", "preferredEmail", "affiliation", "phone",
-                  "country", "birthday", "gender"] as $k)
+                  "country", "gender"] as $k) {
             if (isset($user->$k))
                 $this->$k = simplify_whitespace($user->$k);
-        if (isset($user->collaborators))
+        }
+        if (isset($user->collaborators)) {
             $this->collaborators = $user->collaborators;
+        }
         self::set_sorter($this, $this->conf);
-        if (isset($user->password))
+        if (isset($user->password)) {
             $this->password = (string) $user->password;
-        if (isset($user->disabled))
+        }
+        if (isset($user->disabled)) {
             $this->disabled = !!$user->disabled;
+        }
         foreach (["defaultWatch", "passwordTime", "passwordUseTime",
-                  "updateTime", "creationTime"] as $k)
+                  "updateTime", "creationTime"] as $k) {
             if (isset($user->$k))
                 $this->$k = (int) $user->$k;
-        if (property_exists($user, "contactTags"))
+        }
+        if (property_exists($user, "contactTags")) {
             $this->contactTags = $user->contactTags;
-        else
+        } else {
             $this->contactTags = $this->contactId ? false : null;
-        if (isset($user->activity_at))
+        }
+        if (isset($user->activity_at)) {
             $this->activity_at = (int) $user->activity_at;
-        else if (isset($user->lastLogin))
+        } else if (isset($user->lastLogin)) {
             $this->activity_at = (int) $user->lastLogin;
-        if (isset($user->birthday))
+        }
+        if (isset($user->birthday)) {
             $this->birthday = (int) $user->birthday;
-        if (isset($user->data) && $user->data)
+        }
+        if (isset($user->data) && $user->data) {
             // this works even if $user->data is a JSON string
             // (array_to_object_recursive($str) === $str)
             $this->data = array_to_object_recursive($user->data);
+        }
         if (isset($user->roles) || isset($user->isPC) || isset($user->isAssistant)
             || isset($user->isChair)) {
             $roles = (int) get($user, "roles");
@@ -184,43 +195,51 @@ class Contact {
                 $roles |= self::ROLE_CHAIR;
             $this->assign_roles($roles);
         }
-        if (!$this->isPC && $this->conf->opt("disableNonPC"))
-            $this->disabled = true;
         if (isset($user->has_review))
             $this->has_review_ = $user->has_review;
         if (isset($user->has_outstanding_review))
             $this->_has_outstanding_review = $user->has_outstanding_review;
         if (isset($user->is_site_contact))
             $this->is_site_contact = $user->is_site_contact;
+        $this->_disabled = null;
+        $this->_contactdb_user = false;
     }
 
     private function db_load() {
-        $this->contactId = (int) $this->contactId;
+        $this->contactId = $this->contactXid = (int) $this->contactId;
         $this->contactDbId = (int) $this->contactDbId;
+        assert($this->contactId > 0 || ($this->contactId == 0 && $this->contactDbId > 0));
         if ($this->unaccentedName === "")
             $this->unaccentedName = Text::unaccented_name($this->firstName, $this->lastName);
         self::set_sorter($this, $this->conf);
         $this->password = (string) $this->password;
-        if (isset($this->disabled))
+        if (isset($this->disabled)) {
             $this->disabled = !!$this->disabled;
+        }
         foreach (["defaultWatch", "passwordTime", "passwordUseTime",
-                  "updateTime", "creationTime"] as $k)
+                  "updateTime", "creationTime"] as $k) {
             $this->$k = (int) $this->$k;
-        if (!$this->activity_at && isset($this->lastLogin))
+        }
+        if (!$this->activity_at && isset($this->lastLogin)) {
             $this->activity_at = (int) $this->lastLogin;
-        if (isset($this->birthday))
+        }
+        if (isset($this->birthday)) {
             $this->birthday = (int) $this->birthday;
-        if ($this->data)
+        }
+        if ($this->data) {
             // this works even if $user->data is a JSON string
             // (array_to_object_recursive($str) === $str)
             $this->data = array_to_object_recursive($this->data);
-        if (isset($this->roles))
+        }
+        if (isset($this->roles)) {
             $this->assign_roles((int) $this->roles);
-        if (isset($this->__isAuthor__))
+        }
+        if (isset($this->__isAuthor__)) {
             $this->_db_roles = ((int) $this->__isAuthor__ > 0 ? self::ROLE_AUTHOR : 0)
                 | ((int) $this->__hasReview__ > 0 ? self::ROLE_REVIEWER : 0);
-        if (!$this->isPC && $this->conf->opt("disableNonPC"))
-            $this->disabled = true;
+        }
+        $this->_disabled = null;
+        $this->_contactdb_user = false;
     }
 
     function merge_secondary_properties($x) {
@@ -244,20 +263,61 @@ class Contact {
         $this->$name = $value;
     }
 
-    static function set_sorter($c, Conf $conf) {
-        if (!$conf->sort_by_last && isset($c->unaccentedName)) {
-            $c->sorter = trim("$c->unaccentedName $c->email");
-            return;
+
+    static function parse_sortanno(Conf $conf, $args, $explicit = false) {
+        $name = $conf->sort_by_last ? ["lastName", "firstName"] : ["firstName", "lastName"];
+        $s = [];
+        foreach ($args ? : [] as $w) {
+            if ($w === "name")
+                $s = array_merge($s, $name);
+            else if ($w === "first" || $w === "firstName")
+                $s[] = "firstName";
+            else if ($w === "last" || $w === "lastName")
+                $s[] = "lastName";
+            else if ($w === "email" || $w === "affiliation")
+                $s[] = $w;
         }
-        if ($conf->sort_by_last) {
-            if (($m = Text::analyze_von($c->lastName)))
-                $c->sorter = trim("$m[1] $c->firstName $m[0] $c->email");
-            else
-                $c->sorter = trim("$c->lastName $c->firstName $c->email");
-        } else
-            $c->sorter = trim("$c->firstName $c->lastName $c->email");
-        if (preg_match('/[\x80-\xFF]/', $c->sorter))
-            $c->sorter = UnicodeHelper::deaccent($c->sorter);
+        if (empty($s) && $explicit) {
+            $s = $name;
+            $s[] = "email";
+        }
+        return $s;
+    }
+
+    static function unparse_sortanno(Conf $conf, $args) {
+        $defaultargs = $conf->sort_by_last ? ["lastName", "firstName", "email"] : ["firstName", "lastName", "email"];
+        return $args === $defaultargs ? null : join(" ", $args);
+    }
+
+    static function make_sorter($c, $args) {
+        if ($args === false && isset($c->unaccentedName))
+            return trim("$c->unaccentedName $c->email");
+        if (is_bool($args) || $args === null)
+            $args = $args ? ["lastName", "firstName", "email"] : ["firstName", "lastName", "email"];
+        $s = [];
+        $firstName = $c->firstName;
+        foreach ($args as $arg) {
+            if ($arg === "lastName"
+                && $firstName !== false
+                && ($m = Text::analyze_von($c->lastName))) {
+                $x = $m[1];
+                $firstName = ltrim($firstName . " " . $m[0]);
+            } else if ($arg === "firstName") {
+                $x = $firstName;
+                $firstName = false;
+            } else
+                $x = $c->$arg;
+            if ((string) $x !== "")
+                $s[] = $x;
+        }
+        $t = join(" ", $s);
+        if (preg_match('/[\x80-\xFF]/', $t))
+            $t = UnicodeHelper::deaccent($t);
+        return $t;
+    }
+
+    static function set_sorter($c, Conf $conf) {
+        $c->sorter = self::make_sorter($c, $conf->sort_by_last);
     }
 
     static function compare($a, $b) {
@@ -266,43 +326,60 @@ class Contact {
 
     private function assign_roles($roles) {
         $this->roles = $roles;
-        $this->isPC = ($roles & self::ROLE_PCLIKE) != 0;
-        $this->privChair = ($roles & (self::ROLE_ADMIN | self::ROLE_CHAIR)) != 0;
+        $this->isPC = ($roles & self::ROLE_PCLIKE) !== 0;
+        $this->privChair = ($roles & (self::ROLE_ADMIN | self::ROLE_CHAIR)) !== 0;
     }
 
 
     // initialization
 
-    private function actas_user($x, $trueuser) {
+    static function session_users() {
+        if (isset($_SESSION["us"])) {
+            return $_SESSION["us"];
+        } else if (isset($_SESSION["u"])) {
+            return [$_SESSION["u"]];
+        } else {
+            return [];
+        }
+    }
+
+    static function session_user_index($email) {
+        foreach (self::session_users() as $i => $u) {
+            if (strcasecmp($u, $email) == 0) {
+                return $i;
+            }
+        }
+        return false;
+    }
+
+    private function actas_user($x) {
+        assert(!self::$true_user || self::$true_user === $this);
+
         // translate to email
         if (is_numeric($x)) {
             $acct = $this->conf->user_by_id($x);
             $email = $acct ? $acct->email : null;
-        } else if ($x === "admin")
-            $email = $trueuser->email;
-        else
+        } else if ($x === "admin") {
+            $email = $this->email;
+        } else {
             $email = $x;
-        if (!$email || strcasecmp($email, $this->email) == 0)
+        }
+        if (!$email
+            || strcasecmp($email, $this->email) === 0
+            || !$this->privChair) {
             return $this;
-
-        // can always turn back into baseuser
-        $baseuser = $this;
-        if (strcasecmp($this->email, $trueuser->email) != 0
-            && ($u = $this->conf->user_by_email($trueuser->email)))
-            $baseuser = $u;
-        if (strcasecmp($email, $baseuser->email) == 0)
-            return $baseuser;
-
-        // cannot actas unless chair
-        if (!$this->privChair && !$baseuser->privChair)
-            return $this;
+        }
 
         // new account must exist
         $u = $this->conf->user_by_email($email);
-        if (!$u && validate_email($email) && get($this->conf->opt, "debugShowSensitiveEmail"))
+        if (!$u
+            && validate_email($email)
+            && get($this->conf->opt, "debugShowSensitiveEmail")) {
             $u = Contact::create($this->conf, null, ["email" => $email]);
-        if (!$u)
+        }
+        if (!$u) {
             return $this;
+        }
 
         // cannot turn into a manager of conflicted papers
         if ($this->conf->setting("papermanager")) {
@@ -316,24 +393,19 @@ class Contact {
         return $u;
     }
 
-    function activate($qreq) {
+    function activate($qreq, $signin = false) {
         global $Now;
         $this->_activated = true;
-        $trueuser = isset($_SESSION["trueuser"]) ? $_SESSION["trueuser"] : null;
-        $truecontact = null;
 
         // Handle actas requests
-        if ($qreq && $qreq->actas && $trueuser) {
+        if ($qreq && $qreq->actas && $signin && $this->email) {
             $actas = $qreq->actas;
             unset($qreq->actas, $_GET["actas"], $_POST["actas"]);
-            $actascontact = $this->actas_user($actas, $trueuser);
+            $actascontact = $this->actas_user($actas);
             if ($actascontact !== $this) {
-                if ($actascontact->email !== $trueuser->email) {
-                    hoturl_defaults(array("actas" => $actascontact->email));
-                    $_SESSION["last_actas"] = $actascontact->email;
-                }
-                if ($this->privChair)
-                    self::$trueuser_privChair = $actascontact;
+                Conf::$hoturl_defaults["actas"] = urlencode($actascontact->email);
+                $_SESSION["last_actas"] = $actascontact->email;
+                self::$true_user = $this;
                 return $actascontact->activate($qreq);
             }
         }
@@ -345,33 +417,33 @@ class Contact {
         }
 
         // Add capabilities from session and request
-        if (!$this->conf->opt("disableCapabilities")) {
-            if (($caps = $this->conf->session("capabilities"))) {
-                $this->capabilities = $caps;
-                ++self::$rights_version;
-            }
-            if ($qreq && (isset($qreq->cap) || isset($qreq->testcap)))
-                $this->activate_capabilities($qreq);
+        $cap = $this->session("cap");
+        if ($cap) {
+            $this->_capabilities = $cap;
+            ++self::$rights_version;
+        }
+        if ($qreq && isset($qreq->cap)) {
+            $this->apply_capability_text($qreq->cap);
+            unset($qreq->cap, $_GET["cap"], $_POST["cap"]);
         }
 
         // Add review tokens from session
-        if (($rtokens = $this->conf->session("rev_tokens"))) {
+        if (($rtokens = $this->session("rev_tokens"))) {
             $this->_review_tokens = $rtokens;
             ++self::$rights_version;
         }
 
         // Maybe auto-create a user
-        if ($trueuser
-            && strcasecmp($trueuser->email, $this->email) == 0) {
-            $trueuser_aucheck = $this->conf->session("trueuser_author_check", 0);
-            if (!$this->has_database_account()
+        if (!self::$true_user && $this->email) {
+            $trueuser_aucheck = $this->session("trueuser_author_check", 0);
+            if (!$this->has_account_here()
                 && $trueuser_aucheck + 600 < $Now) {
-                $this->conf->save_session("trueuser_author_check", $Now);
+                $this->save_session("trueuser_author_check", $Now);
                 $aupapers = self::email_authored_papers($this->conf, $this->email, $this);
                 if (!empty($aupapers))
                     $this->activate_database_account();
             }
-            if ($this->has_database_account()
+            if ($this->has_account_here()
                 && $trueuser_aucheck) {
                 foreach ($_SESSION as $k => $v) {
                     if (is_array($v)
@@ -384,15 +456,15 @@ class Contact {
 
         // Maybe set up the shared contacts database
         if ($this->conf->opt("contactdb_dsn")
-            && $this->has_database_account()
-            && $this->conf->session("contactdb_roles", 0) != $this->contactdb_roles()) {
+            && $this->has_account_here()
+            && $this->session("contactdb_roles", 0) != $this->contactdb_roles()) {
             if ($this->contactdb_update())
-                $this->conf->save_session("contactdb_roles", $this->contactdb_roles());
+                $this->save_session("contactdb_roles", $this->contactdb_roles());
         }
 
         // Check forceShow
         $this->_overrides = 0;
-        if ($qreq && $qreq->forceShow && $this->privChair)
+        if ($qreq && $qreq->forceShow && $this->is_manager())
             $this->_overrides |= self::OVERRIDE_CONFLICT;
         if ($qreq && $qreq->override)
             $this->_overrides |= self::OVERRIDE_TIME;
@@ -405,7 +477,7 @@ class Contact {
     }
     function set_overrides($overrides) {
         $old_overrides = $this->_overrides;
-        if (!$this->privChair)
+        if (($overrides & self::OVERRIDE_CONFLICT) && !$this->is_manager())
             $overrides &= ~self::OVERRIDE_CONFLICT;
         $this->_overrides = $overrides;
         return $old_overrides;
@@ -425,7 +497,7 @@ class Contact {
 
     function activate_database_account() {
         assert($this->has_email());
-        if (!$this->has_database_account()
+        if (!$this->has_account_here()
             && ($u = Contact::create($this->conf, null, $this))) {
             $this->merge($u);
             $this->contactDbId = 0;
@@ -435,9 +507,9 @@ class Contact {
     }
 
     function contactdb_user($refresh = false) {
-        if ($this->contactDbId && !$this->contactId)
+        if ($this->contactDbId && !$this->contactId) {
             return $this;
-        else if ($refresh || $this->_contactdb_user === false) {
+        } else if ($refresh || $this->_contactdb_user === false) {
             $cdbu = null;
             if ($this->has_email())
                 $cdbu = $this->conf->contactdb_user_by_email($this->email);
@@ -448,12 +520,14 @@ class Contact {
 
     private function _contactdb_save_roles($cdbur) {
         global $Now;
-        Dbl::ql($this->conf->contactdb(), "insert into Roles set contactDbId=?, confid=?, roles=?, activity_at=? on duplicate key update roles=values(roles), activity_at=values(activity_at)", $cdbur->contactDbId, $cdbur->confid, $this->contactdb_roles(), $Now);
+        if (($roles = $this->contactdb_roles()))
+            Dbl::ql($this->conf->contactdb(), "insert into Roles set contactDbId=?, confid=?, roles=?, activity_at=? on duplicate key update roles=values(roles), activity_at=values(activity_at)", $cdbur->contactDbId, $cdbur->confid, $roles, $Now);
+        else
+            Dbl::ql($this->conf->contactdb(), "delete from Roles where contactDbId=? and confid=? and roles=0", $cdbur->contactDbId, $cdbur->confid);
     }
     function contactdb_update($update_keys = null, $only_update_empty = false) {
-        global $Now;
         if (!($cdb = $this->conf->contactdb())
-            || !$this->has_database_account()
+            || !$this->has_account_here()
             || !validate_email($this->email))
             return false;
 
@@ -461,12 +535,13 @@ class Contact {
         $cdbux = $cdbur ? : new Contact(null, $this->conf);
         $upd = [];
         foreach (["firstName", "lastName", "affiliation", "country", "collaborators",
-                  "birthday", "gender"] as $k)
+                  "birthday", "gender"] as $k) {
             if ($this->$k !== null
                 && $this->$k !== ""
                 && (!$only_update_empty || $cdbux->$k === null || $cdbux->$k === "")
                 && (!$cdbur || in_array($k, $update_keys ? : [])))
                 $upd[$k] = $this->$k;
+        }
         if (!$cdbur) {
             $upd["email"] = $this->email;
             if ($this->password
@@ -482,51 +557,52 @@ class Contact {
         }
         $cdbur = $cdbur ? : $this->conf->contactdb_user_by_email($this->email);
         if ($cdbur->confid
-            && (int) $cdbur->roles !== $this->contactdb_roles())
+            && (int) $cdbur->roles !== $this->contactdb_roles()) {
             $this->_contactdb_save_roles($cdbur);
+        }
         return $cdbur ? (int) $cdbur->contactDbId : false;
     }
 
-    function is_actas_user() {
-        return $this->_activated
-            && isset($_SESSION["trueuser"])
-            && strcasecmp($_SESSION["trueuser"]->email, $this->email) !== 0;
+
+    function session($name, $defval = null) {
+        return $this->conf->session($name, $defval);
     }
 
-    private function activate_capabilities($qreq) {
-        // Add capabilities from arguments
-        if (($cap_req = $qreq->cap)) {
-            foreach (preg_split(',\s+,', $cap_req) as $cap)
-                $this->apply_capability_text($cap);
-            unset($qreq->cap, $_GET["cap"], $_POST["cap"]);
-        }
+    function save_session($name, $value) {
+        $this->conf->save_session($name, $value);
+    }
 
-        // Support capability testing
-        if ($this->conf->opt("testCapabilities")
-            && ($cap_req = $qreq->testcap)
-            && preg_match_all('/([-+]?)([1-9]\d*)([A-Za-z]+)/',
-                              $cap_req, $m, PREG_SET_ORDER)) {
-            foreach ($m as $mm) {
-                $c = ($mm[3] == "a" ? self::CAP_AUTHORVIEW : 0);
-                $this->change_paper_capability((int) $mm[2], $c, $mm[1] !== "-");
-            }
-            unset($qreq->testcap, $_GET["testcap"], $_POST["testcap"]);
-        }
+
+    function is_activated() {
+        return $this->_activated;
+    }
+
+    function is_actas_user() {
+        return $this->_activated && self::$true_user;
     }
 
     function is_empty() {
-        return $this->contactId <= 0 && !$this->capabilities && !$this->email;
+        return $this->contactId <= 0 && !$this->email && !$this->_capabilities;
     }
 
     function owns_email($email) {
         return (string) $email !== "" && strcasecmp($email, $this->email) === 0;
     }
 
-    function name_text() {
-        if ($this->firstName === "" || $this->lastName === "")
-            return $this->firstName . $this->lastName;
-        else
+    function is_disabled() {
+        if ($this->_disabled === null)
+            $this->_disabled = $this->disabled
+                || (!$this->isPC && $this->conf->opt("disableNonPC"));
+        return $this->_disabled;
+    }
+
+    function name() {
+        if ($this->firstName !== "" && $this->lastName !== "")
             return $this->firstName . " " . $this->lastName;
+        else if ($this->lastName !== "")
+            return $this->lastName;
+        else
+            return $this->firstName;
     }
 
     function completion_items() {
@@ -555,7 +631,8 @@ class Contact {
         if ($pfx === "t")
             return Text::name_text($user);
         $n = Text::name_html($user);
-        if ($pfx === "r" && isset($user->contactTags)
+        if ($pfx === "r"
+            && isset($user->contactTags)
             && ($colors = $this->user_color_classes_for($user)))
             $n = '<span class="' . $colors . ' taghh">' . $n . '</span>';
         return $n;
@@ -574,6 +651,8 @@ class Contact {
 
         if (!(is_object($x) && isset($x->firstName) && isset($x->lastName) && isset($x->email))) {
             if ($pfx === "u") {
+                if (!is_string($cid) && !is_integer($cid))
+                    error_log("bad cid at " . json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)));
                 $x = $this->conf->user_by_id($cid);
                 $this->_contact_sorter_map[$cid] = $x->sorter;
             } else
@@ -646,7 +725,16 @@ class Contact {
         return $this->email && self::is_anonymous_email($this->email);
     }
 
-    function has_database_account() {
+    function is_signed_in() {
+        return $this->email && $this->_activated;
+    }
+
+    function has_database_account() { // XXX obsolete 16-08-2019
+        error_log("call to obsolete Contact::has_database_account");
+        return $this->contactId > 0;
+    }
+
+    function has_account_here() {
         return $this->contactId > 0;
     }
 
@@ -666,18 +754,29 @@ class Contact {
         return $this->roles & self::ROLE_PCLIKE;
     }
 
-    function role_html() {
-        if ($this->roles & (Contact::ROLE_CHAIR | Contact::ROLE_ADMIN | Contact::ROLE_PC)) {
-            if ($this->roles & Contact::ROLE_CHAIR)
+    function viewable_pc_roles(Contact $viewer) {
+        if (($this->roles & Contact::ROLE_PCLIKE)
+            && $viewer->can_view_pc()) {
+            $roles = $this->roles & Contact::ROLE_PCLIKE;
+            if (!$viewer->isPC)
+                $roles &= ~Contact::ROLE_ADMIN;
+            return $roles;
+        } else
+            return 0;
+    }
+
+    static function role_html_for($roles) {
+        if ($roles & (Contact::ROLE_CHAIR | Contact::ROLE_ADMIN | Contact::ROLE_PC)) {
+            if ($roles & Contact::ROLE_CHAIR)
                 return '<span class="pcrole">chair</span>';
-            else if (($this->roles & (Contact::ROLE_ADMIN | Contact::ROLE_PC)) == (Contact::ROLE_ADMIN | Contact::ROLE_PC))
+            else if (($roles & (Contact::ROLE_ADMIN | Contact::ROLE_PC)) === (Contact::ROLE_ADMIN | Contact::ROLE_PC))
                 return '<span class="pcrole">PC, sysadmin</span>';
-            else if ($this->roles & Contact::ROLE_ADMIN)
+            else if ($roles & Contact::ROLE_ADMIN)
                 return '<span class="pcrole">sysadmin</span>';
             else
                 return '<span class="pcrole">PC</span>';
         } else
-            return '';
+            return "";
     }
 
     function has_tag($t) {
@@ -690,6 +789,10 @@ class Contact {
             $this->contactTags = null;
         }
         return false;
+    }
+
+    function has_permission($perm) {
+        return !$perm || $this->has_tag(substr($perm, 1)) === ($perm[0] === "+");
     }
 
     function tag_value($t) {
@@ -716,7 +819,7 @@ class Contact {
     }
 
     function viewable_tags(Contact $viewer) {
-        if ($viewer->can_view_contact_tags() || $viewer->contactId == $this->contactId) {
+        if ($viewer->can_view_user_tags() || $viewer->contactId == $this->contactId) {
             $tags = $this->all_contact_tags();
             return $this->conf->tags()->strip_nonviewable($tags, $viewer, null);
         } else
@@ -724,68 +827,62 @@ class Contact {
     }
 
     function viewable_color_classes(Contact $viewer) {
-        if ($viewer->isPC && ($tags = $this->viewable_tags($viewer)))
+        if (($tags = $this->viewable_tags($viewer)))
             return $this->conf->tags()->color_classes($tags);
         else
             return "";
     }
 
-    private function update_capabilities() {
-        ++self::$rights_version;
-        if (empty($this->capabilities))
-            $this->capabilities = null;
-        if ($this->_activated)
-            $this->conf->save_session("capabilities", $this->capabilities);
+    function has_capabilities() {
+        return $this->_capabilities !== null;
+    }
+
+    function has_author_view_capability() {
+        if ($this->_capabilities !== null) {
+            foreach ($this->_capabilities as $k => $v)
+                if (str_starts_with($k, "@av"))
+                    return true;
+        }
+        return false;
     }
 
     function capability($name) {
-        if ($this->capabilities !== null && isset($this->capabilities[0]))
-            return get($this->capabilities[0], $name);
-        else
-            return null;
+        return $this->_capabilities ? get($this->_capabilities, $name) : null;
     }
 
     function set_capability($name, $newval) {
         $oldval = $this->capability($name);
         if ($newval !== $oldval) {
-            ++self::$rights_version;
-            if ($newval !== null)
-                $this->capabilities[0][$name] = $newval;
-            else
-                unset($this->capabilities[0][$name]);
-            if (empty($this->capabilities[0]))
-                unset($this->capabilities[0]);
-            $this->update_capabilities();
-        }
-        return $newval !== $oldval;
-    }
-
-    function change_paper_capability($pid, $bit, $isset) {
-        $oldval = 0;
-        if ($this->capabilities !== null)
-            $oldval = get($this->capabilities, $pid) ? : 0;
-        $newval = ($oldval & ~$bit) | ($isset ? $bit : 0);
-        if ($newval !== $oldval) {
-            if ($newval !== 0)
-                $this->capabilities[$pid] = $newval;
-            else
-                unset($this->capabilities[$pid]);
-            $this->update_capabilities();
+            if ($newval !== null) {
+                $this->_capabilities[$name] = $newval;
+            } else {
+                unset($this->_capabilities[$name]);
+                if (empty($this->_capabilities))
+                    $this->_capabilities = null;
+            }
+            if ($this->_activated && $name[0] !== "@") {
+                $savecap = [];
+                foreach ($this->_capabilities ? : [] as $k => $v)
+                    if ($k[0] !== "@")
+                        $savecap[$k] = $v;
+                $this->save_session("cap", empty($savecap) ? null : $savecap);
+            }
+            $this->update_my_rights();
         }
         return $newval !== $oldval;
     }
 
     function apply_capability_text($text) {
-        if (preg_match(',\A([-+]?)0([1-9][0-9]*)(a)(\S+)\z,', $text, $m)
-            && ($result = $this->conf->ql("select paperId, capVersion from Paper where paperId=$m[2]"))
-            && ($row = edb_orow($result))) {
-            $rowcap = $this->conf->capability_text($row, $m[3]);
-            $text = substr($text, strlen($m[1]));
-            if ($rowcap === $text
-                || $rowcap === str_replace("/", "_", $text))
-                return $this->change_paper_capability((int) $m[2], self::CAP_AUTHORVIEW, $m[1] !== "-");
+        // Add capabilities from arguments
+        foreach (preg_split('{\s+}', $text) as $s) {
+            if ($s !== "") {
+                $isadd = $s[0] !== "-";
+                if ($s[0] === "-" || $s[0] === "+")
+                    $s = substr($s, 1);
+                if ($s !== "" && ($uf = $this->conf->capability_handler($s)))
+                    call_user_func($uf->callback, $this, $uf, $isadd, $s);
+            }
         }
-        return null;
     }
 
     private function make_data() {
@@ -829,7 +926,7 @@ class Contact {
             $this->conf->qe("update ContactInfo set data=? where contactId=?", $new, $this->contactId);
     }
 
-    private function data_str() {
+    function data_str() {
         $d = null;
         if (is_string($this->data))
             $d = $this->data;
@@ -843,13 +940,16 @@ class Contact {
         $qreq = $qreq ? : $Qreq;
 
         if ($qreq->ajax) {
-            if ($this->is_empty())
+            if ($this->is_empty()) {
                 json_exit(["ok" => false, "error" => "You have been signed out.", "loggedout" => true]);
-            else
+            } else if (!$this->is_signed_in()) {
+                json_exit(["ok" => false, "error" => "You must sign in to access that function.", "loggedout" => true]);
+            } else {
                 json_exit(["ok" => false, "error" => "You don’t have permission to access that page."]);
+            }
         }
 
-        if ($this->is_empty()) {
+        if (!$this->is_signed_in()) {
             // Preserve post values across session expiration.
             ensure_session();
             $x = array();
@@ -857,14 +957,16 @@ class Contact {
                 $x["__PATH__"] = preg_replace(",^/+,", "", Navigation::path());
             if ($qreq->anchor)
                 $x["anchor"] = $qreq->anchor;
-            $url = SelfHref::make($qreq, $x, ["raw" => true, "site_relative" => true]);
+            $url = $this->conf->selfurl($qreq, $x, Conf::HOTURL_RAW | Conf::HOTURL_SITE_RELATIVE);
             $_SESSION["login_bounce"] = [$this->conf->dsn, $url, Navigation::page(), $_POST, $Now + 120];
-            if ($qreq->post_ok())
-                error_go(false, "You’ve been signed out, so your changes were not saved. After signing in, you may submit them again.");
-            else
+            if ($qreq->post_ok()) {
+                error_go(false, "You must sign in to access that page. Your changes were not saved; after signing in, you may submit them again.");
+            } else {
                 error_go(false, "You must sign in to access that page.");
-        } else
+            }
+        } else {
             error_go(false, "You don’t have permission to access that page.");
+        }
     }
 
 
@@ -877,7 +979,7 @@ class Contact {
         "collaborators" => true, "defaultWatch" => true, "contactTags" => true
     ];
 
-    private function _save_assign_field($k, $v, Contact_Update $cu) {
+    function save_assign_field($k, $v, Contact_Update $cu) {
         if (!isset(self::$no_clean_fields[$k])) {
             $v = simplify_whitespace($v);
             if ($k === "birthday" && !$v)
@@ -885,171 +987,35 @@ class Contact {
         }
         // change contactdb
         if (isset(self::$cdb_fields[$k])
-            && ($this->$k !== $v || $cu->changing_email))
+            && $this->$k !== $v)
             $cu->cdb_qf[] = $k;
         // change local version
-        if ($this->$k !== $v || !$this->contactId)
+        if ($this->$k !== $v || !$this->contactId) {
             $cu->qv[$k] = $v;
-        $this->$k = $v;
+            $this->$k = $v;
+            if ($k === "email")
+                $this->_contactdb_user = false;
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    static function parse_roles_json($j) {
-        $roles = 0;
-        if (isset($j->pc) && $j->pc)
-            $roles |= self::ROLE_PC;
-        if (isset($j->chair) && $j->chair)
-            $roles |= self::ROLE_CHAIR | self::ROLE_PC;
-        if (isset($j->sysadmin) && $j->sysadmin)
-            $roles |= self::ROLE_ADMIN;
-        return $roles;
+    function save_cleanup($us) {
+        self::set_sorter($this, $this->conf);
+        $this->_disabled = null;
+        if (isset($us->diffs["topics"]))
+            $this->_topic_interest_map = null;
+        if (isset($us->diffs["roles"]))
+            $this->conf->invalidate_caches(["pc" => 1]);
     }
 
     const SAVE_NOTIFY = 1;
     const SAVE_ANY_EMAIL = 2;
     const SAVE_IMPORT = 4;
-    const SAVE_NO_EXPORT = 8;
-    function save_json($cj, $actor, $flags) {
-        global $Me, $Now;
-        assert(!!$this->contactId);
-        $old_roles = $this->roles;
-        $old_email = $this->email;
-        $old_disabled = $this->disabled ? 1 : 0;
-        $changing_email = isset($cj->email) && strtolower($cj->email) !== strtolower((string) $old_email);
-        $cu = new Contact_Update($changing_email);
-
-        $aupapers = null;
-        if ($changing_email)
-            $aupapers = self::email_authored_papers($this->conf, $cj->email, $cj);
-
-        // check whether this user is changing themselves
-        $changing_other = false;
-        if ($this->conf->contactdb()
-            && $Me
-            && (strcasecmp($this->email, $Me->email) != 0 || $Me->is_actas_user()))
-            $changing_other = true;
-
-        // Main fields
-        foreach (["firstName", "lastName", "email", "affiliation", "collaborators",
-                  "preferredEmail", "country", "birthday", "gender", "phone"] as $k) {
-            if (isset($cj->$k))
-                $this->_save_assign_field($k, $cj->$k, $cu);
-        }
-        if (isset($cj->preferred_email) && !isset($cj->preferredEmail))
-            $this->_save_assign_field("preferredEmail", $cj->preferred_email, $cu);
-        $this->_save_assign_field("unaccentedName", Text::unaccented_name($this->firstName, $this->lastName), $cu);
-        self::set_sorter($this, $this->conf);
-
-        // Disabled
-        $disabled = $old_disabled;
-        if (isset($cj->disabled))
-            $disabled = $cj->disabled ? 1 : 0;
-        if ($disabled !== $old_disabled || !$this->contactId)
-            $cu->qv["disabled"] = $this->disabled = $disabled;
-
-        // Data
-        $old_datastr = $this->data_str();
-        $data = get($cj, "data", (object) array());
-        foreach (array("address", "city", "state", "zip") as $k)
-            if (isset($cj->$k) && ($x = $cj->$k)) {
-                while (is_array($x) && $x[count($x) - 1] === "")
-                    array_pop($x);
-                $data->$k = $x ? : null;
-            }
-        $this->merge_data($data);
-        $datastr = $this->data_str();
-        if ($datastr !== $old_datastr)
-            $cu->qv["data"] = $datastr;
-
-        // Changes to the above fields also change the updateTime.
-        if (!empty($cu->qv))
-            $cu->qv["updateTime"] = $this->updateTime = $Now;
-
-        // Follow
-        if (isset($cj->follow)) {
-            $w = 0;
-            if (get($cj->follow, "reviews"))
-                $w |= self::WATCH_REVIEW;
-            if (get($cj->follow, "allreviews"))
-                $w |= self::WATCH_REVIEW_ALL;
-            if (get($cj->follow, "managedreviews"))
-                $w |= self::WATCH_REVIEW_MANAGED;
-            if (get($cj->follow, "allfinal"))
-                $w |= self::WATCH_FINAL_SUBMIT_ALL;
-            $this->_save_assign_field("defaultWatch", $w, $cu);
-        }
-
-        // Tags
-        if (isset($cj->tags)) {
-            $tags = array();
-            foreach ($cj->tags as $t) {
-                list($tag, $value) = TagInfo::unpack($t);
-                if (strcasecmp($tag, "pc") != 0)
-                    $tags[$tag] = $tag . "#" . ($value ? : 0);
-            }
-            ksort($tags);
-            $t = count($tags) ? " " . join(" ", $tags) . " " : "";
-            $this->_save_assign_field("contactTags", $t, $cu);
-        }
-
-        // Initial save
-        if (count($cu->qv)) { // always true if $inserting
-            $q = "update ContactInfo set "
-                . join("=?, ", array_keys($cu->qv)) . "=?"
-                . " where contactId=$this->contactId";
-            if (!($result = $this->conf->qe_apply($q, array_values($cu->qv))))
-                return $result;
-            Dbl::free($result);
-        }
-
-        // Topics
-        if (isset($cj->topics)) {
-            $tf = array();
-            foreach ($cj->topics as $k => $v)
-                if ($v || empty($tf))
-                    $tf[] = "($this->contactId,$k,$v)";
-            $this->conf->qe_raw("delete from TopicInterest where contactId=$this->contactId");
-            if (!empty($tf))
-                $this->conf->qe_raw("insert into TopicInterest (contactId,topicId,interest) values " . join(",", $tf));
-            $this->_topic_interest_map = null;
-        }
-
-        // Roles
-        $roles = $old_roles;
-        if (isset($cj->roles)) {
-            $roles = self::parse_roles_json($cj->roles);
-            if ($roles !== $old_roles)
-                $this->save_roles($roles, $actor);
-        }
-
-        // Update authorship
-        if ($aupapers)
-            $this->save_authored_papers($aupapers);
-
-        // Contact DB (must precede password)
-        $cdb = $this->conf->contactdb();
-        if ($changing_email)
-            $this->_contactdb_user = false;
-        if ($cdb && !($flags & self::SAVE_NO_EXPORT)
-            && (!empty($cu->cdb_qf) || $roles !== $old_roles))
-            $this->contactdb_update($cu->cdb_qf, $changing_other);
-
-        // Password
-        if (isset($cj->new_password))
-            $this->change_password($cj->new_password, 0);
-
-        // Beware PC cache
-        if (($roles | $old_roles) & Contact::ROLE_PCLIKE)
-            $this->conf->invalidate_caches(["pc" => 1]);
-
-        $actor = $actor ? : $Me;
-        if ($actor && $this->contactId == $actor->contactId)
-            $this->mark_activity();
-
-        return true;
-    }
 
     function change_email($email) {
-        assert($this->has_database_account());
+        assert($this->has_account_here());
         $aupapers = self::email_authored_papers($this->conf, $email, $this);
         $this->conf->ql("update ContactInfo set email=? where contactId=?", $email, $this->contactId);
         $this->save_authored_papers($aupapers);
@@ -1158,11 +1124,15 @@ class Contact {
                 $updater["password"] = validate_email($updater["email"]) ? self::random_password() : "*";
                 $updater["passwordTime"] = $Now;
             }
-            if (!$is_cdb)
+            if (!$is_cdb) {
                 $updater["creationTime"] = $Now;
+            }
             $result = Dbl::qe_apply($db, "insert into ContactInfo set " . join("=?, ", array_keys($updater)) . "=? on duplicate key update firstName=firstName", array_values($updater));
-            if ($result)
+            if ($result) {
                 $updater[$idk] = (int) $result->insert_id;
+                if ($idk === "contactId")
+                    $updater["contactXid"] = (int) $result->insert_id;
+            }
         }
         if (($ok = !!$result)) {
             foreach ($updater as $k => $v)
@@ -1173,8 +1143,6 @@ class Contact {
     }
 
     static function create(Conf $conf, $actor, $reg, $flags = 0) {
-        global $Me, $Now;
-
         // clean registration
         if (is_array($reg))
             $reg = (object) $reg;
@@ -1193,63 +1161,72 @@ class Contact {
         // look up existing accounts
         $valid_email = validate_email($reg->email);
         $u = $conf->user_by_email($reg->email) ? : new Contact(null, $conf);
-        if (($cdb = $conf->contactdb()) && $valid_email)
+        if (($cdb = $conf->contactdb()) && $valid_email) {
             $cdbu = $conf->contactdb_user_by_email($reg->email);
-        else
+        } else {
             $cdbu = null;
+        }
         $create = !$u->contactId;
         $aupapers = [];
 
         // if local does not exist, create it
         if (!$u->contactId) {
-            if (($flags & self::SAVE_IMPORT) && !$cdbu)
+            if (($flags & self::SAVE_IMPORT) && !$cdbu) {
                 return null;
-            if (!$valid_email && !($flags & self::SAVE_ANY_EMAIL))
+            }
+            if (!$valid_email && !($flags & self::SAVE_ANY_EMAIL)) {
                 return null;
-            if ($valid_email)
+            }
+            if ($valid_email) {
                 // update registration from authorship information
                 $aupapers = self::email_authored_papers($conf, $reg->email, $reg);
+            }
         }
 
         // create or update contactdb user
         if ($cdb && $valid_email) {
-            $cdbu = $cdbu ? : new Contact(null, $conf);
-            if (($upd = $cdbu->_make_create_updater($reg, true)))
+            if (!$cdbu)  {
+                $cdbu = new Contact(null, $conf);
+            }
+            if (($upd = $cdbu->_make_create_updater($reg, true))) {
                 $cdbu->apply_updater($upd, true);
+                $u->_contactdb_user = false;
+            }
         }
 
         // create or update local user
         $upd = $u->_make_create_updater($cdbu ? : $reg, false);
         if (!$u->contactId) {
-            if (($cdbu && $cdbu->disabled) || get($reg, "disabled"))
+            if (($cdbu && $cdbu->disabled)
+                || get($reg, "disabled")) {
                 $upd["disabled"] = 1;
+            }
             if ($cdbu) {
-                $upd["password"] = $cdbu->password;
+                $upd["password"] = "";
                 $upd["passwordTime"] = $cdbu->passwordTime;
             }
         }
-        if ($upd) {
-            if (!($u->apply_updater($upd, false)))
-                // failed because concurrent create (unlikely)
-                $u = $conf->user_by_email($reg->email);
+        if ($upd && !($u->apply_updater($upd, false))) {
+            // failed because concurrent create (unlikely)
+            $u = $conf->user_by_email($reg->email);
         }
 
         // update paper authorship
         if ($aupapers) {
             $u->save_authored_papers($aupapers);
-            if ($cdbu)
+            if ($cdbu) {
                 // can't use `$cdbu` itself b/c no `confid`
                 $u->_contactdb_save_roles($u->contactdb_user());
+            }
         }
 
         // notify on creation
         if ($create) {
-            if (($flags & self::SAVE_NOTIFY) && !$u->disabled)
+            if (($flags & self::SAVE_NOTIFY) && !$u->is_disabled()) {
                 $u->sendAccountInfo("create", false);
-            $type = $u->disabled ? "disabled " : "";
+            }
+            $type = $u->is_disabled() ? "disabled " : "";
             $conf->log_for($actor && $actor->has_email() ? $actor : $u, $u, "Created {$type}account");
-            // if ($Me && $Me->privChair)
-            //    $conf->infoMsg("Created {$type}account for <a href=\"" . hoturl("profile", "u=" . urlencode($u->email)) . "\">" . Text::user_html_nolink($u) . "</a>.");
         }
 
         return $u;
@@ -1258,7 +1235,10 @@ class Contact {
 
     // PASSWORDS
     //
+    // XXX THESE RULES ARE NOT ALL FOLLOWED BY THE CODE
+    //
     // password "" or null: reset password (user must recreate password)
+    //     or password stored in contactdb
     // password "*": invalid password, cannot be reset by user
     // password starting with " ": legacy hashed password using hash_hmac
     //     format: " HASHMETHOD KEYID SALT[16B]HMAC"
@@ -1288,7 +1268,7 @@ class Contact {
     // if (contactdb password allowed
     //     && (!expected || expected matches contactdb)) {
     //     change contactdb password and update time;
-    //     set local password to "*";
+    //     set local password to "";
     // } else
     //     change local password and update time;
 
@@ -1299,10 +1279,6 @@ class Contact {
 
     static function random_password($length = 14) {
         return hotcrp_random_password($length);
-    }
-
-    static function password_storage_cleartext() {
-        return opt("safePasswords") < 1;
     }
 
     function allow_contactdb_password() {
@@ -1319,19 +1295,21 @@ class Contact {
                 return $cdbu->plaintext_password();
             else
                 return false;
-        } else if ($this->password[0] === " " || $this->password === "*")
+        } else if ($this->password[0] === " " || $this->password === "*") {
             return false;
-        else
+        } else {
             return $this->password;
+        }
     }
 
     function password_is_reset() {
-        if (($cdbu = $this->contactdb_user()))
+        if (($cdbu = $this->contactdb_user())) {
             return (string) $cdbu->password === ""
                 && ((string) $this->password === ""
                     || $this->passwordTime < $cdbu->passwordTime);
-        else
+        } else {
             return $this->password === "";
+        }
     }
 
     function password_used() {
@@ -1386,7 +1364,10 @@ class Contact {
     }
 
     private function check_password_encryption($hash, $iscdb) {
-        $safe = $this->conf->opt($iscdb ? "contactdb_safePasswords" : "safePasswords");
+        if ($iscdb)
+            $safe = $this->conf->opt("contactdb_safePasswords", 2);
+        else
+            $safe = $this->conf->opt("safePasswords");
         if ($safe < 1
             || ($method = $this->password_hash_method()) === false
             || ($hash !== "" && $hash[0] !== " " && $safe == 1))
@@ -1398,123 +1379,157 @@ class Contact {
                 || password_needs_rehash(substr($hash, 2), $method);
     }
 
-    function hash_password($input) {
+    private function hash_password($input) {
         if (($method = $this->password_hash_method()) !== false)
             return " \$" . password_hash($input, $method);
         else
             return $input;
     }
 
-    function check_password($input) {
+    function check_password($input, $info = null) {
         global $Now;
         assert(!$this->conf->external_login());
-        if (($this->contactId && $this->disabled)
-            || !self::valid_password($input))
+        if (($this->contactId && $this->is_disabled())
+            || !self::valid_password($input)) {
+            if ($info)
+                $info->disabled = true;
             return false;
-
-        $cdbu = $this->contactdb_user();
-        $cdbok = false;
-        if ($cdbu
-            && ($hash = $cdbu->password)
-            && $cdbu->allow_contactdb_password()
-            && ($cdbok = $this->check_hashed_password($input, $hash))) {
-            $updater = ["passwordUseTime" => $Now];
-            if ($this->check_password_encryption($hash, true)) {
-                $updater["password"] = $this->hash_password($input);
-                $updater["passwordTime"] = $Now;
-            }
-            $cdbu->apply_updater($updater, true);
         }
 
-        $localok = false;
-        if ($this->contactId
-            && ($hash = $this->password)
-            && ($localok = $this->check_hashed_password($input, $hash))) {
-            if ($cdbu
-                && !$cdbok
-                && $this->passwordTime
-                && $cdbu->passwordTime > $this->passwordTime)
-                error_log($this->conf->dbname . ": " . $this->email . ": using old local password (" . post_value(true) . ")");
+        $cdbu = $this->contactdb_user();
+        $cdbok = $cdbu
+            && $cdbu->password
+            && $cdbu->allow_contactdb_password()
+            // NB $this is OK here, password hash passed in
+            && $this->check_hashed_password($input, $cdbu->password);
+        $localok = $this->contactId > 0
+            && $this->password
+            && $this->check_hashed_password($input, $this->password);
+
+        if ($cdbok
+            || ($localok && $cdbu && !$cdbu->password)) {
             $updater = ["passwordUseTime" => $Now];
-            if ($this->check_password_encryption($hash, false)) {
-                $updater["password"] = $cdbok ? $cdbu->password : $this->hash_password($input);
-                $updater["passwordTime"] = $Now;
+            if ($cdbok) {
+                if ($this->check_password_encryption($cdbu->password, true))
+                    $updater["password"] = $this->hash_password($input);
+                if (!$cdbu->passwordTime)
+                    $updater["passwordTime"] = $Now;
+            } else {
+                $updater["password"] = $this->hash_password($input);
+                $updater["passwordTime"] = $this->passwordTime ? : $Now;
+            }
+            $cdbu->apply_updater($updater, true);
+            // clear local password, if any
+            if ($localok)
+                $this->apply_updater(["passwordUseTime" => $Now, "password" => "", "passwordTime" => $Now], false);
+            if ($info)
+                $info->cdb = true;
+            $cdbok = true;
+            $localok = false;
+        }
+
+        if ($localok
+            && $cdbu
+            && $cdbu->password) {
+            $localusetime = max($this->passwordTime, $this->passwordUseTime);
+            if (!$cdbok) {
+                $t0 = $this->passwordTime ? ceil(($Now - $this->passwordTime) / 86400) : -1;
+                $t1 = $cdbu->passwordTime ? ceil(($Now - $cdbu->passwordTime) / 86400) : -1;
+                error_log("{$this->conf->dbname}: user {$this->email}: signing in with local password, which is " . ($this->passwordTime < $cdbu->passwordTime ? "older" : "newer") . " than cdb [{$t0}d/{$t1}d]");
+            }
+            if ($localusetime
+                && $cdbu->passwordUseTime > $localusetime) {
+                $x = $this->conf->opt("obsoletePasswordInterval");
+                if (is_string($x))
+                    $x = SettingParser::parse_interval($x);
+                if ($x === true)
+                    $x = 63072000; // 2 years
+                if ($x > 0
+                    && $localusetime < $Now - $x) {
+                    $localok = false;
+                    if ($info)
+                        $info->local_obsolete = true;
+                }
+            }
+        }
+
+        if ($localok) {
+            $updater = ["passwordUseTime" => $Now];
+            if ($this->check_password_encryption($this->password, false)) {
+                $updater["password"] = $this->hash_password($input);
+                if (!$this->passwordTime)
+                    $updater["passwordTime"] = $Now;
             }
             $this->apply_updater($updater, false);
+            if ($info)
+                $info->local = true;
         }
 
         return $cdbok || $localok;
     }
 
-    const CHANGE_PASSWORD_PLAINTEXT = 1;
-    const CHANGE_PASSWORD_ENABLE = 2;
+    const CHANGE_PASSWORD_ENABLE = 1;
     function change_password($new, $flags) {
         global $Now;
         assert(!$this->conf->external_login());
 
         $cdbu = $this->contactdb_user();
         if (($flags & self::CHANGE_PASSWORD_ENABLE)
-            && ($this->password !== "" || ($cdbu && (string) $cdbu->password !== "")))
+            && ($this->password !== ""
+                || ($cdbu && (string) $cdbu->password !== "")))
             return false;
 
-        if ($new === null) {
+        $plaintext = $new === null;
+        if ($plaintext)
             $new = self::random_password();
-            $flags |= self::CHANGE_PASSWORD_PLAINTEXT;
-        }
         assert(self::valid_password($new));
 
+        $hash = $new;
+        if ($hash && !$plaintext && $this->check_password_encryption("", !!$cdbu))
+            $hash = $this->hash_password($hash);
+
+        $use_time = $plaintext ? 0 : $Now;
         if ($cdbu) {
-            $hash = $new;
-            if ($hash
-                && !($flags & self::CHANGE_PASSWORD_PLAINTEXT)
-                && $this->check_password_encryption("", true))
-                $hash = $this->hash_password($hash);
-            $cdbu->password = $hash;
-            $cdbu->passwordTime = $Now;
-            Dbl::ql($this->conf->contactdb(), "update ContactInfo set password=?, passwordTime=? where contactDbId=?", $cdbu->password, $cdbu->passwordTime, $cdbu->contactDbId);
-            if ($this->contactId && $this->password) {
-                $this->password = "";
-                $this->passwordTime = $cdbu->passwordTime;
-                $this->conf->ql("update ContactInfo set password=?, passwordTime=? where contactId=?", $this->password, $this->passwordTime, $this->contactId);
-            }
+            $cdbu->apply_updater(["passwordUseTime" => $use_time, "password" => $hash, "passwordTime" => $Now], true);
+            if ($this->contactId && $this->password)
+                $this->apply_updater(["passwordUseTime" => $use_time, "password" => "", "passwordTime" => $Now], false);
         } else if ($this->contactId) {
-            $hash = $new;
-            if ($hash
-                && !($flags & self::CHANGE_PASSWORD_PLAINTEXT)
-                && $this->check_password_encryption("", false))
-                $hash = $this->hash_password($hash);
-            $this->password = $hash;
-            $this->passwordTime = $Now;
-            $this->conf->ql("update ContactInfo set password=?, passwordTime=? where contactId=?", $this->password, $this->passwordTime, $this->contactId);
+            $this->apply_updater(["passwordUseTime" => $use_time, "password" => $hash, "passwordTime" => $Now], false);
         }
         return true;
     }
 
 
     function sendAccountInfo($sendtype, $sensitive) {
-        assert(!$this->disabled);
+        assert(!$this->is_disabled());
 
         $cdbu = $this->contactdb_user();
         $rest = array();
         if ($sendtype === "create") {
-            if ($cdbu && $cdbu->passwordUseTime)
+            if ($cdbu && $cdbu->passwordUseTime) {
                 $template = "@activateaccount";
-            else
+            } else {
                 $template = "@createaccount";
+            }
         } else if ($sendtype === "forgot") {
-            if ($this->conf->opt("safePasswords") <= 1 && $this->plaintext_password())
+            if ($this->conf->opt("safePasswords") <= 1
+                && $this->plaintext_password()) {
                 $template = "@accountinfo";
-            else {
+            } else {
+                if (!$cdbu && $this->conf->contactdb()) {
+                    error_log("{$this->conf->dbname}: {$this->email} local capability");
+                }
                 $capmgr = $this->conf->capability_manager($cdbu ? "U" : null);
                 $rest["capability"] = $capmgr->create(CAPTYPE_RESETPASSWORD, array("user" => $this, "timeExpires" => time() + 259200));
                 $this->conf->log_for($this, null, "Created password reset " . substr($rest["capability"], 0, 8) . "...");
                 $template = "@resetpassword";
             }
         } else {
-            if ($this->plaintext_password())
+            if ($this->plaintext_password()) {
                 $template = "@accountinfo";
-            else
+            } else {
                 return false;
+            }
         }
 
         $mailer = new HotCRPMailer($this->conf, $this, null, $rest);
@@ -1573,6 +1588,15 @@ class Contact {
         ++self::$rights_version;
     }
 
+    function update_my_rights() {
+        if ($this->contactId > 0) {
+            self::update_rights();
+        } else {
+            $this->contactXid = self::$next_xid--;
+            $this->_rights_version = self::$rights_version - 1;
+        }
+    }
+
     private function load_author_reviewer_status() {
         // Load from database
         $result = null;
@@ -1581,7 +1605,7 @@ class Contact {
                    "exists (select * from PaperReview where contactId=?)"];
             $qv = [$this->contactId, $this->contactId];
             if ($this->isPC) {
-                $qs[] = "exists (select * from PaperReview where requestedBy=? and contactId!=?)";
+                $qs[] = "exists (select * from PaperReview where requestedBy=? and reviewType<=" . REVIEW_PC . " and contactId!=?)";
                 array_push($qv, $this->contactId, $this->contactId);
             } else
                 $qs[] = "0";
@@ -1601,10 +1625,13 @@ class Contact {
         Dbl::free($result);
 
         // Update contact information from capabilities
-        if ($this->capabilities) {
-            foreach ($this->capabilities as $pid => $cap)
-                if ($pid && ($cap & self::CAP_AUTHORVIEW))
+        if ($this->_capabilities) {
+            foreach ($this->_capabilities as $k => $v) {
+                if (str_starts_with($k, "@av") && $v)
                     $this->_active_roles |= self::ROLE_AUTHOR;
+                else if (str_starts_with($k, "@ra") && $v)
+                    $this->_active_roles |= self::ROLE_REVIEWER;
+            }
         }
     }
 
@@ -1614,7 +1641,7 @@ class Contact {
                 $this->_has_outstanding_review = $this->_is_lead =
                 $this->_is_explicit_manager = $this->_is_metareviewer =
                 $this->_can_view_pc = $this->_dangerous_track_mask =
-                $this->_authored_papers = null;
+                $this->_has_approvable = $this->_authored_papers = null;
             $this->_rights_version = self::$rights_version;
         }
     }
@@ -1629,7 +1656,7 @@ class Contact {
     function authored_papers() {
         $this->check_rights_version();
         if ($this->_authored_papers === null)
-            $this->_authored_papers = $this->is_author() ? $this->conf->paper_set($this, ["author" => true, "tags" => true])->all() : [];
+            $this->_authored_papers = $this->is_author() ? $this->conf->paper_set(["author" => true, "tags" => true], $this)->all() : [];
         return $this->_authored_papers;
     }
 
@@ -1655,8 +1682,13 @@ class Contact {
     }
 
     function contactdb_roles() {
-        $this->is_author(); // load _db_roles
-        return $this->roles | ($this->_db_roles & (self::ROLE_AUTHOR | self::ROLE_REVIEWER));
+        if ($this->is_disabled())
+            return 0;
+        else {
+            $this->is_author(); // load _db_roles
+            return $this->roles
+                | ($this->_db_roles & (self::ROLE_AUTHOR | self::ROLE_REVIEWER));
+        }
     }
 
     function has_outstanding_review() {
@@ -1677,13 +1709,11 @@ class Contact {
 
     function is_discussion_lead() {
         $this->check_rights_version();
-        if (!isset($this->_is_lead)) {
-            $result = null;
-            if ($this->contactId > 0)
-                $result = $this->conf->qe("select exists (select * from Paper where leadContactId=?)", $this->contactId);
-            $this->_is_lead = edb_nrows($result) > 0;
-            Dbl::free($result);
-        }
+        if (!isset($this->_is_lead))
+            $this->_is_lead = $this->contactId > 0
+                && $this->isPC
+                && $this->conf->has_any_lead_or_shepherd()
+                && $this->conf->fetch_ivalue("select exists (select * from Paper where leadContactId=?)", $this->contactId);
         return $this->_is_lead;
     }
 
@@ -1695,7 +1725,7 @@ class Contact {
                 && $this->isPC
                 && ($this->conf->check_any_admin_tracks($this)
                     || ($this->conf->has_any_manager()
-                        && $this->conf->fetch_value("select exists (select * from Paper where managerContactId=?)", $this->contactId) > 0)))
+                        && $this->conf->fetch_ivalue("select exists (select * from Paper where managerContactId=?)", $this->contactId) > 0)))
                 $this->_is_explicit_manager = true;
         }
         return $this->_is_explicit_manager;
@@ -1707,6 +1737,39 @@ class Contact {
 
     function is_track_manager() {
         return $this->privChair || $this->conf->check_any_admin_tracks($this);
+    }
+
+    function has_review_pending_approval($my_request_only = false) {
+        $this->check_rights_version();
+        if ($this->_has_approvable === null) {
+            $this->_has_approvable = 0;
+            if ($this->conf->ext_subreviews > 1) {
+                if ($this->is_manager()) {
+                    $search = new PaperSearch($this, "ext:pending-approval OR (has:proposal admin:me) HIGHLIGHT:pink ext:pending-approval:myreq HIGHLIGHT:green ext:pending-approval HIGHLIGHT:yellow (has:proposal admin:me)");
+                    $search->paper_ids(); // actually perform search
+                    if (!empty($search->highlightmap)) {
+                        $colors = array_unique(call_user_func_array("array_merge", array_values($search->highlightmap)));
+                        foreach (["green", "pink", "yellow"] as $i => $k)
+                            if (in_array($k, $colors))
+                                $this->_has_approvable |= 1 << $i;
+                    }
+                } else if ($this->is_requester()
+                           && $this->conf->fetch_ivalue("select exists (select * from PaperReview where reviewType=" . REVIEW_EXTERNAL . " and reviewSubmitted is null and timeApprovalRequested>0 and requestedBy={$this->contactId})")) {
+                    $this->_has_approvable = 2;
+                }
+            } else if ($this->is_manager()) {
+                $search = new PaperSearch($this, "has:proposal admin:me");
+                if ($search->paper_ids())
+                    $this->_has_approvable = 4;
+            }
+        }
+        $flag = $my_request_only ? 2 : 3;
+        return ($this->_has_approvable & $flag) !== 0;
+    }
+
+    function has_proposal_pending() {
+        $this->has_review_pending_approval();
+        return ($this->_has_approvable & 4) !== 0;
     }
 
 
@@ -1745,12 +1808,12 @@ class Contact {
                 $this->_review_tokens[] = $token;
         }
         $new_ntokens = count($this->_review_tokens);
-        if ($new_ntokens == 0)
+        if ($new_ntokens === 0)
             $this->_review_tokens = null;
-        if ($new_ntokens != $old_ntokens)
-            self::update_rights();
+        if ($new_ntokens !== $old_ntokens)
+            $this->update_my_rights();
         if ($this->_activated && $new_ntokens != $old_ntokens)
-            $this->conf->save_session("rev_tokens", $this->_review_tokens);
+            $this->save_session("rev_tokens", $this->_review_tokens);
         return $new_ntokens != $old_ntokens;
     }
 
@@ -1759,18 +1822,19 @@ class Contact {
 
     function topic_interest_map() {
         global $Me;
-        if ($this->_topic_interest_map !== null)
-            return $this->_topic_interest_map;
-        if ($this->contactId <= 0 || !$this->conf->has_topics())
-            return array();
-        if (($this->roles & self::ROLE_PCLIKE)
-            && $this !== $Me
-            && ($pcm = $this->conf->pc_members())
-            && $this === get($pcm, $this->contactId))
-            self::load_topic_interests($pcm);
-        else {
-            $result = $this->conf->qe("select topicId, interest from TopicInterest where contactId={$this->contactId} and interest!=0");
-            $this->_topic_interest_map = Dbl::fetch_iimap($result);
+        if ($this->_topic_interest_map === null) {
+            if ($this->contactId <= 0 || !$this->conf->has_topics())
+                $this->_topic_interest_map = [];
+            else if (($this->roles & self::ROLE_PCLIKE)
+                     && $this !== $Me
+                     && ($pcm = $this->conf->pc_members())
+                     && $this === get($pcm, $this->contactId))
+                self::load_topic_interests($pcm);
+            else {
+                $result = $this->conf->qe("select topicId, interest from TopicInterest where contactId={$this->contactId} and interest!=0");
+                $this->_topic_interest_map = Dbl::fetch_iimap($result);
+                $this->_sort_topic_interest_map();
+            }
         }
         return $this->_topic_interest_map;
     }
@@ -1785,45 +1849,55 @@ class Contact {
         }
         $result = $c->conf->qe("select contactId, topicId, interest from TopicInterest where interest!=0 order by contactId");
         $c = null;
-        while (($row = edb_row($result))) {
+        while (($row = $result->fetch_row())) {
             if (!$c || $c->contactId != $row[0])
                 $c = get($cbyid, $row[0]);
             if ($c)
                 $c->_topic_interest_map[(int) $row[1]] = (int) $row[2];
         }
         Dbl::free($result);
+        foreach ($contacts as $c)
+            $c->_sort_topic_interest_map();
+    }
+
+    private function _sort_topic_interest_map() {
+        $this->conf->topic_set()->ksort($this->_topic_interest_map);
     }
 
 
     // permissions policies
 
-    private function rights(PaperInfo $prow, $forceShow = null) {
+    private function dangerous_track_mask() {
+        if ($this->_dangerous_track_mask === null)
+            $this->_dangerous_track_mask = $this->conf->dangerous_track_mask($this);
+        return $this->_dangerous_track_mask;
+    }
+
+    private function rights(PaperInfo $prow) {
         $ci = $prow->contact_info($this);
 
         // check first whether administration is allowed
         if (!isset($ci->allow_administer)) {
             $ci->allow_administer = false;
             if (($this->contactId > 0
-                 && (!$prow->managerContactId
-                     || $prow->managerContactId == $this->contactId
-                     || !$ci->conflictType)
-                 && ($this->privChair
-                     || $prow->managerContactId == $this->contactId
-                     || ($this->isPC
-                         && $this->is_track_manager()
-                         && $this->conf->check_admin_tracks($prow, $this))))
+                 && $prow->managerContactId == $this->contactId)
+                || ($this->privChair
+                    && (!$prow->managerContactId || $ci->conflictType <= 0)
+                    && (!($this->dangerous_track_mask() & Track::BITS_VIEWADMIN)
+                        || ($this->conf->check_tracks($prow, $this, Track::VIEW)
+                            && $this->conf->check_tracks($prow, $this, Track::ADMIN))))
+                || ($this->isPC
+                    && $this->is_track_manager()
+                    && (!$prow->managerContactId || $ci->conflictType <= 0)
+                    && $this->conf->check_admin_tracks($prow, $this))
                 || $this->is_site_contact) {
                 $ci->allow_administer = true;
             }
         }
 
         // correct $forceShow
-        if (!$ci->allow_administer)
-            $forceShow = false;
-        else if ($forceShow === null)
-            $forceShow = ($this->_overrides & self::OVERRIDE_CONFLICT) !== 0;
-        else if ($forceShow === "any")
-            $forceShow = !!$ci->forced_rights_link;
+        $forceShow = $ci->allow_administer
+            && ($this->_overrides & self::OVERRIDE_CONFLICT) !== 0;
         if ($forceShow)
             $ci = $ci->get_forced_rights();
 
@@ -1833,12 +1907,14 @@ class Contact {
 
             // check current administration status
             $ci->can_administer = $ci->allow_administer
-                && (!$ci->conflictType || $forceShow);
+                && ($ci->conflictType <= 0 || $forceShow);
 
             // check PC tracking
             // (see also can_accept_review_assignment*)
             $tracks = $this->conf->has_tracks();
-            $am_lead = $this->contactId > 0 && isset($prow->leadContactId)
+            $am_lead = $this->contactId > 0
+                && $this->isPC
+                && isset($prow->leadContactId)
                 && $prow->leadContactId == $this->contactId;
             $isPC = $this->isPC
                 && (!$tracks
@@ -1850,19 +1926,33 @@ class Contact {
             // check whether PC privileges apply
             $ci->allow_pc_broad = $ci->allow_administer || $isPC;
             $ci->allow_pc = $ci->can_administer
-                || ($isPC && !$ci->conflictType);
+                || ($isPC && $ci->conflictType <= 0);
+
+            // check review accept capability
+            if ($ci->reviewType == 0
+                && $this->_capabilities !== null
+                && ($rcid = get($this->_capabilities, "@ra{$prow->paperId}"))
+                && ($ru = $this->conf->cached_user_by_id($rcid))
+                && ($rci = $prow->contact_info($ru))) {
+                $ci->reviewType = $rci->reviewType;
+                $ci->review_status = $rci->review_status;
+            }
 
             // check whether this is a potential reviewer
             // (existing external reviewer or PC)
-            if ($ci->reviewType > 0 || $am_lead || $ci->allow_administer)
+            if ($ci->reviewType > 0 || $am_lead)
                 $ci->potential_reviewer = true;
-            else if ($ci->allow_pc)
+            else if ($ci->allow_administer || $ci->allow_pc)
                 $ci->potential_reviewer = !$tracks
-                    || $this->conf->check_tracks($prow, $this, Track::UNASSREV);
+                    || !$this->conf->check_track_review_sensitivity()
+                    || ($ci->allow_administer
+                        && !($this->_dangerous_track_mask & Track::BITS_REVIEW))
+                    || ($this->conf->check_tracks($prow, $this, Track::ASSREV)
+                        && $this->conf->check_tracks($prow, $this, Track::UNASSREV));
             else
                 $ci->potential_reviewer = false;
             $ci->allow_review = $ci->potential_reviewer
-                && ($ci->can_administer || !$ci->conflictType);
+                && ($ci->can_administer || $ci->conflictType <= 0);
 
             // check author allowance
             $ci->act_author = $ci->conflictType >= CONFLICT_AUTHOR;
@@ -1872,62 +1962,88 @@ class Contact {
             // If an author-view capability is set, then use it -- unless
             // this user is a PC member or reviewer, which takes priority.
             $ci->view_conflict_type = $ci->conflictType;
-            if (isset($this->capabilities)
-                && isset($this->capabilities[$prow->paperId])
-                && ($this->capabilities[$prow->paperId] & self::CAP_AUTHORVIEW)
+            if ($this->_capabilities !== null
+                && get($this->_capabilities, "@av{$prow->paperId}")
                 && !$isPC
                 && !$ci->review_status)
                 $ci->view_conflict_type = CONFLICT_AUTHOR;
             $ci->act_author_view = $ci->view_conflict_type >= CONFLICT_AUTHOR;
             $ci->allow_author_view = $ci->act_author_view || $ci->allow_administer;
 
-            // check blindness
-            $bs = $this->conf->submission_blindness();
-            $ci->nonblind = $bs == Conf::BLIND_NEVER
-                || ($bs == Conf::BLIND_OPTIONAL
-                    && !$prow->blind)
-                || ($bs == Conf::BLIND_UNTILREVIEW
-                    && $ci->review_status > 0)
-                || ($prow->outcome > 0
-                    && ($isPC || $ci->allow_review)
-                    && $this->conf->time_reviewer_view_accepted_authors());
+            // check decision visibility
+            $ci->can_view_decision = $ci->can_administer
+                || ($ci->act_author_view
+                    && $prow->can_author_view_decision())
+                || ($ci->allow_pc_broad
+                    && $this->conf->time_pc_view_decision($ci->view_conflict_type > 0))
+                || ($ci->review_status > 0
+                    && $this->conf->time_reviewer_view_decision()
+                    && ($ci->allow_pc_broad
+                        || $this->conf->setting("extrev_view") > 0));
 
-            // check dangerous track mask
-            if ($ci->allow_administer && $this->_dangerous_track_mask === null)
-                $this->_dangerous_track_mask = $this->conf->dangerous_track_mask($this);
+            // check view-authors state
+            if ($ci->act_author_view && !$ci->allow_administer) {
+                $ci->view_authors_state = 2;
+            } else if ($ci->allow_pc_broad || $ci->review_status != 0) {
+                $bs = $this->conf->submission_blindness();
+                $nb = $bs == Conf::BLIND_NEVER
+                    || ($bs == Conf::BLIND_OPTIONAL
+                        && !$prow->blind)
+                    || ($bs == Conf::BLIND_UNTILREVIEW
+                        && $ci->review_status > 0)
+                    || ($prow->outcome > 0
+                        && ($isPC || $ci->allow_review)
+                        && $ci->can_view_decision
+                        && $this->conf->time_reviewer_view_accepted_authors());
+                if ($ci->allow_administer) {
+                    $ci->view_authors_state = $nb ? 2 : 1;
+                } else if ($nb
+                           && ($prow->timeSubmitted != 0
+                               || ($ci->allow_pc_broad
+                                   && $prow->timeWithdrawn <= 0
+                                   && $this->conf->can_pc_see_active_submissions()))) {
+                    $ci->view_authors_state = 2;
+                } else {
+                    $ci->view_authors_state = 0;
+                }
+            } else {
+                $ci->view_authors_state = 0;
+            }
         }
 
         return $ci;
     }
 
-    function __rights(PaperInfo $prow, $forceShow = null) {
+    function __rights(PaperInfo $prow) {
         // public access point; to be avoided
-        return $this->rights($prow, $forceShow);
+        return $this->rights($prow);
     }
 
     function override_deadlines($rights) {
-        if (!($this->_overrides & self::OVERRIDE_TIME))
+        if (($this->_overrides & (self::OVERRIDE_CHECK_TIME | self::OVERRIDE_TIME))
+            === self::OVERRIDE_CHECK_TIME)
             return false;
         if ($rights && $rights instanceof PaperInfo)
             $rights = $this->rights($rights);
-        return $rights ? $rights->allow_administer : $this->privChair;
+        return $rights ? $rights->can_administer : $this->privChair;
     }
 
     function allow_administer(PaperInfo $prow = null) {
         if ($prow) {
             $rights = $this->rights($prow);
             return $rights->allow_administer;
-        } else
+        } else {
             return $this->privChair;
+        }
     }
 
-    function can_meaningfully_override(PaperInfo $prow) {
+    function has_overridable_conflict(PaperInfo $prow) {
         if ($this->is_manager()) {
-            $rights = $this->rights($prow, "any");
-            return $rights->allow_administer
-                && ($rights->conflictType > 0 || $this->_dangerous_track_mask);
-        } else
+            $rights = $this->rights($prow);
+            return $rights->allow_administer && $rights->conflictType > 0;
+        } else {
             return false;
+        }
     }
 
     function can_change_password($acct) {
@@ -1938,14 +2054,13 @@ class Contact {
             return $acct
                 && $this->contactId > 0
                 && $this->contactId == $acct->contactId
-                && isset($_SESSION)
-                && isset($_SESSION["trueuser"])
-                && strcasecmp($_SESSION["trueuser"]->email, $acct->email) == 0;
+                && $this->_activated
+                && !self::$true_user;
     }
 
-    function can_administer(PaperInfo $prow = null, $forceShow = null) {
+    function can_administer(PaperInfo $prow = null) {
         if ($prow) {
-            $rights = $this->rights($prow, $forceShow);
+            $rights = $this->rights($prow);
             return $rights->can_administer;
         } else
             return $this->privChair;
@@ -1954,8 +2069,7 @@ class Contact {
     private function _can_administer_for_track(PaperInfo $prow, $rights, $ttype) {
         return $rights->can_administer
             && (!($this->_dangerous_track_mask & (1 << $ttype))
-                || $this->conf->check_tracks($prow, $this, $ttype)
-                || ($this->_overrides & self::OVERRIDE_CONFLICT) !== 0);
+                || $this->conf->check_tracks($prow, $this, $ttype));
     }
 
     function can_administer_for_track(PaperInfo $prow = null, $ttype) {
@@ -1965,18 +2079,32 @@ class Contact {
             return $this->privChair;
     }
 
-    function act_pc(PaperInfo $prow = null, $forceShow = null) {
-        if ($prow) {
-            $rights = $this->rights($prow, $forceShow);
-            return $rights->allow_pc;
-        } else
+    function is_primary_administrator(PaperInfo $prow) {
+        // - Assigned administrator is primary
+        // - Otherwise, track administrators are primary
+        // - Otherwise, chairs are primary
+        $rights = $this->rights($prow);
+        if ($rights->primary_administrator === null) {
+            $rights->primary_administrator = $rights->allow_administer
+                && ($prow->managerContactId
+                    ? $prow->managerContactId == $this->contactId
+                    : !$this->privChair
+                      || !$this->conf->check_paper_track_sensitivity($prow, Track::ADMIN));
+        }
+        return $rights->primary_administrator;
+    }
+
+    function act_pc(PaperInfo $prow = null) {
+        if ($prow)
+            return $this->rights($prow)->allow_pc;
+        else
             return $this->isPC;
     }
 
     function can_view_pc() {
         $this->check_rights_version();
         if ($this->_can_view_pc === null) {
-            if ($this->is_manager())
+            if ($this->is_manager() || $this->tracker_kiosk_state > 0)
                 $this->_can_view_pc = 2;
             else if ($this->isPC)
                 $this->_can_view_pc = $this->conf->opt("secretPC") ? 0 : 2;
@@ -1985,15 +2113,53 @@ class Contact {
         }
         return $this->_can_view_pc > 0;
     }
-    function can_view_contact_tags() {
+    function can_lookup_user() {
+        if ($this->privChair) {
+            return true;
+        } else {
+            $x = $this->conf->opt("allowLookupUser");
+            return $x || ($x === null && $this->can_view_pc());
+        }
+    }
+    function can_view_user_tags() {
         return $this->privChair
             || ($this->can_view_pc() && $this->_can_view_pc > 1);
     }
+    function can_view_user_tag($tag) {
+        return $this->can_view_user_tags()
+            && $this->conf->tags()->strip_nonviewable($tag, $this, null) !== "";
+    }
+    function viewable_user_tags() {
+        if ($this->privChair)
+            return $this->conf->pc_tags();
+        else if ($this->can_view_pc() && $this->_can_view_pc > 1) {
+            $t = join(" ", $this->conf->pc_tags());
+            $t = $this->conf->tags()->strip_nonviewable($t, $this, null);
+            return explode(" ", $t);
+        } else
+            return [];
+    }
 
-    function can_view_tracker() {
+    function can_view_tracker($tracker_json = null) {
         return $this->privChair
-            || ($this->isPC && $this->conf->check_default_track($this, Track::VIEWTRACKER))
-            || $this->tracker_kiosk_state;
+            || ($this->isPC
+                && $this->conf->check_default_track($this, Track::VIEWTRACKER)
+                && (!$tracker_json
+                    || !isset($tracker_json->visibility)
+                    || ($this->has_tag(substr($tracker_json->visibility, 1))
+                        === ($tracker_json->visibility[0] === "+"))))
+            || $this->tracker_kiosk_state > 0;
+    }
+
+    function include_tracker_conflict($tracker_json = null) {
+        return $this->isPC
+            && (!($perm = $this->conf->track_permission("_", Track::VIEWTRACKER))
+                || $perm === "+none"
+                || $this->has_permission($perm))
+            && (!$tracker_json
+                || !isset($tracker_json->visibility)
+                || ($this->has_tag(substr($tracker_json->visibility, 1))
+                    === ($tracker_json->visibility[0] === "+")));
     }
 
     function view_conflict_type(PaperInfo $prow = null) {
@@ -2004,6 +2170,11 @@ class Contact {
             return 0;
     }
 
+    function act_author(PaperInfo $prow) {
+        $rights = $this->rights($prow);
+        return $rights->act_author;
+    }
+
     function act_author_view(PaperInfo $prow) {
         $rights = $this->rights($prow);
         return $rights->act_author_view;
@@ -2011,10 +2182,12 @@ class Contact {
 
     function act_author_view_sql($table, $only_if_complex = false) {
         $m = [];
-        if (isset($this->capabilities) && !$this->isPC) {
-            foreach ($this->capabilities as $pid => $cap)
-                if ($pid && ($cap & Contact::CAP_AUTHORVIEW))
-                    $m[] = "Paper.paperId=$pid";
+        if ($this->_capabilities !== null && !$this->isPC) {
+            foreach ($this->_capabilities as $k => $v)
+                if (str_starts_with($k, "@av")
+                    && $v
+                    && ctype_digit(substr($k, 3)))
+                    $m[] = "Paper.paperId=" . substr($k, 3);
         }
         if (empty($m) && $this->contactId && $only_if_complex)
             return false;
@@ -2027,10 +2200,22 @@ class Contact {
     }
 
     function act_reviewer_sql($table) {
-        $sql = $this->contactId ? "$table.contactId={$this->contactId}" : "false";
+        $m = [];
+        if ($this->contactId > 0)
+            $m[] = "{$table}.contactId={$this->contactId}";
         if (($rev_tokens = $this->review_tokens()))
-            $sql = "($sql or $table.reviewToken in (" . join(",", $rev_tokens) . "))";
-        return $sql;
+            $m[] = "{$table}.reviewToken in (" . join(",", $rev_tokens) . ")";
+        if ($this->_capabilities !== null) {
+            foreach ($this->_capabilities as $k => $v)
+                if (str_starts_with($k, "@ra")
+                    && $v
+                    && ctype_digit(substr($k, 3)))
+                    $m[] = "({$table}.paperId=" . substr($k, 3) . " and {$table}.contactId=" . $v . ")";
+        }
+        if (count($m) > 1)
+            return "(" . join(" or ", $m) . ")";
+        else
+            return empty($m) ? "false" : $m[0];
     }
 
     function can_start_paper() {
@@ -2045,13 +2230,13 @@ class Contact {
         return array("deadline" => "sub_reg", "override" => $this->privChair);
     }
 
-    function can_edit_paper(PaperInfo $prow) {
-        $rights = $this->rights($prow, "any");
+    function allow_edit_paper(PaperInfo $prow) {
+        $rights = $this->rights($prow);
         return $rights->allow_administer || $prow->has_author($this);
     }
 
     function can_update_paper(PaperInfo $prow) {
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         return $rights->allow_author
             && $prow->timeWithdrawn <= 0
             && (($prow->outcome >= 0 && $this->conf->timeUpdatePaper($prow))
@@ -2061,7 +2246,7 @@ class Contact {
     function perm_update_paper(PaperInfo $prow) {
         if ($this->can_update_paper($prow))
             return null;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         if (!$rights->allow_author && $rights->allow_author_view)
             $whyNot["signin"] = "edit_paper";
@@ -2069,11 +2254,14 @@ class Contact {
             $whyNot["author"] = 1;
         if ($prow->timeWithdrawn > 0)
             $whyNot["withdrawn"] = 1;
-        if ($prow->outcome < 0 && $this->can_view_decision($prow))
+        if ($prow->outcome < 0
+            && $rights->can_view_decision)
             $whyNot["rejected"] = 1;
-        if ($prow->timeSubmitted > 0 && $this->conf->setting("sub_freeze") > 0)
+        if ($prow->timeSubmitted > 0
+            && $this->conf->setting("sub_freeze") > 0)
             $whyNot["updateSubmitted"] = 1;
-        if (!$this->conf->timeUpdatePaper($prow) && !$this->override_deadlines($rights))
+        if (!$this->conf->timeUpdatePaper($prow)
+            && !$this->override_deadlines($rights))
             $whyNot["deadline"] = "sub_update";
         if ($rights->allow_administer)
             $whyNot["override"] = 1;
@@ -2081,7 +2269,7 @@ class Contact {
     }
 
     function can_finalize_paper(PaperInfo $prow) {
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         return $rights->allow_author
             && $prow->timeWithdrawn <= 0
             && ($this->conf->timeFinalizePaper($prow) || $this->override_deadlines($rights));
@@ -2090,7 +2278,7 @@ class Contact {
     function perm_finalize_paper(PaperInfo $prow) {
         if ($this->can_finalize_paper($prow))
             return null;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         if (!$rights->allow_author && $rights->allow_author_view)
             $whyNot["signin"] = "edit_paper";
@@ -2107,42 +2295,58 @@ class Contact {
         return $whyNot;
     }
 
-    function can_withdraw_paper(PaperInfo $prow) {
-        $rights = $this->rights($prow, "any");
+    function can_withdraw_paper(PaperInfo $prow, $display_only = false) {
+        $rights = $this->rights($prow);
+        $sub_withdraw = $this->conf->setting("sub_withdraw", 0);
+        $override = $this->override_deadlines($rights);
         return $rights->allow_author
-            && $prow->timeWithdrawn <= 0
-            && ($prow->outcome == 0 || $this->override_deadlines($rights));
+            && ($sub_withdraw !== -1
+                || $prow->timeSubmitted == 0
+                || $override)
+            && ($sub_withdraw !== 0
+                || !$prow->has_author_seen_any_review()
+                || $override)
+            && ($prow->outcome == 0
+                || ($display_only && !$prow->can_author_view_decision())
+                || $override);
     }
 
-    function perm_withdraw_paper(PaperInfo $prow) {
-        if ($this->can_withdraw_paper($prow))
+    function perm_withdraw_paper(PaperInfo $prow, $display_only = false) {
+        if ($this->can_withdraw_paper($prow, $display_only))
             return null;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         if ($prow->timeWithdrawn > 0)
             $whyNot["withdrawn"] = 1;
         if (!$rights->allow_author && $rights->allow_author_view)
             $whyNot["signin"] = "edit_paper";
-        else if (!$rights->allow_author)
+        else if (!$rights->allow_author) {
+            $whyNot["permission"] = "withdraw";
             $whyNot["author"] = 1;
-        else if ($prow->outcome != 0 && !$this->override_deadlines($rights))
-            $whyNot["decided"] = 1;
+        } else if (!$this->override_deadlines($rights)) {
+            $whyNot["permission"] = "withdraw";
+            $sub_withdraw = $this->conf->setting("sub_withdraw", 0);
+            if ($sub_withdraw === 0 && $prow->has_author_seen_any_review())
+                $whyNot["reviewsSeen"] = 1;
+            else if ($prow->outcome != 0)
+                $whyNot["decided"] = 1;
+        }
         if ($rights->allow_administer)
             $whyNot["override"] = 1;
         return $whyNot;
     }
 
     function can_revive_paper(PaperInfo $prow) {
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         return $rights->allow_author
             && $prow->timeWithdrawn > 0
-            && ($this->conf->timeUpdatePaper($prow) || $this->override_deadlines($rights));
+            && ($this->conf->timeFinalizePaper($prow) || $this->override_deadlines($rights));
     }
 
     function perm_revive_paper(PaperInfo $prow) {
         if ($this->can_revive_paper($prow))
             return null;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         if (!$rights->allow_author && $rights->allow_author_view)
             $whyNot["signin"] = "edit_paper";
@@ -2157,14 +2361,27 @@ class Contact {
         return $whyNot;
     }
 
-    function can_submit_final_paper(PaperInfo $prow) {
-        // see also EditFinal_SearchTerm
-        $rights = $this->rights($prow, "any");
+    function allow_edit_final_paper(PaperInfo $prow) {
+        // see also PaperInfo::can_author_edit_final_paper
+        if ($prow->timeWithdrawn > 0
+            || $prow->outcome <= 0
+            || !$this->conf->allow_final_versions())
+            return false;
+        $rights = $this->rights($prow);
         return $rights->allow_author
-            && $prow->timeWithdrawn <= 0
-            && $prow->outcome > 0
-            && $this->conf->collectFinalPapers()
-            && $this->can_view_decision($prow)
+            && $rights->can_view_decision
+            && ($rights->allow_administer
+                || $this->conf->time_submit_final_version());
+    }
+
+    function can_submit_final_paper(PaperInfo $prow) {
+        if ($prow->timeWithdrawn > 0
+            || $prow->outcome <= 0
+            || !$this->conf->allow_final_versions())
+            return false;
+        $rights = $this->rights($prow);
+        return $rights->allow_author
+            && $rights->can_view_decision
             && ($this->conf->time_submit_final_version()
                 || $this->override_deadlines($rights));
     }
@@ -2172,7 +2389,7 @@ class Contact {
     function perm_submit_final_paper(PaperInfo $prow) {
         if ($this->can_submit_final_paper($prow))
             return null;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         if (!$rights->allow_author && $rights->allow_author_view)
             $whyNot["signin"] = "edit_paper";
@@ -2184,9 +2401,9 @@ class Contact {
         // Don’t report “rejected” error to admins
         if ($prow->outcome <= 0
             || (!$rights->allow_administer
-                && !$this->can_view_decision($prow)))
+                && !$rights->can_view_decision))
             $whyNot["rejected"] = 1;
-        else if (!$this->conf->collectFinalPapers())
+        else if (!$this->conf->allow_final_versions())
             $whyNot["deadline"] = "final_open";
         else if (!$this->conf->time_submit_final_version()
                  && !$this->override_deadlines($rights))
@@ -2197,7 +2414,27 @@ class Contact {
     }
 
     function has_hidden_papers() {
-        return $this->hidden_papers !== null;
+        return $this->hidden_papers !== null
+            || ($this->dangerous_track_mask() & Track::BITS_VIEW);
+    }
+
+    function can_view_missing_papers() {
+        return $this->privChair
+            || ($this->isPC && $this->conf->check_all_tracks($this, Track::VIEW));
+    }
+
+    function no_paper_whynot($pid) {
+        $whynot = ["conf" => $this->conf, "paperId" => $pid];
+        if (!ctype_digit((string) $pid))
+            $whynot["invalidId"] = "paper";
+        else if ($this->can_view_missing_papers())
+            $whynot["noPaper"] = true;
+        else {
+            $whynot["permission"] = "view_paper";
+            if ($this->is_empty())
+                $whynot["signin"] = "view_paper";
+        }
+        return $whynot;
     }
 
     function can_view_paper(PaperInfo $prow, $pdf = false) {
@@ -2208,9 +2445,10 @@ class Contact {
             $this->hidden_papers[$prow->paperId] = true;
             return false;
         }
-        if ($this->privChair)
+        if ($this->privChair
+            && !($this->dangerous_track_mask() & Track::BITS_VIEW))
             return true;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         return $rights->allow_author_view
             || ($rights->review_status != 0
                 // assigned reviewer can view PDF of withdrawn, but submitted, paper
@@ -2220,28 +2458,29 @@ class Contact {
                 && (!$pdf || $this->conf->check_tracks($prow, $this, Track::VIEWPDF)));
     }
 
-    function perm_view_paper(PaperInfo $prow, $pdf = false) {
+    function perm_view_paper(PaperInfo $prow = null, $pdf = false, $pid = null) {
+        if (!$prow)
+            return $this->no_paper_whynot($pid);
         if ($this->can_view_paper($prow, $pdf))
             return null;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         $base_count = count($whyNot);
         if (!$rights->allow_author_view
             && !$rights->review_status
-            && !$rights->allow_pc_broad)
+            && !$rights->allow_pc_broad) {
             $whyNot["permission"] = "view_paper";
-        else {
+            if ($this->is_empty())
+                $whyNot["signin"] = "view_paper";
+        } else {
             if ($prow->timeWithdrawn > 0)
                 $whyNot["withdrawn"] = 1;
             else if ($prow->timeSubmitted <= 0)
                 $whyNot["notSubmitted"] = 1;
-            if ($rights->allow_pc_broad
-                && !$this->conf->timePCViewPaper($prow, false))
-                $whyNot["deadline"] = "sub_sub";
             if ($pdf
-                && count($whyNot) == $base_count
+                && count($whyNot) === $base_count
                 && $this->can_view_paper($prow))
-                $whyNot["pdfPermission"] = 1;
+                $whyNot["permission"] = "view_doc";
         }
         return $whyNot;
     }
@@ -2264,7 +2503,7 @@ class Contact {
     function can_view_document_history(PaperInfo $prow) {
         if ($this->privChair)
             return true;
-        $rights = $this->rights($prow, "any");
+        $rights = $this->rights($prow);
         return $rights->act_author || $rights->can_administer;
     }
 
@@ -2274,8 +2513,8 @@ class Contact {
         if (!$prow)
             return (!$this->conf->opt("hideManager") && $this->is_reviewer())
                 || ($this->isPC && $this->is_explicit_manager());
-        $rights = $this->rights($prow, "any");
-        return $prow->managerContactId == $this->contactId
+        $rights = $this->rights($prow);
+        return $rights->allow_administer
             || ($rights->potential_reviewer && !$this->conf->opt("hideManager"));
     }
 
@@ -2309,33 +2548,18 @@ class Contact {
     }
 
     /* NB caller must check can_view_paper() */
-    function can_view_authors(PaperInfo $prow, $forceShow = null) {
-        $rights = $this->rights($prow, $forceShow);
-        return ($rights->nonblind
-                && $prow->timeSubmitted != 0
-                && ($rights->allow_pc_broad
-                    || $rights->review_status != 0))
-            || ($rights->nonblind
-                && $prow->timeWithdrawn <= 0
-                && $rights->allow_pc_broad
-                && $this->conf->can_pc_see_all_submissions())
-            || ($rights->allow_administer
-                ? $rights->nonblind || $rights->rights_forced /* chair can't see blind authors unless forceShow */
-                : $rights->act_author_view);
+    function view_authors_state(PaperInfo $prow) {
+        $rights = $this->rights($prow);
+        return $rights->view_authors_state;
+    }
+
+    function can_view_authors(PaperInfo $prow) {
+        $vas = $this->view_authors_state($prow);
+        return $vas === 2 || ($vas === 1 && $this->is_admin_force());
     }
 
     function allow_view_authors(PaperInfo $prow) {
-        $rights = $this->rights($prow);
-        return $rights->allow_administer
-            || $rights->act_author_view
-            || ($rights->nonblind
-                && $prow->timeSubmitted != 0
-                && ($rights->allow_pc_broad
-                    || $rights->review_status != 0))
-            || ($rights->nonblind
-                && $prow->timeWithdrawn <= 0
-                && $rights->allow_pc_broad
-                && $this->conf->can_pc_see_all_submissions());
+        return $this->view_authors_state($prow) !== 0;
     }
 
     function can_view_some_authors() {
@@ -2354,41 +2578,83 @@ class Contact {
             return false;
         $pccv = $this->conf->setting("sub_pcconfvis");
         return $pccv == 2
-            || (!$pccv && $this->can_view_authors($prow))
-            || (!$pccv && $this->conf->setting("tracker")
-                && MeetingTracker::is_paper_tracked($prow)
-                && $this->can_view_tracker());
+            || (!$pccv
+                && ($this->can_view_authors($prow)
+                    || ($this->conf->setting("tracker")
+                        && MeetingTracker::can_view_tracker_at($this, $prow))));
     }
 
-    function can_view_paper_option(PaperInfo $prow, $opt) {
+    function can_view_some_conflicts() {
+        return $this->is_manager()
+            || $this->is_author()
+            || ($this->is_reviewer()
+                && (($pccv = $this->conf->setting("sub_pcconfvis")) == 2
+                    || (!$pccv
+                        && ($this->can_view_some_authors() || $this->conf->setting("tracker")))));
+    }
+
+    function view_option_state(PaperInfo $prow, $opt) {
         if (!is_object($opt)
-            && !($opt = $this->conf->paper_opts->get($opt)))
-            return false;
-        if (!$this->can_view_paper($prow, $opt->has_document()))
-            return false;
-        if ($opt->final
-            && ($prow->outcome <= 0
-                || !$this->can_view_decision($prow))
-            && ($opt->id === DTYPE_FINAL
-                ? $prow->finalPaperStorageId <= 1
-                : !$prow->option($opt->id)))
-            return false;
-        if ($opt->edit_condition()
-            && !($this->_overrides & self::OVERRIDE_EDIT_CONDITIONS)
-            && !$opt->test_edit_condition($prow))
-            return false;
+            && !($opt = $this->conf->paper_opts->get($opt))) {
+            return 0;
+        }
+        if (!$this->can_view_paper($prow, $opt->has_document())
+            || ($opt->final
+                && ($prow->outcome <= 0
+                    || $prow->timeSubmitted <= 0
+                    || !$this->can_view_decision($prow)))
+            || ($opt->exists_condition()
+                && !($this->_overrides & self::OVERRIDE_EDIT_CONDITIONS)
+                && !$opt->test_exists($prow))) {
+            return 0;
+        }
         $rights = $this->rights($prow);
         $oview = $opt->visibility;
-        if ($rights->allow_administer)
-            return $oview !== "nonblind" || $this->can_view_authors($prow);
-        else
-            return $rights->act_author_view
-                || (($rights->review_status != 0
-                     || $rights->allow_pc_broad)
-                    && (!$oview
-                        || $oview == "rev"
-                        || ($oview == "nonblind"
-                            && $this->can_view_authors($prow))));
+        if ($rights->allow_administer) {
+            if ($oview === "nonblind") {
+                return $rights->view_authors_state;
+            } else {
+                return 2;
+            }
+        } else if ($rights->act_author_view) {
+            return 2;
+        } else if ($rights->allow_pc_broad || $rights->review_status != 0) {
+            if ($oview === "nonblind") {
+                return $rights->view_authors_state;
+            } else {
+                return !$oview || $oview === "rev" ? 2 : 0;
+            }
+        } else {
+            return 0;
+        }
+    }
+
+    function can_view_option(PaperInfo $prow, $opt) {
+        $vos = $this->view_option_state($prow, $opt);
+        return $vos === 2 || ($vos === 1 && $this->is_admin_force());
+    }
+
+    function allow_view_option(PaperInfo $prow, $opt) {
+        return $this->view_option_state($prow, $opt) !== 0;
+    }
+
+    function edit_option_state(PaperInfo $prow, $opt) {
+        if ($opt->form_position() === false
+            || !$opt->test_editable($prow)
+            || ($opt->id > 0 && !$this->allow_view_option($prow, $opt))
+            || ($opt->final && !$this->allow_edit_final_paper($prow))
+            || ($opt->id === 0 && $this->allow_edit_final_paper($prow))) {
+            return 0;
+        }
+        if (!$opt->test_exists($prow)) {
+            return $opt->compile_exists_condition($prow) ? 1 : 0;
+        } else {
+            return 2;
+        }
+    }
+
+    function can_edit_option(PaperInfo $prow, $opt) {
+        return $this->edit_option_state($prow, $opt) === 2;
     }
 
     function user_option_list() {
@@ -2398,8 +2664,8 @@ class Contact {
             return $this->conf->paper_opts->nonfinal_option_list();
     }
 
-    function perm_view_paper_option(PaperInfo $prow, $opt) {
-        if ($this->can_view_paper_option($prow, $opt))
+    function perm_view_option(PaperInfo $prow, $opt) {
+        if ($this->can_view_option($prow, $opt))
             return null;
         if (!is_object($opt) && !($opt = $this->conf->paper_opts->get($opt)))
             return $prow->make_whynot();
@@ -2417,16 +2683,22 @@ class Contact {
                       && !$rights->review_status
                       && !$rights->allow_pc_broad)
                   || ($oview == "nonblind"
-                      && !$this->can_view_authors($prow))))
+                      && !$this->can_view_authors($prow)))) {
+            $whyNot["permission"] = "view_option";
             $whyNot["optionPermission"] = $opt;
-        else if ($opt->final && ($prow->outcome <= 0 || !$this->can_view_decision($prow)))
+        } else if ($opt->final
+                   && ($prow->outcome <= 0
+                       || $prow->timeSubmitted <= 0
+                       || !$rights->can_view_decision)) {
             $whyNot["optionNotAccepted"] = $opt;
-        else
+        } else {
+            $whyNot["permission"] = "view_option";
             $whyNot["optionPermission"] = $opt;
+        }
         return $whyNot;
     }
 
-    function can_view_some_paper_option(PaperOption $opt) {
+    function can_view_some_option(PaperOption $opt) {
         if (($opt->has_document() && !$this->can_view_some_pdf())
             || ($opt->final && !$this->can_view_some_decision()))
             return false;
@@ -2442,41 +2714,47 @@ class Contact {
             && ($rrow->contactId == $this->contactId
                 || ($this->_review_tokens
                     && $rrow->reviewToken
-                    && in_array($rrow->reviewToken, $this->_review_tokens)));
+                    && in_array($rrow->reviewToken, $this->_review_tokens))
+                || ($this->_capabilities !== null
+                    && get($this->_capabilities, "@ra" . $rrow->paperId) == $rrow->contactId));
     }
 
-    function is_owned_review(ReviewInfo $rrow = null) {
-        return $rrow
-            && ($rrow->contactId == $this->contactId
-                || ($this->_review_tokens && $rrow->reviewToken && in_array($rrow->reviewToken, $this->_review_tokens))
-                || ($rrow->requestedBy == $this->contactId
-                    && $rrow->reviewType == REVIEW_EXTERNAL
-                    && $this->conf->setting("pcrev_editdelegate")));
+    function is_owned_review($rbase = null) { // review/request/refusal
+        return $rbase
+            && $rbase->contactId > 0
+            && ($rbase->contactId == $this->contactId
+                || ($this->_review_tokens
+                    && $rbase->reviewToken
+                    && in_array($rbase->reviewToken, $this->_review_tokens))
+                || ($rbase->requestedBy == $this->contactId
+                    && $rbase->reviewType == REVIEW_EXTERNAL
+                    && $this->conf->ext_subreviews)
+                || ($this->_capabilities !== null
+                    && get($this->_capabilities, "@ra" . $rbase->paperId) == $rbase->contactId));
     }
 
     function can_view_review_assignment(PaperInfo $prow, $rrow) {
-        $rights = $this->rights($prow);
-        return $rights->allow_administer
-            || $rights->allow_pc
-            || $rights->review_status != 0
-            || $this->can_view_review($prow, $rrow);
+        if (!$rrow || $rrow->reviewType > 0) {
+            $rights = $this->rights($prow);
+            return $rights->allow_administer
+                || $rights->allow_pc
+                || $rights->review_status != 0
+                || $this->can_view_review($prow, $rrow);
+        } else {
+            return $this->can_view_review_identity($prow, $rrow);
+        }
     }
 
-    static function can_some_author_respond(PaperInfo $prow) {
-        return $prow->conf->any_response_open;
-    }
-
-    static function can_some_author_view_submitted_review(PaperInfo $prow) {
-        if (self::can_some_author_respond($prow))
-            return true;
-        else if ($prow->conf->au_seerev == Conf::AUSEEREV_TAGS)
-            return $prow->has_any_tag($prow->conf->tag_au_seerev);
-        else
-            return $prow->conf->au_seerev != 0;
+    function relevant_resp_rounds() {
+        $rrds = [];
+        foreach ($this->conf->resp_rounds() as $rrd)
+            if ($rrd->relevant($this))
+                $rrds[] = $rrd;
+        return $rrds;
     }
 
     private function can_view_submitted_review_as_author(PaperInfo $prow) {
-        return self::can_some_author_respond($prow)
+        return $prow->can_author_respond()
             || $this->conf->au_seerev == Conf::AUSEEREV_YES
             || ($this->conf->au_seerev == Conf::AUSEEREV_UNLESSINCOMPLETE
                 && (!$this->has_review()
@@ -2488,18 +2766,18 @@ class Contact {
     function can_view_some_review() {
         return $this->is_reviewer()
             || ($this->is_author()
-                && ($this->conf->au_seerev != 0
-                    || $this->conf->any_response_open));
+                && ($this->conf->au_seerev !== 0
+                    || $this->conf->any_response_open === 2
+                    || ($this->conf->any_response_open === 1
+                        && !empty($this->relevant_resp_rounds()))));
     }
 
-    private function seerev_setting(PaperInfo $prow, $rrow, $rights) {
-        $round = $rrow ? $rrow->reviewRound : "max";
+    private function seerev_setting(PaperInfo $prow, $rbase, $rights) {
+        $round = $rbase ? $rbase->reviewRound : "max";
         if ($rights->allow_pc) {
             $rs = $this->conf->round_setting("pc_seeallrev", $round);
             if (!$this->conf->has_tracks())
                 return $rs;
-            if ($this->conf->check_required_tracks($prow, $this, Track::VIEWREVOVERRIDE))
-                return Conf::PCSEEREV_YES;
             if ($this->conf->check_tracks($prow, $this, Track::VIEWREV)) {
                 if (!$this->conf->check_tracks($prow, $this, Track::VIEWALLREV))
                     $rs = 0;
@@ -2512,11 +2790,9 @@ class Contact {
         return -1;
     }
 
-    private function seerevid_setting(PaperInfo $prow, $rrow, $rights) {
-        $round = $rrow ? $rrow->reviewRound : "max";
+    private function seerevid_setting(PaperInfo $prow, $rbase, $rights) {
+        $round = $rbase ? $rbase->reviewRound : "max";
         if ($rights->allow_pc) {
-            if ($this->conf->check_required_tracks($prow, $this, Track::VIEWREVOVERRIDE))
-                return Conf::PCSEEREV_YES;
             if ($this->conf->check_tracks($prow, $this, Track::VIEWREVID)) {
                 $s = $this->conf->round_setting("pc_seeblindrev", $round);
                 if ($s >= 0)
@@ -2529,33 +2805,34 @@ class Contact {
         return -1;
     }
 
-    function can_view_review(PaperInfo $prow, $rrow, $forceShow = null, $viewscore = null) {
+    function can_view_review(PaperInfo $prow, $rrow, $viewscore = null) {
         if (is_int($rrow)) {
             $viewscore = $rrow;
             $rrow = null;
-        } else if ($viewscore === null)
+        } else if ($viewscore === null) {
             $viewscore = VIEWSCORE_AUTHOR;
-        if ($rrow && !($rrow instanceof ReviewInfo))
-            error_log("not ReviewInfo " . json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)));
+        }
         assert(!$rrow || $prow->paperId == $rrow->paperId);
-        $rights = $this->rights($prow, $forceShow);
+        $rights = $this->rights($prow);
         if ($this->_can_administer_for_track($prow, $rights, Track::VIEWREV)
             || $rights->reviewType == REVIEW_META
             || ($rrow
                 && $this->is_owned_review($rrow)
-                && $viewscore >= VIEWSCORE_REVIEWERONLY))
+                && $viewscore >= VIEWSCORE_REVIEWERONLY)) {
             return true;
+        }
         $rrowSubmitted = !$rrow || $rrow->reviewSubmitted > 0;
         $seerev = $this->seerev_setting($prow, $rrow, $rights);
         // See also PaperInfo::can_view_review_identity_of.
         return ($rights->act_author_view
                 && $rrowSubmitted
+                // NB: Reviews lacking author-visible fields have no ordinals.
                 && (!$rrow || $rrow->reviewOrdinal > 0)
                 && $this->can_view_submitted_review_as_author($prow)
                 && ($viewscore >= VIEWSCORE_AUTHOR
                     || ($viewscore >= VIEWSCORE_AUTHORDEC
                         && $prow->outcome
-                        && $this->can_view_decision($prow, $forceShow))))
+                        && $rights->can_view_decision)))
             || ($rights->allow_pc
                 && $rrowSubmitted
                 && $viewscore >= VIEWSCORE_PC
@@ -2572,11 +2849,11 @@ class Contact {
                 && $seerev >= 0);
     }
 
-    function perm_view_review(PaperInfo $prow, $rrow, $forceShow = null, $viewscore = null) {
-        if ($this->can_view_review($prow, $rrow, $forceShow, $viewscore))
+    function perm_view_review(PaperInfo $prow, $rrow, $viewscore = null) {
+        if ($this->can_view_review($prow, $rrow, $viewscore))
             return null;
         $rrowSubmitted = !$rrow || $rrow->reviewSubmitted > 0;
-        $rights = $this->rights($prow, $forceShow);
+        $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
         if ((!$rights->act_author_view
              && !$rights->allow_pc
@@ -2618,28 +2895,27 @@ class Contact {
         return $whyNot;
     }
 
-    function can_view_review_identity(PaperInfo $prow, ReviewInfo $rrow = null, $forceShow = null) {
-        $rights = $this->rights($prow, $forceShow);
+    function can_view_review_identity(PaperInfo $prow, $rbase = null) {
+        $rights = $this->rights($prow);
         // See also PaperInfo::can_view_review_identity_of.
         // See also ReviewerFexpr.
         if ($this->_can_administer_for_track($prow, $rights, Track::VIEWREVID)
             || $rights->reviewType == REVIEW_META
-            || ($rrow && $rrow->requestedBy == $this->contactId && $rights->allow_pc)
-            || ($rrow && $this->is_owned_review($rrow)))
+            || ($rbase && $rbase->requestedBy == $this->contactId && $rights->allow_pc)
+            || ($rbase && $this->is_owned_review($rbase)))
             return true;
-        $seerevid_setting = $this->seerevid_setting($prow, $rrow, $rights);
+        $seerevid_setting = $this->seerevid_setting($prow, $rbase, $rights);
         return ($rights->allow_pc
                 && $seerevid_setting == Conf::PCSEEREV_YES)
             || ($rights->allow_review
                 && $prow->review_not_incomplete($this)
                 && $seerevid_setting >= 0)
-            || !$this->conf->is_review_blind($rrow);
+            || !$this->conf->is_review_blind($rbase);
     }
 
     function can_view_some_review_identity() {
         $tags = "";
-        if (($t = $this->conf->permissive_track_tag_for($this, Track::VIEWREVOVERRIDE))
-            || ($t = $this->conf->permissive_track_tag_for($this, Track::VIEWREVID)))
+        if (($t = $this->conf->permissive_track_tag_for($this, Track::VIEWREVID)))
             $tags = " $t#0 ";
         if ($this->isPC)
             $rtype = $this->is_metareviewer() ? REVIEW_META : REVIEW_PC;
@@ -2658,7 +2934,7 @@ class Contact {
         return $answer;
     }
 
-    function can_view_review_round(PaperInfo $prow, ReviewInfo $rrow = null) {
+    function can_view_review_round(PaperInfo $prow, $rbase = null) {
         $rights = $this->rights($prow);
         return $rights->can_administer
             || $rights->allow_pc
@@ -2668,43 +2944,49 @@ class Contact {
     function can_view_review_time(PaperInfo $prow, ReviewInfo $rrow = null) {
         $rights = $this->rights($prow);
         return !$rights->act_author_view
-            || ($rrow && $rrow->reviewAuthorSeen
+            || ($rrow
+                && $rrow->reviewAuthorSeen
                 && $rrow->reviewAuthorSeen <= $rrow->reviewAuthorModified);
     }
 
-    function can_view_review_requester(PaperInfo $prow, ReviewInfo $rrow = null) {
+    function can_view_review_requester(PaperInfo $prow, $rbase = null) {
         $rights = $this->rights($prow);
         return $this->_can_administer_for_track($prow, $rights, Track::VIEWREVID)
-            || ($rrow && $rrow->requestedBy == $this->contactId && $rights->allow_pc)
-            || ($rrow && $this->is_owned_review($rrow))
-            || ($rights->allow_pc && $this->can_view_review_identity($prow, $rrow));
+            || ($rbase && $rbase->requestedBy == $this->contactId && $rights->allow_pc)
+            || ($rbase && $this->is_owned_review($rbase))
+            || ($rights->allow_pc && $this->can_view_review_identity($prow, $rbase));
     }
 
-    function can_request_review(PaperInfo $prow, $check_time) {
+    function can_request_review(PaperInfo $prow, $round, $check_time) {
         $rights = $this->rights($prow);
-        return ($rights->reviewType >= REVIEW_PC
-                || ($this->contactId > 0
-                    && isset($prow->leadContactId)
-                    && $prow->leadContactId == $this->contactId)
-                || $rights->allow_administer)
+        return ($rights->allow_administer
+                || (($rights->reviewType >= REVIEW_PC
+                     || ($this->contactId > 0
+                         && $this->isPC
+                         && isset($prow->leadContactId)
+                         && $prow->leadContactId == $this->contactId))
+                    && $this->conf->setting("extrev_chairreq", 0) >= 0))
             && (!$check_time
-                || $this->conf->time_review(null, false, true)
+                || $this->conf->time_review($round, false, true)
                 || $this->override_deadlines($rights));
     }
 
-    function perm_request_review(PaperInfo $prow, $check_time) {
-        if ($this->can_request_review($prow, $check_time))
+    function perm_request_review(PaperInfo $prow, $round, $check_time) {
+        if ($this->can_request_review($prow, $round, $check_time))
             return null;
         $rights = $this->rights($prow);
         $whyNot = $prow->make_whynot();
-        if ($rights->reviewType < REVIEW_PC
-            && ($this->contactId <= 0
-                || !isset($prow->leadContactId)
-                || $prow->leadContactId != $this->contactId)
-            && !$rights->allow_administer)
+        if (!$rights->allow_administer
+            && (($rights->reviewType < REVIEW_PC
+                 && ($this->contactId <= 0
+                     || !$this->isPC
+                     || !isset($prow->leadContactId)
+                     || $prow->leadContactId != $this->contactId))
+                || $this->conf->setting("extrev_chairreq", 0) < 0)) {
             $whyNot["permission"] = "request_review";
-        else {
-            $whyNot["deadline"] = ($rights->allow_pc ? "pcrev_hard" : "extrev_hard");
+        } else {
+            $whyNot["deadline"] = "extrev_chairreq";
+            $whyNot["reviewRound"] = $round;
             if ($rights->allow_administer)
                 $whyNot["override"] = 1;
         }
@@ -2715,6 +2997,7 @@ class Contact {
         return $this->isPC
             && $this->conf->setting("pcrev_any") > 0
             && $this->conf->time_review(null, true, true)
+            && $this->conf->check_any_tracks($this, Track::ASSREV)
             && $this->conf->check_any_tracks($this, Track::UNASSREV);
     }
 
@@ -2737,14 +3020,20 @@ class Contact {
     function can_become_reviewer_ignore_conflict(PaperInfo $prow = null) {
         if (!$prow)
             return $this->isPC
-                && ($this->conf->check_all_tracks($this, Track::ASSREV)
-                    || $this->conf->check_all_tracks($this, Track::UNASSREV));
+                && $this->conf->check_all_tracks($this, Track::ASSREV);
         $rights = $this->rights($prow);
-        return $rights->allow_pc_broad
-            && ($rights->reviewType > 0
-                || $rights->allow_administer
-                || $this->conf->check_tracks($prow, $this, Track::ASSREV)
-                || $this->conf->check_tracks($prow, $this, Track::UNASSREV));
+        return $rights->potential_reviewer
+            || ($rights->allow_pc_broad
+                && $this->conf->check_tracks($prow, $this, Track::ASSREV));
+    }
+
+    function can_enter_preference(PaperInfo $prow) {
+        return $this->isPC
+            && $this->can_become_reviewer_ignore_conflict($prow)
+            && ($this->can_view_paper($prow)
+                || ($prow->timeWithdrawn > 0
+                    && ($prow->timeSubmitted < 0
+                        || $this->conf->can_pc_see_active_submissions())));
     }
 
     function can_accept_review_assignment_ignore_conflict(PaperInfo $prow = null) {
@@ -2761,7 +3050,7 @@ class Contact {
     function can_accept_review_assignment(PaperInfo $prow) {
         $rights = $this->rights($prow);
         return ($rights->allow_pc
-                || ($this->isPC && !$rights->conflictType))
+                || ($this->isPC && $rights->conflictType <= 0))
             && ($rights->reviewType > 0
                 || $rights->allow_administer
                 || $this->conf->check_tracks($prow, $this, Track::ASSREV));
@@ -2787,6 +3076,7 @@ class Contact {
                 && $this->conf->setting("pcrev_any") > 0
                 && $this->conf->time_review(null, true, true))
             || ($rights->can_administer
+                && $rights->potential_reviewer /* true unless track perm */
                 && (($prow->timeSubmitted > 0 && !$submit)
                     || $this->override_deadlines($rights)));
     }
@@ -2809,7 +3099,7 @@ class Contact {
         else if ($prow->timeSubmitted <= 0)
             $whyNot["notSubmitted"] = 1;
         else {
-            if ($rights->conflictType && !$rights->can_administer)
+            if ($rights->conflictType > 0 && !$rights->can_administer)
                 $whyNot["conflict"] = 1;
             else if ($rights->allow_review
                      && !$this->rights_owned_review($rights, $rrow)
@@ -2821,7 +3111,7 @@ class Contact {
             else
                 $whyNot["deadline"] = ($rights->allow_pc ? "pcrev_hard" : "extrev_hard");
             if ($rights->allow_administer
-                && ($rights->conflictType || $prow->timeSubmitted <= 0))
+                && ($rights->conflictType > 0 || $prow->timeSubmitted <= 0))
                 $whyNot["forceShow"] = 1;
             if ($rights->allow_administer && isset($whyNot["deadline"]))
                 $whyNot["override"] = 1;
@@ -2858,7 +3148,7 @@ class Contact {
             if (!$this->conf->time_review(null, true, true))
                 $whyNot["deadline"] = ($user->isPC ? "pcrev_hard" : "extrev_hard");
             if ($rights->allow_administer
-                && ($rights->conflictType || $prow->timeSubmitted <= 0))
+                && ($rights->conflictType > 0 || $prow->timeSubmitted <= 0))
                 $whyNot["forceShow"] = 1;
             if ($rights->allow_administer && isset($whyNot["deadline"]))
                 $whyNot["override"] = 1;
@@ -2868,7 +3158,7 @@ class Contact {
 
     function can_clickthrough($ctype) {
         if (!$this->privChair && $this->conf->opt("clickthrough_$ctype")) {
-            $csha1 = sha1($this->conf->message_html("clickthrough_$ctype"));
+            $csha1 = sha1($this->conf->_i("clickthrough_$ctype"));
             $data = $this->data("clickthrough");
             return $data && get($data, $csha1);
         } else
@@ -2947,8 +3237,14 @@ class Contact {
                     && ($crow->commentType & COMMENTTYPE_BYAUTHOR)));
     }
 
-    function can_submit_comment(PaperInfo $prow, $crow) {
-        return $this->can_comment($prow, $crow, true);
+    function can_finalize_comment(PaperInfo $prow, $crow) {
+        global $Now;
+        return $crow
+            && ($crow->commentType & (COMMENTTYPE_RESPONSE | COMMENTTYPE_DRAFT)) === (COMMENTTYPE_RESPONSE | COMMENTTYPE_DRAFT)
+            && ($rrd = get($prow->conf->resp_rounds(), $crow->commentRound))
+            && $rrd->open > 0
+            && $rrd->open < $Now
+            && $prow->conf->setting("resp_active") > 0;
     }
 
     function perm_comment(PaperInfo $prow, $crow, $submit = false) {
@@ -2975,7 +3271,7 @@ class Contact {
                 $whyNot["conflict"] = 1;
             else
                 $whyNot["deadline"] = ($rights->allow_pc ? "pcrev_hard" : "extrev_hard");
-            if ($rights->allow_administer && $rights->conflictType)
+            if ($rights->allow_administer && $rights->conflictType > 0)
                 $whyNot["forceShow"] = 1;
             if ($rights->allow_administer && isset($whyNot['deadline']))
                 $whyNot["override"] = 1;
@@ -2983,11 +3279,8 @@ class Contact {
         return $whyNot;
     }
 
-    function perm_submit_comment(PaperInfo $prow, $crow) {
-        return $this->perm_comment($prow, $crow, true);
-    }
-
     function can_respond(PaperInfo $prow, CommentInfo $crow, $submit = false) {
+        global $Now;
         if ($prow->timeSubmitted <= 0
             || !($crow->commentType & COMMENTTYPE_RESPONSE)
             || !($rrd = get($prow->conf->resp_rounds(), $crow->commentRound)))
@@ -2997,7 +3290,8 @@ class Contact {
                 || $rights->act_author)
             && (($rights->allow_administer
                  && (!$submit || $this->override_deadlines($rights)))
-                || $rrd->time_allowed(true))
+                || $rrd->time_allowed(true)
+                || ($submit === 2 && $this->can_finalize_comment($prow, $crow)))
             && (!$rrd->search
                 || $rrd->search->test($prow));
     }
@@ -3018,7 +3312,7 @@ class Contact {
             $whyNot["deadline"] = "resp_done";
             if ($crow->commentRound)
                 $whyNot["deadline"] .= "_" . $crow->commentRound;
-            if ($rights->allow_administer && $rights->conflictType)
+            if ($rights->allow_administer && $rights->conflictType > 0)
                 $whyNot["forceShow"] = 1;
             if ($rights->allow_administer)
                 $whyNot["override"] = 1;
@@ -3035,33 +3329,44 @@ class Contact {
         return false;
     }
 
-    function can_view_comment(PaperInfo $prow, $crow, $forceShow = null) {
+    function can_view_comment(PaperInfo $prow, $crow, $textless = false) {
         $ctype = $crow ? $crow->commentType : COMMENTTYPE_AUTHOR;
-        $rights = $this->rights($prow, $forceShow);
+        $rights = $this->rights($prow);
         return ($crow && $this->is_my_comment($prow, $crow))
-            || $rights->can_administer
+            || ($rights->can_administer
+                && ($ctype >= COMMENTTYPE_AUTHOR
+                    || $rights->potential_reviewer))
             || ($rights->act_author_view
-                && ($ctype & (COMMENTTYPE_BYAUTHOR | COMMENTTYPE_RESPONSE)))
-            || ($rights->act_author_view
-                && $ctype >= COMMENTTYPE_AUTHOR
-                && !($ctype & COMMENTTYPE_DRAFT)
-                && $this->can_view_submitted_review_as_author($prow))
+                && (($ctype & (COMMENTTYPE_BYAUTHOR | COMMENTTYPE_RESPONSE))
+                    || ($ctype >= COMMENTTYPE_AUTHOR
+                        && !($ctype & COMMENTTYPE_DRAFT)
+                        && $this->can_view_submitted_review_as_author($prow))))
             || (!$rights->view_conflict_type
-                && !($ctype & COMMENTTYPE_DRAFT)
+                && (!($ctype & COMMENTTYPE_DRAFT)
+                    || ($textless && ($ctype & COMMENTTYPE_RESPONSE)))
                 && ($rights->allow_pc
                     ? $ctype >= COMMENTTYPE_PCONLY
                     : $ctype >= COMMENTTYPE_REVIEWER)
-                && $this->can_view_review($prow, null, $forceShow)
-                && ($this->conf->setting("cmt_revid")
-                    || $ctype >= COMMENTTYPE_AUTHOR
-                    || $this->can_view_review_identity($prow, null, $forceShow)));
+                && $this->can_view_review($prow, null)
+                && ($ctype >= COMMENTTYPE_AUTHOR
+                    || $this->conf->setting("cmt_revid")
+                    || $this->can_view_review_identity($prow, null)));
+    }
+
+    function can_view_comment_text(PaperInfo $prow, $crow) {
+        // assume can_view_comment is true
+        if (!$crow
+            || ($crow->commentType & (COMMENTTYPE_RESPONSE | COMMENTTYPE_DRAFT)) !== (COMMENTTYPE_RESPONSE | COMMENTTYPE_DRAFT))
+            return true;
+        $rights = $this->rights($prow);
+        return $rights->can_administer || $rights->act_author_view;
     }
 
     function can_view_new_comment_ignore_conflict(PaperInfo $prow) {
         // Goal: Return true if this user is part of the comment mention
         // completion for a new comment on $prow.
         // Problem: If authors are hidden, should we mention this user or not?
-        $rights = $this->rights($prow, null);
+        $rights = $this->rights($prow);
         return $rights->can_administer
             || $rights->allow_pc;
     }
@@ -3075,10 +3380,10 @@ class Contact {
                          . " or MyPaperReview.reviewId is not null)");
     }
 
-    function can_view_comment_identity(PaperInfo $prow, $crow, $forceShow = null) {
+    function can_view_comment_identity(PaperInfo $prow, $crow) {
         if ($crow && ($crow->commentType & (COMMENTTYPE_RESPONSE | COMMENTTYPE_BYAUTHOR)))
-            return $this->can_view_authors($prow, $forceShow);
-        $rights = $this->rights($prow, $forceShow);
+            return $this->can_view_authors($prow);
+        $rights = $this->rights($prow);
         return $this->_can_administer_for_track($prow, $rights, Track::VIEWREVID)
             || ($crow && $crow->contactId == $this->contactId)
             || (($rights->allow_pc
@@ -3090,7 +3395,7 @@ class Contact {
     }
 
     function can_view_comment_time(PaperInfo $prow, $crow) {
-        return $this->can_view_comment_identity($prow, $crow, true);
+        return $this->can_view_comment_identity($prow, $crow);
     }
 
     function can_view_comment_tags(PaperInfo $prow, $crow) {
@@ -3103,31 +3408,20 @@ class Contact {
     }
 
 
-    function can_view_decision(PaperInfo $prow, $forceShow = null) {
-        $rights = $this->rights($prow, $forceShow);
-        return $rights->can_administer
-            || ($rights->act_author_view
-                && $prow->can_author_view_decision())
-            || ($rights->allow_pc_broad
-                && $this->conf->timePCViewDecision($rights->view_conflict_type > 0))
-            || ($rights->review_status > 0
-                && $this->conf->time_reviewer_view_decision());
+    function can_view_decision(PaperInfo $prow) {
+        $rights = $this->rights($prow);
+        return $rights->can_view_decision;
     }
 
     function can_view_some_decision() {
         return $this->is_manager()
             || ($this->is_author() && $this->can_view_some_decision_as_author())
-            || ($this->isPC && $this->conf->timePCViewDecision(false))
+            || ($this->isPC && $this->conf->time_pc_view_decision(false))
             || ($this->is_reviewer() && $this->conf->time_reviewer_view_decision());
     }
 
     function can_view_some_decision_as_author() {
         return $this->conf->can_some_author_view_decision();
-    }
-
-    static function can_some_author_view_decision(PaperInfo $prow) {
-        return $prow->outcome
-            && $prow->conf->can_some_author_view_decision();
     }
 
     function can_set_decision(PaperInfo $prow) {
@@ -3164,10 +3458,10 @@ class Contact {
         else if ($rrow ? $this->is_owned_review($rrow) : $rights->allow_review)
             return VIEWSCORE_REVIEWERONLY - 1;
         else if (!$this->can_view_review($prow, $rrow))
-            return VIEWSCORE_MAX + 1;
+            return VIEWSCORE_EMPTYBOUND;
         else if ($rights->act_author_view
                  && $prow->outcome
-                 && $this->can_view_decision($prow))
+                 && $rights->can_view_decision)
             return VIEWSCORE_AUTHORDEC - 1;
         else if ($rights->act_author_view)
             return VIEWSCORE_AUTHOR - 1;
@@ -3189,7 +3483,7 @@ class Contact {
                 return VIEWSCORE_AUTHOR - 1;
             }
         } else {
-            return VIEWSCORE_MAX + 1;
+            return VIEWSCORE_EMPTYBOUND;
         }
     }
 
@@ -3411,11 +3705,11 @@ class Contact {
 
     function following_reviews(PaperInfo $prow, $watch) {
         if ($watch & self::WATCH_REVIEW_EXPLICIT)
-            return ($watch & self::WATCH_REVIEW) != 0;
+            return ($watch & self::WATCH_REVIEW) !== 0;
         else
             return ($this->defaultWatch & self::WATCH_REVIEW_ALL)
                 || (($this->defaultWatch & self::WATCH_REVIEW_MANAGED)
-                    && $this->allow_administer($prow))
+                    && $this->is_primary_administrator($prow))
                 || (($this->defaultWatch & self::WATCH_REVIEW)
                     && ($prow->has_author($this)
                         || $prow->has_reviewer($this)
@@ -3431,6 +3725,8 @@ class Contact {
         $dl = (object) ["now" => $Now, "email" => $this->email ? : null];
         if ($this->privChair)
             $dl->is_admin = true;
+        else if ($this->is_track_manager())
+            $dl->is_track_admin = true;
         if ($this->is_author())
             $dl->is_author = true;
         $dl->sub = (object) [];
@@ -3442,12 +3738,22 @@ class Contact {
         $sub_sub = $this->conf->setting("sub_sub");
         $dl->sub->open = +$this->conf->setting("sub_open") > 0;
         $dl->sub->sub = +$sub_sub;
-        if ($dl->sub->open)
-            $graces[] = [$dl->sub, "sub_grace"];
-        if ($sub_reg && (!$sub_update || $sub_reg < $sub_update))
+        $sub_graces = [];
+        if ($sub_reg
+            && (!$sub_update || $sub_reg < $sub_update)) {
             $dl->sub->reg = $sub_reg;
-        if ($sub_update && $sub_update != $sub_sub)
+            $sub_graces[] = "reg";
+        }
+        if ($sub_update
+            && $sub_update != $sub_sub) {
             $dl->sub->update = $sub_update;
+            $sub_graces[] = "update";
+        }
+        if ($dl->sub->open
+            && ($g = $this->conf->setting("sub_grace"))) {
+            $sub_graces[] = "sub";
+            array_push($graces, $dl->sub, $g, $sub_graces);
+        }
 
         $sb = $this->conf->submission_blindness();
         if ($sb === Conf::BLIND_ALWAYS)
@@ -3461,14 +3767,12 @@ class Contact {
         if ($this->conf->setting("resp_active") > 0
             && ($this->isPC || $this->is_author())) {
             $dlresps = [];
-            foreach ($this->conf->resp_rounds() as $rrd)
-                if ($rrd->open
-                    && ($this->isPC || $rrd->open < $Now)
-                    && ($this->isPC || !$rrd->search || $rrd->search->filter($this->authored_papers()))) {
-                    $dlresp = (object) ["open" => $rrd->open, "done" => +$rrd->done];
-                    $dlresps[$rrd->name] = $dlresp;
-                    $graces[] = [$dlresp, $rrd->grace];
-                }
+            foreach ($this->relevant_resp_rounds() as $rrd) {
+                $dlresp = (object) ["open" => $rrd->open, "done" => +$rrd->done];
+                $dlresps[$rrd->name] = $dlresp;
+                if ($rrd->grace)
+                    array_push($graces, $dlresp, $rrd->grace, ["done"]);
+            }
             if (!empty($dlresps))
                 $dl->resps = $dlresps;
         }
@@ -3483,7 +3787,8 @@ class Contact {
                 $dl->final->done = +$this->conf->setting("final_done");
                 $dl->final->ishard = true;
             }
-            $graces[] = [$dl->final, "final_grace"];
+            if (($g = $this->conf->setting("final_grace")))
+                array_push($graces, $dl->final, $g, ["done"]);
         }
 
         // reviewer deadlines
@@ -3520,31 +3825,22 @@ class Contact {
 
         // grace periods: give a minute's notice of an impending grace
         // period
-        foreach ($graces as $g) {
-            if (($grace = $this->conf->setting($g[1])))
-                foreach (array("reg", "update", "sub", "done") as $k)
-                    if (get($g[0], $k) && $g[0]->$k + 60 < $Now
-                        && $g[0]->$k + $grace >= $Now) {
-                        $kgrace = "{$k}_ingrace";
-                        $g[0]->$kgrace = true;
-                    }
+        for ($i = 0; $i !== count($graces); $i += 3) {
+            $dlx = $graces[$i];
+            foreach ($graces[$i + 2] as $k) {
+                if ($dlx->$k
+                    && $dlx->$k - 30 < $Now
+                    && $dlx->$k + $graces[$i + 1] >= $Now) {
+                    $kgrace = "{$k}_ingrace";
+                    $dlx->$kgrace = true;
+                }
+            }
         }
 
         // add meeting tracker
-        if (($this->isPC || $this->tracker_kiosk_state)
-            && $this->can_view_tracker()) {
-            $tracker = MeetingTracker::lookup($this->conf);
-            if ($tracker->trackerid
-                && ($tinfo = MeetingTracker::info_for($this))) {
-                $dl->tracker = $tinfo;
-                $dl->tracker_status = MeetingTracker::tracker_status($tracker);
-                $dl->now = microtime(true);
-            }
-            if ($tracker->position_at)
-                $dl->tracker_status_at = $tracker->position_at;
-            if (($tcs = $this->conf->opt("trackerCometSite")))
-                $dl->tracker_site = $tcs;
-        }
+        if (($this->isPC || $this->tracker_kiosk_state > 0)
+            && $this->can_view_tracker())
+            MeetingTracker::my_deadlines($dl, $this);
 
         // permissions
         if ($prows) {
@@ -3577,15 +3873,15 @@ class Contact {
                             $v = true;
                         else if ($admin && $this->can_respond($prow, $crow, false))
                             $v = "override";
-                        if ($v && !isset($perm->can_respond))
+                        if ($v && !isset($perm->can_responds))
                             $perm->can_responds = [];
                         if ($v)
                             $perm->can_responds[$rrd->name] = $v;
                     }
                 }
-                if (self::can_some_author_view_submitted_review($prow))
+                if ($prow->can_author_view_submitted_review())
                     $perm->some_author_can_view_review = true;
-                if (self::can_some_author_view_decision($prow))
+                if ($prow->can_author_view_decision())
                     $perm->some_author_can_view_decision = true;
                 if ($this->isPC
                     && !$this->conf->can_some_external_reviewer_view_comment())
@@ -3624,28 +3920,10 @@ class Contact {
     }
 
 
-    function setsession_api($v) {
-        $ok = true;
-        preg_match_all('/(?:\A|\s)(foldpaper[abpt]|foldpscollab|foldhomeactivity|(?:pl|pf|ul)display|scoresort)(|\.[^=]*)(=\S*|)(?=\s|\z)/', $v, $ms, PREG_SET_ORDER);
-        foreach ($ms as $m) {
-            if ($m[2]) {
-                $on = intval(substr($m[3], 1) ? : "0") == 0;
-                if ($m[1] === "pldisplay" || $m[1] === "pfdisplay")
-                    PaperList::change_display($this, substr($m[1], 0, 2), substr($m[2], 1), $on);
-                else if (preg_match('/\A\.[-a-zA-Z0-9_:]+\z/', $m[2]))
-                    displayOptionsSet($m[1], substr($m[2], 1), $on);
-                else
-                    $ok = false;
-            } else
-                $this->conf->save_session($m[1], $m[3] ? intval(substr($m[3], 1)) : null);
-        }
-        return $ok;
-    }
-
-
     // papers
 
     function paper_set($pids, $options = null) {
+        $ssel = false;
         if (is_int($pids)) {
             $options["paperId"] = $pids;
         } else if (is_array($pids)
@@ -3653,11 +3931,15 @@ class Contact {
                    && (!empty($pids) || $options !== null)) {
             $options["paperId"] = $pids;
         } else if (is_object($pids) && $pids instanceof SearchSelection) {
+            $ssel = true;
             $options["paperId"] = $pids->selection();
         } else {
             $options = $pids;
         }
-        return $this->conf->paper_set($this, $options);
+        $prows = $this->conf->paper_set($options, $this);
+        if ($ssel)
+            $prows->sort_by([$pids, "order_compare"]);
+        return $prows;
     }
 
     function hide_reviewer_identity_pids() {
@@ -3675,10 +3957,10 @@ class Contact {
         return $pids;
     }
 
-    function paper_status_info(PaperInfo $row, $forceShow = null) {
+    function paper_status_info(PaperInfo $row) {
         if ($row->timeWithdrawn > 0) {
             return array("pstat_with", "Withdrawn");
-        } else if ($row->outcome && $this->can_view_decision($row, $forceShow)) {
+        } else if ($row->outcome && $this->can_view_decision($row)) {
             $data = get(self::$status_info_cache, $row->outcome);
             if (!$data) {
                 $decclass = ($row->outcome > 0 ? "pstat_decyes" : "pstat_decno");
@@ -3712,6 +3994,13 @@ class Contact {
             if (edb_nrows($result) == 0)
                 return ", reviewToken=$token";
         }
+    }
+
+    private function assign_review_explanation($type, $round) {
+        $t = ReviewForm::$revtype_names_lc[$type] . " review";
+        if ($round && ($rname = $this->conf->round_name($round)))
+            $t .= " (round $rname)";
+        return $t;
     }
 
     function assign_review($pid, $reviewer_cid, $type, $extra = array()) {
@@ -3762,12 +4051,12 @@ class Contact {
 
         if ($type && !$oldtype) {
             $reviewId = $result->insert_id;
-            $msg = "Review $reviewId added (" . ReviewForm::$revtype_names[$type] . ")";
+            $msg = "Assigned " . $this->assign_review_explanation($type, $round);
         } else if (!$type) {
-            $msg = "Removed " . ReviewForm::$revtype_names[$oldtype] . " review";
+            $msg = "Removed " . $this->assign_review_explanation($oldtype, $rrow->reviewRound);
             $reviewId = 0;
         } else
-            $msg = "Review $reviewId changed (" . ReviewForm::$revtype_names[$oldtype] . " to " . ReviewForm::$revtype_names[$type] . ")";
+            $msg = "Changed " . $this->assign_review_explanation($oldtype, $rrow->reviewRound) . " to " . $this->assign_review_explanation($type, $round);
         $this->conf->log_for($this, $reviewer_cid, $msg, $pid);
 
         // on new review, update PaperReviewRefused, ReviewRequest, delegation
@@ -3794,7 +4083,9 @@ class Contact {
         if ($type == REVIEW_META || $oldtype == REVIEW_META)
             $this->conf->update_metareviews_setting($type == REVIEW_META ? 1 : -1);
 
-        Contact::update_rights();
+        self::update_rights();
+        if (!get($extra, "no_autosearch"))
+            $this->conf->update_autosearch_tags($pid);
         return $reviewId;
     }
 
@@ -3811,7 +4102,7 @@ class Contact {
         }
     }
 
-    function unsubmit_review_row($rrow) {
+    function unsubmit_review_row($rrow, $extra = null) {
         $needsSubmit = 1;
         if ($rrow->reviewType == REVIEW_SECONDARY) {
             $row = Dbl::fetch_first_row($this->conf->qe("select count(reviewSubmitted), count(reviewId) from PaperReview where paperId=? and requestedBy=? and reviewType<" . REVIEW_SECONDARY, $rrow->paperId, $rrow->contactId));
@@ -3820,6 +4111,11 @@ class Contact {
             else if ($row && $row[1])
                 $needsSubmit = -1;
         }
-        return $this->conf->qe("update PaperReview set reviewSubmitted=null, reviewNeedsSubmit=? where paperId=? and reviewId=?", $needsSubmit, $rrow->paperId, $rrow->reviewId);
+        $result = $this->conf->qe("update PaperReview set reviewSubmitted=null, reviewNeedsSubmit=?, timeApprovalRequested=0 where paperId=? and reviewId=?", $needsSubmit, $rrow->paperId, $rrow->reviewId);
+        if ($result && $result->affected_rows && $rrow->reviewType < REVIEW_SECONDARY)
+            $this->update_review_delegation($rrow->paperId, $rrow->requestedBy, -1);
+        if (!$extra || !get($extra, "no_autosearch"))
+            $this->conf->update_autosearch_tags($rrow->paperId);
+        return $result;
     }
 }

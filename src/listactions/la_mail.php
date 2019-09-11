@@ -1,6 +1,6 @@
 <?php
 // listactions/la_mail.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Mail_ListAction extends ListAction {
     function allow(Contact $user) {
@@ -8,7 +8,7 @@ class Mail_ListAction extends ListAction {
     }
     static function render(PaperList $pl) {
         return [Ht::select("recipients", array("au" => "Contact authors", "rev" => "Reviewers"), $pl->qreq->recipients, ["class" => "want-focus"])
-            . " &nbsp;" . Ht::submit("fn", "Go", ["value" => "mail", "data-default-submit-all" => 1, "class" => "btn uix js-submit-mark"])];
+            . " &nbsp;" . Ht::submit("fn", "Go", ["value" => "mail", "data-default-submit-all" => 1, "class" => "uix js-submit-mark"])];
     }
     function run(Contact $user, $qreq, $ssel) {
         $r = in_array($qreq->recipients, ["au", "rev"]) ? $qreq->recipients : "all";

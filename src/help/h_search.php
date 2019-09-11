@@ -1,42 +1,40 @@
 <?php
 // src/help/h_search.php -- HotCRP help functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class Search_HelpTopic {
     static function render($hth) {
-        echo "<p>All HotCRP paper lists are obtained through flexible
+        echo "<p>All HotCRP lists are obtained through flexible
 search. Some hints for PC members and chairs:</p>
 
-<ul class='compact'>
-<li><div style='display:inline-block'>", $hth->search_form(""), "</div>&nbsp; finds all papers.  (Leave the search field blank.)</li>
-<li><div style='display:inline-block'>", $hth->search_form("12"), "</div>&nbsp; finds paper #12.  When entered from a
- <a href='#quicklinks'>quicksearch</a> box, this search will jump to
- paper #12 directly.</li>
+<ul>
+<li><div class=\"d-inline-block\">", $hth->search_form(""), "</div>&nbsp; finds all submissions.  (Leave the search field blank.)</li>
+<li><div class=\"d-inline-block\">", $hth->search_form("12"), "</div>&nbsp; finds submission #12.  When entered from a
+ <a href=\"#quicklinks\">quicksearch</a> box, this search will jump to #12 directly.</li>
 <li>", $hth->help_link("Search keywords", "keywords"), "
  let you search specific fields, review scores, and more.</li>
-<li>Use <a href='#quicklinks'>quicklinks</a> on paper pages to navigate
+<li>Use <a href=\"#quicklinks\">quicklinks</a> on paper pages to navigate
  through search results. Typing <code>j</code> and <code>k</code> also goes
  from paper to paper.</li>
-<li>On search results pages, shift-click checkboxes to
- select paper ranges.</li>
+<li>On list pages, shift-click checkboxes to
+ select ranges of submissions.</li>
 </ul>";
 
     echo $hth->subhead("How to search");
     echo "
-<p>The default search box returns papers that match
+<p>The default search box returns submissions that match
 <em>all</em> of the space-separated terms you enter.
-To search for words that <em>start</em> with
+To search for terms that <em>start</em> with
 a prefix, try “term*”.
-To search for papers that match <em>some</em> of the terms,
+To find <em>some</em> of the terms,
 type “term1 OR term2”.
-To search for papers that <em>don’t</em> match a term,
-try “-term”.  Or select
-<a href='" . hoturl("search", "opt=1") . "'>Advanced search</a>
-and use “With <b>any</b> of the words” and “<b>Without</b> the words.”</p>
+To find submissions that <em>don’t</em> match a term,
+try “-term”.  Or select ", $hth->hotlink("Advanced search", "search", "opt=1"),
+" and use “With <b>any</b> of the words” and “<b>Without</b> the words.”</p>
 
-<p>You can search in several paper classes, depending on your role in the
+<p>You can search several categories, depending on your role in the
 conference. Options include:</p>
-<ul class='compact'>
+<ul>
 <li><b>Submitted papers</b> &mdash; all submitted papers.</li>
 <li><b>All papers</b> &mdash; all papers, including withdrawn and other non-submitted papers.</li>
 <li><b>Your submissions</b> &mdash; papers for which you’re a contact.</li>
@@ -48,8 +46,8 @@ conference. Options include:</p>
 authors can only search their own submissions, and if the conference used
 anonymous submission, then only the PC chairs can search by author.</p>
 
-<p>By default, search examines paper titles, abstracts, and authors.
-<a href='" . hoturl("search", "opt=1") . "'>Advanced search</a>
+<p>By default, search examines paper titles, abstracts, and authors. ",
+$hth->hotlink("Advanced search", "search", "opt=1"), "
 can search other fields, including authors/collaborators and reviewers.
 Also, <b>keywords</b> search specific characteristics such as titles,
 authors, reviewer names, and numbers of reviewers.  For example,
@@ -59,8 +57,8 @@ titles.”  Keywords are listed in the ", $hth->help_link("search keywords refer
     echo $hth->subhead("Search results");
     echo "
 <p>Click on a paper number or title to jump to that paper.
-Search matches are <span class='match'>highlighted</span> on paper screens.
-Once on a paper screen use <a href='#quicklinks'>quicklinks</a>
+Search matches are <span class=\"match\">highlighted</span> on paper screens.
+Once on a paper screen use <a href=\"#quicklinks\">quicklinks</a>
 to navigate through the rest of the search matches.</p>
 
 <p>Underneath the paper list is the action area:</p>
@@ -70,7 +68,7 @@ to navigate through the rest of the search matches.</p>
 <p>Use the checkboxes to select some papers, then choose an action.
 You can:</p>
 
-<ul class='compact'>
+<ul>
 <li>Download a <code>.zip</code> file with the selected papers.</li>
 <li>Download all reviews for the selected papers.</li>
 <li>Download tab-separated text files with authors, PC

@@ -1,6 +1,6 @@
 <?php
 // text.php -- HotCRP text helper functions
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class NameInfo {
     public $firstName;
@@ -62,8 +62,12 @@ class Text {
         $ret = $ret ? : new NameInfo;
         // collect arguments
         $delta = 0;
-        if (count($args) == 1 && is_string($args[0]))
-            $args = self::split_name($args[0], true);
+        if (count($args) == 1) {
+            if (is_string($args[0]))
+                $args = self::split_name($args[0], true);
+            else if (is_object($args[0]) && isset($args[0]->name_analysis))
+                return $args[0]->name_analysis;
+        }
         foreach ($args as $i => $v) {
             if (is_string($v) || is_bool($v)) {
                 if ($i + $delta < 4) {
@@ -433,30 +437,37 @@ class Text {
         return join("", $s);
     }
 
-    const SEARCH_CASE_SENSITIVE = 1;
     const SEARCH_UNPRIVILEGE_EXACT = 2;
-    const SEARCH_ONLY_EXACT = 4;
     const SEARCH_NO_SPECIAL = 8;
 
     static function simple_search($needle, $haystacks, $flags = 0) {
-        $reflags = $flags & self::SEARCH_CASE_SENSITIVE ? "" : "i";
+        if (!($flags & self::SEARCH_UNPRIVILEGE_EXACT)) {
+            $matches = [];
+            foreach ($haystacks as $k => $v) {
+                if (strcasecmp($needle, $v) === 0)
+                    $matches[$k] = $v;
+            }
+            if (!empty($matches))
+                return $matches;
+        }
+
         $rewords = array();
         foreach (preg_split('/[^A-Za-z_0-9*]+/', $needle) as $word)
             if ($word !== "")
                 $rewords[] = str_replace("*", ".*", $word);
-        $matches = array();
         $i = $flags & self::SEARCH_UNPRIVILEGE_EXACT ? 1 : 0;
-        $last = $flags & self::SEARCH_ONLY_EXACT ? $i : 2;
-        for (; $i <= $last && !count($matches); ++$i) {
+        for (; $i <= 2; ++$i) {
             if ($i == 0)
-                $re = ',\A' . join('\b.*\b', $rewords) . '\z,' . $reflags;
+                $re = ',\A' . join('\b.*\b', $rewords) . '\z,i';
             else if ($i == 1)
-                $re = ',\A' . join('\b.*\b', $rewords) . '\b,' . $reflags;
+                $re = ',\A' . join('\b.*\b', $rewords) . '\b,i';
             else
-                $re = ',\b' . join('.*\b', $rewords) . ',' . $reflags;
+                $re = ',\b' . join('.*\b', $rewords) . ',i';
             $matches = preg_grep($re, $haystacks);
+            if (!empty($matches))
+                return $matches;
         }
-        return $matches;
+        return [];
     }
 
     static function is_boring_word($word) {

@@ -1,6 +1,6 @@
 <?php
 // pc_tagreport.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2018 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
 
 class TagReport_PaperColumn extends PaperColumn {
     private $tag;
@@ -53,12 +53,11 @@ class TagReport_PaperColumnFactory {
         $cj["tag"] = $tag;
         return (object) $cj;
     }
-    static function expand($name, Conf $conf, $xfj, $m) {
-        if (!$conf->xt_user->can_view_most_tags())
+    static function expand($name, $user, $xfj, $m) {
+        if (!$user->can_view_most_tags())
             return null;
-        $tagset = $conf->tags();
+        $tagset = $user->conf->tags();
         if ($name === "tagreports") {
-            $conf->xt_factory_mark_matched();
             return array_map(function ($t) use ($xfj) {
                 return self::column_json($xfj, $t->tag);
             }, $tagset->filter_by(function ($t) {
