@@ -1,6 +1,6 @@
 <?php
 // test04.php -- HotCRP user database tests
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
@@ -18,7 +18,7 @@ function password($email, $iscdb = false) {
     $dblink = $iscdb ? $Conf->contactdb() : $Conf->dblink;
     $result = Dbl::qe($dblink, "select password from ContactInfo where email=?", $email);
     $row = Dbl::fetch_first_row($result);
-    return $row[0];
+    return $row[0] ?? null;
 }
 
 function save_password($email, $encoded_password, $iscdb = false) {
@@ -34,18 +34,16 @@ if (!$Conf->contactdb()) {
     exit(1);
 }
 
-$user_chair = $Conf->user_by_email("chair@_.com");
+$user_chair = $Conf->checked_user_by_email("chair@_.com");
 $marina = "marina@poema.ru";
 
-$Conf->set_opt("safePasswords", 0);
-$Conf->set_opt("contactdb_safePasswords", 0);
-user($marina)->change_password("rosdevitch", 0);
+user($marina)->change_password("rosdevitch");
 xassert_eqq(password($marina), "");
-xassert_eqq(password($marina, true), "rosdevitch");
+xassert_neqq(password($marina, true), "");
 xassert(user($marina)->check_password("rosdevitch"));
 $Conf->qe("update ContactInfo set password=? where contactId=?", "rosdevitch", user($marina)->contactId);
-xassert_eqq(password($marina), "rosdevitch");
-xassert_eqq(password($marina, true), "rosdevitch");
+xassert_neqq(password($marina), "");
+xassert_neqq(password($marina, true), "");
 xassert(user($marina)->check_password("rosdevitch"));
 
 // different password in localdb => both passwords work
@@ -54,7 +52,7 @@ xassert(user($marina)->check_password("crapdevitch"));
 xassert(user($marina)->check_password("rosdevitch"));
 
 // change contactdb password => both passwords change
-user($marina)->change_password("dungdevitch", 0);
+user($marina)->change_password("dungdevitch");
 xassert(user($marina)->check_password("dungdevitch"));
 xassert(!user($marina)->check_password("assdevitch"));
 xassert(!user($marina)->check_password("rosdevitch"));
@@ -69,29 +67,26 @@ xassert(!user($marina)->check_password("dungdevitch"));
 // update local password only
 save_password($marina, "ncurses", false);
 xassert_eqq(password($marina), "ncurses");
-xassert_eqq(password($marina, true), "isdevitch");
+xassert_neqq(password($marina, true), "ncurses");
 xassert(user($marina)->check_password("ncurses"));
 
 // logging in with global password makes local password obsolete
 $Now += 3;
 xassert(user($marina)->check_password("isdevitch"));
 $Now += 3;
-$info = (object) [];
-xassert(!user($marina)->check_password("ncurses", $info));
-xassert(get($info, "local_obsolete"));
+xassert(!user($marina)->check_password("ncurses"));
 
-// null contactdb password => can log in locally
+// null contactdb password => password is unset
 save_password($marina, null, true);
-xassert(user($marina)->check_password("ncurses"));
+$info = user($marina)->check_password_info("ncurses");
+xassert(!$info["ok"]);
+xassert(get($info, "unset"));
 
 // restore to "this is a cdb password"
-user($marina)->change_password("isdevitch", 0);
+user($marina)->change_password("isdevitch");
 xassert_eqq(password($marina), "");
+save_password($marina, "isdevitch", true);
 xassert_eqq(password($marina, true), "isdevitch");
-
-// start upgrading passwords
-$Conf->set_opt("safePasswords", 2);
-$Conf->set_opt("contactdb_safePasswords", 2);
 // current status: local password is empty, global password "isdevitch"
 
 // checking an unencrypted password encrypts it
@@ -108,15 +103,15 @@ xassert_eqq(password($marina, true), ' $$2y$10$/URgqlFgQHpfE6mg4NzJhOZbg9Cc2cng5
 
 // insert someone into the contactdb
 $result = Dbl::qe($Conf->contactdb(), "insert into ContactInfo set firstName='Te', lastName='Thamrongrattanarit', email='te@_.com', affiliation='Brandeis University', collaborators='Computational Linguistics Magazine', password=' $$2y$10$/URgqlFgQHpfE6mg4NzJhOZbg9Cc2cng58pA4cikzRD9F0qIuygnm'");
-assert(!!$result);
+assert(!Dbl::is_error($result));
 Dbl::free($result);
-xassert(!user("te@_.com"));
+xassert(!maybe_user("te@_.com"));
 $u = $Conf->contactdb_user_by_email("te@_.com");
 xassert(!!$u);
 xassert_eqq($u->firstName, "Te");
 
 // inserting them should succeed and borrow their data
-$us = new UserStatus($Conf->site_contact(), ["send_email" => false]);
+$us = new UserStatus($Conf->root_user(), ["no_notify" => true]);
 $acct = $us->save((object) array("email" => "te@_.com"));
 xassert(!!$acct);
 $te = user("te@_.com");
@@ -129,10 +124,10 @@ xassert_eqq($te->collaborators, "Computational Linguistics Magazine");
 
 // changing email should work too, but not change cdb except for defaults
 $result = Dbl::qe($Conf->contactdb(), "insert into ContactInfo set firstName='', lastName='Thamrongrattanarit 2', email='te2@_.com', affiliation='Brandeis University or something', collaborators='Newsweek Magazine', password=' $$2y$10$/URgqlFgQHpfE6mg4NzJhOZbg9Cc2cng58pA4cikzRD9F0qIuygnm'");
-xassert(!!$result);
+xassert(!Dbl::is_error($result));
 Dbl::free($result);
 $te->change_email("te2@_.com");
-$te = user("te@_.com");
+$te = maybe_user("te@_.com");
 $te2 = user("te2@_.com");
 xassert(!$te);
 xassert(!!$te2);
@@ -148,7 +143,7 @@ xassert(!!$te2_cdb);
 xassert_eqq($te2_cdb->email, "te2@_.com");
 xassert_eqq($te2_cdb->affiliation, "Brandeis University or something");
 // site contact updates keep old value in cdb
-xassert_eqq($te2_cdb->firstName, "Te 1");
+xassert_eqq($te2_cdb->firstName, "");
 xassert_eqq($te2_cdb->lastName, "Thamrongrattanarit 2");
 
 // changes by the chair don't affect the cdb
@@ -164,7 +159,7 @@ xassert_eqq($te2->lastName, "Thamrongrattanarit 1");
 xassert_eqq($te2->affiliation, "String");
 $te2_cdb = $te2->contactdb_user();
 xassert(!!$te2_cdb);
-xassert_eqq($te2_cdb->firstName, "Te 1");
+xassert_eqq($te2_cdb->firstName, "");
 xassert_eqq($te2_cdb->lastName, "Thamrongrattanarit 2");
 xassert_eqq($te2_cdb->affiliation, "String");
 
@@ -180,13 +175,13 @@ xassert_eqq($te->collaborators, "Computational Linguistics Magazine");
 
 // create a user in cdb: create, then delete from local db
 $anna = "akhmatova@poema.ru";
-xassert(!user($anna));
+xassert(!maybe_user($anna));
 $acct = $us->save((object) ["email" => $anna, "first" => "Anna", "last" => "Akhmatova"]);
 xassert(!!$acct);
 Dbl::qe("delete from ContactInfo where email=?", $anna);
 Dbl::qe($Conf->contactdb(), "update ContactInfo set passwordUseTime=1 where email=?", $anna);
 save_password($anna, "aquablouse", true);
-xassert(!user($anna));
+xassert(!maybe_user($anna));
 MailChecker::check0();
 
 $user_estrin = user("estrin@usc.edu");
@@ -199,9 +194,8 @@ $ps->save_paper_json((object) [
     "authors" => ["puneet@catarina.usc.edu", $user_estrin->email,
                   $user_floyd->email, $user_van->email, $anna]
 ]);
-MailChecker::check_db("test04-akhmatova");
 
-$paper1 = $Conf->fetch_paper(1, $user_chair);
+$paper1 = $user_chair->checked_paper_by_id(1);
 $user_anna = user($anna);
 xassert(!!$user_anna);
 xassert($user_anna->act_author_view($paper1));
@@ -219,7 +213,7 @@ xassert($user_anne1 && $user_anne2);
 $merger = new MergeContacts($user_anne2, $user_anne1);
 xassert($merger->run());
 $user_anne1 = user("anne1@_.com");
-$user_anne2 = user("anne2@_.com");
+$user_anne2 = maybe_user("anne2@_.com");
 xassert($user_anne1 && !$user_anne2);
 xassert_eqq($user_anne1->firstName, "Anne");
 xassert_eqq($user_anne1->lastName, "Dudfield");
@@ -229,8 +223,33 @@ xassert_eqq($user_anne1->tag_value("b"), 3.0);
 xassert_eqq($user_anne1->roles, Contact::ROLE_PC | Contact::ROLE_ADMIN);
 xassert_eqq($user_anne1->data("data_test"), 139);
 xassert_eqq($user_anne1->email, "anne1@_.com");
-$paper1 = $Conf->fetch_paper(1);
+$paper1 = $Conf->checked_paper_by_id(1);
 xassert($paper1->has_conflict($user_anne1));
+
+// different forms of profile saving
+$us->save((object) ["email" => "anne1@_.com", "roles" => "pc"]);
+$user_anne1 = user("anne1@_.com");
+xassert_eqq($user_anne1->roles, Contact::ROLE_PC);
+
+$us->save((object) ["email" => "anne1@_.com", "roles" => ["pc", "sysadmin"]]);
+$user_anne1 = user("anne1@_.com");
+xassert_eqq($user_anne1->roles, Contact::ROLE_PC | Contact::ROLE_ADMIN);
+
+$us->save((object) ["email" => "anne1@_.com", "roles" => "chair, sysadmin"]);
+$user_anne1 = user("anne1@_.com");
+xassert_eqq($user_anne1->roles, Contact::ROLE_PC | Contact::ROLE_CHAIR | Contact::ROLE_ADMIN);
+
+$us->save((object) ["email" => "anne1@_.com", "roles" => "-chair"]);
+$user_anne1 = user("anne1@_.com");
+xassert_eqq($user_anne1->roles, Contact::ROLE_PC | Contact::ROLE_ADMIN);
+
+$us->save((object) ["email" => "anne1@_.com", "roles" => "-sysadmin"]);
+$user_anne1 = user("anne1@_.com");
+xassert_eqq($user_anne1->roles, Contact::ROLE_PC);
+
+$us->save((object) ["email" => "anne1@_.com", "roles" => "+chair"]);
+$user_anne1 = user("anne1@_.com");
+xassert_eqq($user_anne1->roles, Contact::ROLE_PC | Contact::ROLE_CHAIR);
 
 // creation interactions
 Dbl::qe($Conf->dblink, "insert into ContactInfo (email, password) values ('betty2@_.com','')");
@@ -266,7 +285,7 @@ $u = $Conf->user_by_email("betty5@_.com");
 xassert(!$u);
 $u = $Conf->contactdb_user_by_email("betty5@_.com");
 $u->activate_database_account();
-$u = $Conf->user_by_email("betty5@_.com");
+$u = $Conf->checked_user_by_email("betty5@_.com");
 xassert($u->has_account_here());
 xassert_eqq($u->firstName, "Betty");
 xassert_eqq($u->lastName, "Davis");
@@ -277,19 +296,28 @@ xassert_eqq($u->firstName, "Cengiz");
 xassert_eqq($u->contactdb_user()->firstName, "Cengiz");
 xassert_eqq($u->lastName, "Alaettinoğlu");
 xassert_eqq($u->contactdb_user()->lastName, "Alaettinoğlu");
-xassert_eqq($u->plaintext_password(), "TEST PASSWORD");
 
 // contactdb_update
 Dbl::qe($Conf->dblink, "insert into ContactInfo set email='betty6@_.com', password='Fart', firstName='Betty', lastName='Knowles'");
-$u = $Conf->user_by_email("betty6@_.com");
+$u = $Conf->checked_user_by_email("betty6@_.com");
 xassert(!!$u);
-xassert_eqq($u->plaintext_password(), "Fart");
 xassert(!$u->contactdb_user());
 $u->contactdb_update();
 $v = $u->contactdb_user();
 xassert(!!$v);
 xassert_eqq($v->firstName, "Betty");
 xassert_eqq($v->lastName, "Knowles");
-xassert_eqq($v->plaintext_password(), "Fart");
+
+// PC json
+$pc_json = $Conf->hotcrp_pc_json($user_chair);
+xassert_eqq($pc_json[$pc_json["__order__"][0]]->email, "anne1@_.com");
+$Conf->sort_by_last = true;
+$Conf->invalidate_caches(["pc" => true]);
+$pc_json = $Conf->hotcrp_pc_json($user_chair);
+xassert_eqq($pc_json[$pc_json["__order__"][0]]->email, "mgbaker@cs.stanford.edu");
+xassert_eqq($pc_json["12"]->email, "mgbaker@cs.stanford.edu");
+xassert_eqq($pc_json["12"]->lastpos, 5);
+xassert_eqq($pc_json["21"]->email, "vera@bombay.com");
+xassert_eqq($pc_json["21"]->lastpos, 5);
 
 xassert_exit();

@@ -56,6 +56,7 @@ checkupdates.php
 conflictassign.php
 deadlines.php
 doc.php
+forgotpassword.php
 graph.php
 help.php
 index.php
@@ -63,6 +64,7 @@ log.php
 mail.php
 manualassign.php
 mergeaccounts.php
+newaccount.php
 offline.php
 paper.php
 profile.php
@@ -72,10 +74,12 @@ reviewprefs.php
 scorechart.php
 search.php
 settings.php
+signin.php
+signout.php
 users.php
 
 batch/.htaccess
-batch/addusers.php
+batch/assign.php
 batch/checkinvariants.php
 batch/deletepapers.php
 batch/fixdelegation.php
@@ -84,6 +88,7 @@ batch/s3test.php
 batch/s3transfer.php
 batch/s3verifyall.php
 batch/savepapers.php
+batch/saveusers.php
 batch/search.php
 batch/updatecontactdb.php
 
@@ -96,13 +101,13 @@ etc/assignmentparsers.json
 etc/capabilityhandlers.json
 etc/formulafunctions.json
 etc/helptopics.json
-etc/homepartials.json
 etc/intrinsicoptions.json
 etc/listactions.json
 etc/mailkeywords.json
 etc/mailtemplates.json
 etc/msgs.json
 etc/optiontypes.json
+etc/pagepartials.json
 etc/papercolumns.json
 etc/profilegroups.json
 etc/reviewformlibrary.json
@@ -140,6 +145,7 @@ lib/mime.types
 lib/mimetype.php
 lib/mincostmaxflow.php
 lib/navigation.php
+lib/polyfills.php
 lib/qrequest.php
 lib/redirect.php
 lib/restoredb.sh
@@ -166,6 +172,7 @@ src/api/api_mail.php
 src/api/api_paperpc.php
 src/api/api_preference.php
 src/api/api_requestreview.php
+src/api/api_reviewtoken.php
 src/api/api_search.php
 src/api/api_searchconfig.php
 src/api/api_session.php
@@ -173,6 +180,7 @@ src/api/api_taganno.php
 src/api/api_user.php
 src/assigners/a_conflict.php
 src/assigners/a_decision.php
+src/assigners/a_error.php
 src/assigners/a_follow.php
 src/assigners/a_lead.php
 src/assigners/a_preference.php
@@ -185,7 +193,9 @@ src/author.php
 src/authormatcher.php
 src/autoassigner.php
 src/banal
-src/capability.php
+src/capabilities/cap_authorview.php
+src/capabilities/cap_reviewaccept.php
+src/capabilityinfo.php
 src/checkformat.php
 src/commentinfo.php
 src/conference.php
@@ -198,10 +208,28 @@ src/documentfiletree.php
 src/documentinfo.php
 src/documenthashmatcher.php
 src/documentrequest.php
+src/fieldrender.php
 src/filefilter.php
 src/formatspec.php
 src/formula.php
 src/formulagraph.php
+src/formulas/f_author.php
+src/formulas/f_conflict.php
+src/formulas/f_decision.php
+src/formulas/f_now.php
+src/formulas/f_option.php
+src/formulas/f_pdfsize.php
+src/formulas/f_pref.php
+src/formulas/f_reviewer.php
+src/formulas/f_reviewermatch.php
+src/formulas/f_reviewround.php
+src/formulas/f_reviewwordcount.php
+src/formulas/f_revtype.php
+src/formulas/f_submittedat.php
+src/formulas/f_tag.php
+src/formulas/f_timefield.php
+src/formulas/f_topic.php
+src/formulas/f_topicscore.php
 src/groupedextensions.php
 src/help/h_bulkassign.php
 src/help/h_chairsguide.php
@@ -215,9 +243,11 @@ src/help/h_search.php
 src/help/h_tags.php
 src/help/h_votetags.php
 src/helpers.php
+src/helprenderer.php
 src/hotcrpmailer.php
 src/init.php
 src/initweb.php
+src/intrinsicvalue.php
 src/listaction.php
 src/listactions/la_assign.php
 src/listactions/la_decide.php
@@ -253,8 +283,11 @@ src/papercolumns/pc_option.php
 src/papercolumns/pc_pagecount.php
 src/papercolumns/pc_pcconflicts.php
 src/papercolumns/pc_preference.php
+src/papercolumns/pc_preferencelist.php
 src/papercolumns/pc_reviewdelegation.php
+src/papercolumns/pc_reviewerlist.php
 src/papercolumns/pc_shepherd.php
+src/papercolumns/pc_tag.php
 src/papercolumns/pc_tagreport.php
 src/papercolumns/pc_timestamp.php
 src/papercolumns/pc_topics.php
@@ -270,10 +303,12 @@ src/papertable.php
 src/paperrank.php
 src/partials/p_adminhome.php
 src/partials/p_home.php
-src/partials/p_reviewtoken.php
+src/partials/p_signin.php
 src/review.php
 src/reviewdiffinfo.php
 src/reviewinfo.php
+src/reviewrefusalinfo.php
+src/reviewrequestinfo.php
 src/reviewtable.php
 src/reviewtimes.php
 src/sample.pdf
@@ -314,6 +349,8 @@ src/settings/s_topics.php
 src/settings/s_tracks.php
 src/settings/s_users.php
 src/settingvalues.php
+src/tagrankparser.php
+src/tagsearchmatcher.php
 src/textformat.php
 src/topicset.php
 src/updateschema.php

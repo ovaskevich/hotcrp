@@ -1,6 +1,6 @@
 <?php
 // mergeaccounts.php -- HotCRP account merging page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 if (!$Me->email)
@@ -25,22 +25,22 @@ function crpmerge($qreq, $MiniMe) {
         $merger = new MergeContacts($MiniMe, $Me);
 
     // send mail at start of process
-    HotCRPMailer::send_to($merger->oldu, "@mergeaccount", null,
-                          array("cc" => Text::user_email_to($merger->newu),
-                                "other_contact" => $merger->newu));
+    HotCRPMailer::send_to($merger->oldu, "@mergeaccount",
+                          ["cc" => Text::nameo($merger->newu, NAME_MAILQUOTE|NAME_E),
+                           "other_contact" => $merger->newu]);
 
     // actually merge users or change email
     $merger->run();
 
     if (!$merger->has_error()) {
         $Conf->confirmMsg("Merged account " . htmlspecialchars($merger->oldu->email) . ".");
-        $merger->newu->log_activity("Merged account " . $merger->oldu->email);
+        $merger->newu->log_activity("Account merged " . $merger->oldu->email);
         go(hoturl("index"));
     } else {
-        $merger->newu->log_activity("Merged account " . $merger->oldu->email . " with errors");
+        $merger->newu->log_activity("Account merged " . $merger->oldu->email . " with errors");
         $MergeError = '<div class="multimessage">'
             . join("\n", array_map(function ($m) { return '<div class="mmm">' . $m . '</div>'; },
-                                   $merger->errors()))
+                                   $merger->error_texts()))
             . '</div>';
     }
 }

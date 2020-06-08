@@ -1,6 +1,6 @@
 <?php
 // search/st_option.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class OptionMatcher {
     public $option;
@@ -100,29 +100,33 @@ class Option_SearchTerm extends SearchTerm {
     }
     static function parse_factory($keyword, $user, $kwfj, $m) {
         $f = $user->conf->find_all_fields($keyword);
-        if (count($f) === 1 && $f[0] instanceof PaperOption)
+        if (count($f) === 1 && $f[0] instanceof PaperOption) {
             return (object) [
                 "name" => $keyword,
                 "parse_callback" => "Option_SearchTerm::parse",
                 "has" => "any"
             ];
-        else
+        } else {
             return null;
+        }
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
-        if ($sword->kwdef->name !== "option")
+        if ($sword->kwdef->name !== "option") {
             $word = $sword->kwdef->name . ":" . $word;
+        }
         $os = self::analyze($srch->conf, $word, $sword->quoted);
-        foreach ($os->warnings as $w)
+        foreach ($os->warnings as $w) {
             $srch->warn($w);
+        }
         if (!empty($os->os)) {
-            $qz = array();
-            foreach ($os->os as $oq)
+            $qz = [];
+            foreach ($os->os as $oq) {
                 $qz[] = new Option_SearchTerm($oq);
-            $t = SearchTerm::make_op("or", $qz);
-            return $os->negated ? SearchTerm::make_not($t) : $t;
-        } else
+            }
+            return SearchTerm::make_op("or", $qz)->negate_if($os->negated);
+        } else {
             return new False_SearchTerm;
+        }
     }
     static function analyze(Conf $conf, $word, $quoted = false) {
         $oms = new OptionMatcherSet;
@@ -193,7 +197,10 @@ class Option_SearchTerm extends SearchTerm {
         } else if (!$srch->user->can_view_option($row, $this->om->option)) {
             return false;
         } else {
-            return (object) ["type" => "option", "id" => $this->om->option->id, "compar" => $this->om->compar, "value" => $this->om->value];
+            return (object) [
+                "type" => "option", "id" => $this->om->option->id,
+                "compar" => $this->om->compar, "value" => $this->om->value
+            ];
         }
     }
 }

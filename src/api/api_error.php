@@ -1,21 +1,26 @@
 <?php
 // api_error.php -- HotCRP error reporting API calls
-// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2020 Eddie Kohler; see LICENSE.
 
 class Error_API {
     static function jserror(Contact $user, Qrequest $qreq) {
         if (isset($_SERVER["HTTP_USER_AGENT"])
-            && preg_match('/MSIE [78]|MetaSr/', $_SERVER["HTTP_USER_AGENT"]))
+            && preg_match('/MSIE [78]|MetaSr/', $_SERVER["HTTP_USER_AGENT"])) {
             return new JsonResult(true);
+        }
         $url = (string) $qreq->url;
-        if (preg_match(',[/=]((?:script|jquery)[^/&;]*[.]js),', $url, $m))
+        if (preg_match(',[/=]((?:script|jquery)[^/&;]*[.]js),', $url, $m)) {
             $url = $m[1];
-        if (($n = $qreq->lineno))
+        }
+        if (($n = $qreq->lineno)) {
             $url .= ":" . $n;
-        if (($n = $qreq->colno))
+        }
+        if (($n = $qreq->colno)) {
             $url .= ":" . $n;
-        if ($url !== "")
+        }
+        if ($url !== "") {
             $url .= ": ";
+        }
         $errormsg = trim((string) $qreq->error);
         if ($errormsg) {
             $suffix = "";

@@ -1,6 +1,6 @@
 <?php
 // src/help/h_revround.php -- HotCRP help functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class RevRound_HelpTopic {
     static function render($hth) {
@@ -35,15 +35,17 @@ The automatic and bulk assignment pages also let you set a review round.</p>";
             $rounds = array();
             if ($hth->conf->has_rounds()) {
                 $result = $hth->conf->qe("select distinct reviewRound from PaperReview");
-                while (($row = edb_row($result)))
+                while (($row = $result->fetch_row())) {
                     if ($row[0] && ($rname = $hth->conf->round_name($row[0])))
                         $rounds[] = "“" . $hth->search_link(htmlspecialchars($rname), "round:$rname") . "”";
+                }
                 sort($rounds);
             }
-            if (count($rounds))
+            if (count($rounds)) {
                 $texts[] = "Review rounds currently in use: " . commajoin($rounds) . ".";
-            else if (!count($texts))
+            } else if (!count($texts)) {
                 $texts[] = "So far no review rounds have been defined.";
+            }
             echo $hth->subhead("Round status");
             echo "<p>", join(" ", $texts), "</p>\n";
         }

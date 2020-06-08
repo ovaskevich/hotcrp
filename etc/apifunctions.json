@@ -1,8 +1,10 @@
 [
     {
         "name": "administrator", "paper": true, "get": true, "post": true,
-        "callback": "PaperPC_API::manager_api",
-        "synonym": ["manager"]
+        "callback": "PaperPC_API::manager_api"
+    },
+    {
+        "name": "manager", "alias": "administrator"
     },
     {
         "name": "alltags", "get": true,
@@ -13,7 +15,7 @@
         "callback": "User_API::clickthrough"
     },
     {
-        "name": "comment", "paper": true, "post": true,
+        "name": "comment", "paper": true, "get": true, "post": true,
         "callback": "Comment_API::run"
     },
     {
@@ -38,15 +40,14 @@
     },
     {
         "name": "formatcheck", "get": true, "post": true,
-        "callback": "FormatCheck_API::run",
-        "synonym": ["checkformat"]
+        "callback": "FormatCheck_API::run"
     },
     {
         "name": "graphdata", "get": true,
         "callback": "GraphData_Api::graphdata"
     },
     {
-        "name": "jserror", "get": true, "post": true,
+        "name": "jserror", "get": true,
         "callback": "Error_API::jserror"
     },
     {
@@ -86,18 +87,30 @@
         "callback": "PaperApi::reviewround_api"
     },
     {
+        "name": "reviewtoken", "get": true, "post": true,
+        "callback": "ReviewToken_API::run"
+    },
+    {
         "name": "revpref", "get": true, "post": true,
-        "callback": "Preference_API::pref_api",
-        "synonym": ["pref"]
+        "callback": "Preference_API::pref_api"
+    },
+    {
+        "name": "reviewpref", "alias": "revpref"
+    },
+    {
+        "name": "pref", "alias": "revpref"
     },
     {
         "name": "search", "get": true,
         "callback": "Search_API::search"
     },
     {
+        "name": "session", "get": true, "allow_disabled": true,
+        "callback": "Session_API::getsession"
+    },
+    {
         "name": "session", "post": true,
-        "callback": "Session_API::setsession",
-        "synonym": ["setsession"]
+        "callback": "Session_API::setsession"
     },
     {
         "name": "settags", "post": true,
@@ -113,8 +126,7 @@
     },
     {
         "name": "taganno", "post": true,
-        "callback": "TagAnno_API::set",
-        "synonym": ["settaganno"]
+        "callback": "TagAnno_API::set"
     },
     {
         "name": "tagreport", "paper": true, "get": true,
@@ -134,8 +146,10 @@
     },
     {
         "name": "viewoptions", "get": true, "post": true,
-        "callback": "SearchConfig_API::viewoptions",
-        "synonym": ["listreport"]
+        "callback": "SearchConfig_API::viewoptions"
+    },
+    {
+        "name": "listreport", "alias": "viewoptions"
     },
     {
         "name": "votereport", "paper": true, "get": true, "post": true,

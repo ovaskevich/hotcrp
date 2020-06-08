@@ -1,6 +1,6 @@
 <?php
 // src/settings/s_tracks.php -- HotCRP settings > tracks page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Tracks_SettingRenderer {
     static public $nperm_rendered_folded;
@@ -157,7 +157,7 @@ class Tracks_SettingRenderer {
     }
 
     static function render(SettingValues $sv) {
-        echo "<p class=\"settingtext\">Tracks control the PC members allowed to view or review different sets of submissions. <span class=\"nw\">(<a href=\"" . $sv->conf->hoturl("help", "t=tracks") . "\">Help</a>)</span></p>",
+        echo "<p>Tracks control the PC members allowed to view or review different sets of submissions. <span class=\"nw\">(<a href=\"" . $sv->conf->hoturl("help", "t=tracks") . "\">Help</a>)</span></p>",
             Ht::hidden("has_tracks", 1),
             "<div class=\"smg\"></div>\n";
         self::do_track($sv, "", 0);

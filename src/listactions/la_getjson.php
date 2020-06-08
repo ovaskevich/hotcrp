@@ -1,6 +1,6 @@
 <?php
 // listactions/la_getjson.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class GetJson_ListAction extends ListAction {
     private $iszip;
@@ -14,7 +14,7 @@ class GetJson_ListAction extends ListAction {
             $this->zipdoc->add_as($doc, $dj->content_file);
         }
     }
-    function allow(Contact $user) {
+    function allow(Contact $user, Qrequest $qreq) {
         return $user->is_manager();
     }
     function run(Contact $user, $qreq, $ssel) {
@@ -25,7 +25,7 @@ class GetJson_ListAction extends ListAction {
             $this->zipdoc = new ZipDocument($user->conf->download_prefix . "data.zip");
             $ps->on_document_export([$this, "document_callback"]);
         }
-        foreach ($user->paper_set($ssel, ["topics" => true, "options" => true]) as $prow) {
+        foreach ($ssel->paper_set($user, ["topics" => true, "options" => true]) as $prow) {
             $pj1 = $ps->paper_json($prow);
             if ($pj1)
                 $pj[] = $pj1;

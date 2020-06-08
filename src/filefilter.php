@@ -1,12 +1,13 @@
 <?php
 // filefilter.php -- HotCRP helper class for filtering documents
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class FileFilter {
     public $id;
     public $name;
 
-    static private function load(Conf $conf) {
+    /** @return array<string,FileFilter> */
+    static function all_by_name(Conf $conf) {
         if ($conf->_file_filters === null) {
             $conf->_file_filters = [];
             if (($flist = $conf->opt("documentFilters"))) {
@@ -14,30 +15,36 @@ class FileFilter {
                 expand_json_includes_callback($flist, [$ffa, "_add_json"]);
             }
         }
-    }
-
-    static function find_by_name(Conf $conf, $name) {
-        self::load($conf);
-        return get($conf->_file_filters, $name);
-    }
-    static function all_by_name(Conf $conf) {
-        self::load($conf);
         return $conf->_file_filters;
     }
-    static function apply_named($doc, PaperInfo $prow, $name) {
-        if (($filter = self::find_by_name($prow->conf, $name))
-            && ($xdoc = $filter->apply($doc, $prow)))
-            return $xdoc;
-        return $doc;
+    /** @param string $name
+     * @return ?FileFilter */
+    static function find_by_name(Conf $conf, $name) {
+        return (self::all_by_name($conf))[$name] ?? null;
     }
 
+    /** @param DocumentInfo $doc
+     * @param string $name
+     * @return DocumentInfo */
+    static function apply_named($doc, PaperInfo $prow, $name) {
+        if (($filter = self::find_by_name($prow->conf, $name))
+            && ($xdoc = $filter->apply($doc, $prow))) {
+            return $xdoc;
+        } else {
+            return $doc;
+        }
+    }
+
+    /** @param DocumentInfo $doc
+     * @return ?DocumentInfo */
     function find_filtered($doc) {
         if ($this->id) {
             $result = $doc->conf->qe("select PaperStorage.* from FilteredDocument join PaperStorage on (PaperStorage.paperStorageId=FilteredDocument.outDocId) where inDocId=? and FilteredDocument.filterType=?", $doc->paperStorageId, $this->id);
             $fdoc = DocumentInfo::fetch($result, $doc->conf);
             Dbl::free($result);
-        } else
+        } else {
             $fdoc = null;
+        }
         if ($fdoc) {
             $fdoc->filters_applied = $doc->filters_applied;
             $fdoc->filters_applied[] = $this;
@@ -55,6 +62,7 @@ class FileFilter {
 }
 
 class FileFilterJsonExpander {
+    /** @var Conf */
     private $conf;
     function __construct(Conf $conf) {
         $this->conf = $conf;
@@ -68,6 +76,7 @@ class FileFilterJsonExpander {
             $ff = null;
             if ($fj->callback[0] === "+") {
                 $class = substr($fj->callback, 1);
+                /** @phan-suppress-next-line PhanTypeExpectedObjectOrClassName */
                 $ff = new $class($this->conf, $fj);
             } else {
                 $ff = call_user_func($fj->callback, $this->conf, $fj);

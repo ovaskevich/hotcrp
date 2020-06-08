@@ -1,6 +1,6 @@
 <?php
 // pc_reviewdelegation.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class ReviewDelegation_PaperColumn extends PaperColumn {
     private $requester;
@@ -8,14 +8,12 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
         parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
-        if (!$pl->user->isPC)
+        if (!$pl->user->isPC) {
             return false;
+        }
         $pl->qopts["reviewSignatures"] = true;
         $this->requester = $pl->reviewer_user();
         return true;
-    }
-    function header(PaperList $pl, $is_text) {
-        return "Requested reviews";
     }
     function content(PaperList $pl, PaperInfo $row) {
         global $Now;
@@ -25,16 +23,18 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
         foreach ($row->reviews_by_display($pl->user) as $rrow) {
             if ($rrow->reviewType == REVIEW_EXTERNAL
                 && $rrow->requestedBy == $this->requester->contactId) {
-                if (!$pl->user->can_view_review_assignment($row, $rrow))
+                if (!$pl->user->can_view_review_assignment($row, $rrow)) {
                     continue;
-                if ($pl->user->can_view_review_identity($row, $rrow))
+                }
+                if ($pl->user->can_view_review_identity($row, $rrow)) {
                     $t = $pl->user->reviewer_html_for($rrow);
-                else
+                } else {
                     $t = "review";
+                }
                 $ranal = $pl->make_review_analysis($rrow, $row);
                 $d = $rrow->status_description();
                 if ($rrow->reviewOrdinal) {
-                    $d = rtrim("#" . unparseReviewOrdinal($rrow) . " " . $d);
+                    $d = rtrim("#" . $rrow->unparse_ordinal() . " " . $d);
                 }
                 $d = $ranal->wrap_link($d, "uu nw");
                 if (!$rrow->reviewSubmitted
@@ -47,7 +47,7 @@ class ReviewDelegation_PaperColumn extends PaperColumn {
                     if (!$rrow->reviewLastLogin) {
                         $login = 'never logged in';
                     } else {
-                        $login = 'activity ' . $pl->conf->unparse_time_relative($rrow->reviewLastLogin);
+                        $login = 'activity ' . $pl->conf->unparse_time_relative((int) $rrow->reviewLastLogin);
                     }
                     $d .= ' <span class="hint">(' . $login . ')</span>';
                 } else if (!$rrow->reviewSubmitted

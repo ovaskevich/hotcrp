@@ -1,6 +1,6 @@
 <?php
 // pc_formulagraph.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
     public $formula;
@@ -14,13 +14,13 @@ class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
     function prepare(PaperList $pl, $visible) {
         if (!$this->formula->check($pl->user)
             || !($this->formula->result_format() instanceof ReviewField)
-            || !$pl->user->can_view_formula($this->formula, $pl->search->limit_author()))
+            || !$pl->user->can_view_formula($this->formula))
             return false;
         $this->format_field = $this->formula->result_format();
         $this->formula_function = $this->formula->compile_sortable_function();
         $this->indexes_function = null;
-        if ($this->formula->is_indexed())
-            $this->indexes_function = Formula::compile_indexes_function($pl->user, $this->formula->datatypes());
+        if ($this->formula->indexed())
+            $this->indexes_function = Formula::compile_indexes_function($pl->user, $this->formula->index_type());
         if ($visible)
             $this->formula->add_query_options($pl->qopts);
         parent::prepare($pl, $visible);
@@ -31,28 +31,24 @@ class FormulaGraph_PaperColumn extends ScoreGraph_PaperColumn {
         $indexes = $indexesf ? $indexesf($row, $pl->user) : [null];
         $formulaf = $this->formula_function;
         $vs = [];
-        foreach ($indexes as $i)
+        foreach ($indexes as $i) {
             if (($v = $formulaf($row, $i, $pl->user)) !== null)
                 $vs[$i] = $v;
+        }
         return $vs;
     }
     function header(PaperList $pl, $is_text) {
         $x = $this->formula->column_header();
-        if ($is_text)
-            return $x;
-        else if ($this->formula->headingTitle && $this->formula->headingTitle != $x)
-            return "<span class=\"need-tooltip\" data-tooltip=\"" . htmlspecialchars($this->formula->headingTitle) . "\">" . htmlspecialchars($x) . "</span>";
-        else
-            return htmlspecialchars($x);
+        return $is_text ? $x : htmlspecialchars($x);
     }
 
     static function expand($name, $user, $xfj, $m) {
-        $formula = new Formula($m[1], true);
+        $formula = new Formula($m[1], Formula::ALLOW_INDEXED);
         if (!$formula->check($user)) {
-            $user->conf->xt_factory_error($formula->error_html());
+            PaperColumn::column_error($user, "Formula error: " . $formula->error_html());
             return null;
         } else if (!($formula->result_format() instanceof ReviewField)) {
-            $user->conf->xt_factory_error("Graphed formulas must return review fields.");
+            PaperColumn::column_error($user, "Graphed formulas must return review fields.");
             return null;
         } else {
             $cj = (array) $xfj;

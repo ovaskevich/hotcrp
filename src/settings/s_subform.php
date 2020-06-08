@@ -1,6 +1,6 @@
 <?php
 // src/settings/s_subform.php -- HotCRP settings > submission form page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class BanalSettings {
     static function render($suffix, $sv) {
@@ -15,7 +15,7 @@ class BanalSettings {
 
         $open = $sv->curv("sub_banal$suffix") > 0;
         $uropen = !in_array($sv->curv("sub_banal_pagelimit$suffix"), ["", "N/A"]);
-        $sv->echo_checkbox("sub_banal$suffix", "PDF format checker<span class=\"fx\">:</span>", ["class" => "uich js-foldup", "group_class" => "settings-g has-fold " . ($open ? "foldo" : "foldc"), "group_open" => true]);
+        $sv->echo_checkbox("sub_banal$suffix", "PDF format checker<span class=\"fx\">:</span>", ["class" => "uich js-foldup", "group_class" => "form-g has-fold " . ($open ? "foldo" : "foldc"), "group_open" => true]);
         echo Ht::hidden("has_sub_banal$suffix", 1),
             '<div class="settings-2col fx">';
         $sv->echo_entry_group("sub_banal_papersize$suffix", "Paper size", ["horizontal" => true], "Examples: “letter”, <span class=\"nw\">“21cm x 28cm”,</span> <span class=\"nw\">“letter OR A4”</span>");
@@ -32,12 +32,13 @@ class BanalSettings {
         echo "</div></div>\n";
     }
     static private function cf_status(CheckFormat $cf) {
-        if ($cf->failed)
+        if ($cf->failed) {
             return "failed";
-        else if ($cf->has_error())
+        } else if ($cf->has_error()) {
             return "error";
-        else
+        } else {
             return $cf->has_problem() ? "warning" : "ok";
+        }
     }
     static private function check_banal($sv) {
         global $ConfSitePATH;
@@ -46,22 +47,25 @@ class BanalSettings {
         $cf->check_file("$ConfSitePATH/src/sample.pdf", "letter;2;;6.5inx9in;12;14");
         $s1 = self::cf_status($cf);
         $e1 = join(",", array_intersect($cf->problem_fields(), $interesting_keys)) ? : "none";
-        $e1_papersize = $cf->has_problem("papersize");
+        $e1_papersize = $cf->has_problem_at("papersize");
         $cf->check_file("$ConfSitePATH/src/sample.pdf", "a4;1;;3inx3in;14;15");
         $s2 = self::cf_status($cf);
         $e2 = join(",", array_intersect($cf->problem_fields(), $interesting_keys)) ? : "none";
         $want_e2 = join(",", $interesting_keys);
         if ($s1 !== "ok" || $e1 !== "none" || $s2 !== "error" || $e2 !== $want_e2) {
             $errors = "<div class=\"fx\"><table><tr><td>Analysis:&nbsp;</td><td>$s1 $e1 $s2 $e2 (expected ok none error $want_e2)</td></tr>"
-                . "<tr><td class=\"nw\">Exit status:&nbsp;</td><td>" . htmlspecialchars($cf->banal_status) . "</td></tr>";
-            if (trim($cf->banal_stdout))
+                . "<tr><td class=\"nw\">Exit status:&nbsp;</td><td>" . htmlspecialchars((string) $cf->banal_status) . "</td></tr>";
+            if (trim($cf->banal_stdout)) {
                 $errors .= "<tr><td>Stdout:&nbsp;</td><td><pre class=\"email\">" . htmlspecialchars($cf->banal_stdout) . "</pre></td></tr>";
-            if (trim($cf->banal_stderr))
+            }
+            if (trim($cf->banal_stderr)) {
                 $errors .= "<tr><td>Stderr:&nbsp;</td><td><pre class=\"email\">" . htmlspecialchars($cf->banal_stderr) . "</pre></td></tr>";
-            $errors .= "<tr><td>Check:&nbsp;</td><td>" . join("<br />\n", $cf->messages()) . "</td></tr>";
+            }
+            $errors .= "<tr><td>Check:&nbsp;</td><td>" . join("<br />\n", $cf->message_texts()) . "</td></tr>";
             $sv->warning_at(null, "Running the automated paper checker on a sample PDF file produced unexpected results. You should disable it for now. <div id=\"foldbanal_warning\" class=\"foldc\">" . foldupbutton(0, "Checker output") . $errors . "</table></div></div>");
-            if (($s1 == "warning" || $s1 == "error") && $e1_papersize)
+            if (($s1 == "warning" || $s1 == "error") && $e1_papersize) {
                 $sv->warning_at(null, "(Try setting <code>\$Opt[\"banalZoom\"]</code> to 1.)");
+            }
         }
     }
     static function parse($suffix, $sv, $check) {
@@ -81,26 +85,27 @@ class BanalSettings {
             && strcasecmp($s, "any") !== 0
             && strcasecmp($s, "N/A") !== 0) {
             $ses = preg_split('/\s*,\s*|\s+OR\s+/i', $s);
-            foreach ($ses as $ss)
-                if ($ss !== "" && ($d = FormatSpec::parse_dimen($ss, 2)))
+            foreach ($ses as $ss) {
+                if ($ss !== "" && ($d = FormatSpec::parse_dimen2($ss))) {
                     $cfs->papersize[] = $d;
-                else if ($ss !== "") {
+                } else if ($ss !== "") {
                     $sv->error_at("sub_banal_papersize$suffix", "Invalid paper size.");
                     $problem = true;
                     $sout = null;
                     break;
                 }
+            }
         }
 
         $cfs->pagelimit = null;
         if (($s = trim($sv->reqv("sub_banal_pagelimit$suffix", ""))) !== ""
             && strcasecmp($s, "N/A") !== 0) {
-            if (($sx = cvtint($s, -1)) > 0)
+            if (($sx = cvtint($s, -1)) > 0) {
                 $cfs->pagelimit = [0, $sx];
-            else if (preg_match('/\A(\d+)\s*(?:-|–)\s*(\d+)\z/', $s, $m)
-                     && $m[1] > 0 && $m[2] > 0 && $m[1] <= $m[2])
+            } else if (preg_match('/\A(\d+)\s*(?:-|–)\s*(\d+)\z/', $s, $m)
+                       && $m[1] > 0 && $m[2] > 0 && $m[1] <= $m[2]) {
                 $cfs->pagelimit = [+$m[1], +$m[2]];
-            else {
+            } else {
                 $sv->error_at("sub_banal_pagelimit$suffix", "Page limit must be a whole number bigger than 0, or a page range such as <code>2-4</code>.");
                 $problem = true;
             }
@@ -139,27 +144,30 @@ class BanalSettings {
                     if (strpos($s, "x") === false) {
                         $s = preg_replace('/\s+(?=[\d.])/', 'x', trim($s));
                         $css = 1;
-                    } else
+                    } else {
                         $css = 0;
-                    if (!($m = FormatSpec::parse_dimen($s)) || (is_array($m) && count($m) > 4)) {
+                    }
+                    if (!($m = FormatSpec::parse_dimen($s))
+                        || (is_array($m) && count($m) > 4)) {
                         $sv->error_at("sub_banal_textblock$suffix", "Invalid margin definition.");
                         $problem = true;
                         $s = "";
-                    } else if (!is_array($m))
-                        $s = array($ps[0] - 2 * $m, $ps[1] - 2 * $m);
-                    else if (count($m) == 2)
-                        $s = array($ps[0] - 2 * $m[$css], $ps[1] - 2 * $m[1 - $css]);
-                    else if (count($m) == 3)
-                        $s = array($ps[0] - $m[$css] - $m[2 - $css], $ps[1] - $m[1 - $css] - $m[1 + $css]);
-                    else
-                        $s = array($ps[0] - $m[$css] - $m[2 + $css], $ps[1] - $m[1 - $css] - $m[3 - $css]);
+                    } else if (!is_array($m)) {
+                        $s = [$ps[0] - 2 * $m, $ps[1] - 2 * $m];
+                    } else if (count($m) == 2) {
+                        $s = [$ps[0] - 2 * $m[$css], $ps[1] - 2 * $m[1 - $css]];
+                    } else if (count($m) == 3) {
+                        $s = [$ps[0] - $m[$css] - $m[2 - $css], $ps[1] - $m[1 - $css] - $m[1 + $css]];
+                    } else {
+                        $s = [$ps[0] - $m[$css] - $m[2 + $css], $ps[1] - $m[1 - $css] - $m[3 - $css]];
+                    }
                 }
                 $s = (is_array($s) ? FormatSpec::unparse_dimen($s) : "");
             }
             // check text block measurements
-            if ($s && ($s = FormatSpec::parse_dimen($s, 2)))
+            if ($s && ($s = FormatSpec::parse_dimen2($s))) {
                 $cfs->textblock = $s;
-            else {
+            } else {
                 $sv->error_at("sub_banal_textblock$suffix", "Invalid text block definition.");
                 $problem = true;
             }
@@ -187,10 +195,12 @@ class BanalSettings {
             }
         }
 
-        if ($problem)
+        if ($problem) {
             return false;
-        if ($check)
+        }
+        if ($check) {
             self::check_banal($sv);
+        }
 
         $opt_spec = new FormatSpec($sv->newv("sub_banal_opt$suffix"));
         $opt_unparse = $opt_spec->unparse_banal();
@@ -219,7 +229,7 @@ class BanalSettings {
 
 class SubForm_SettingRenderer {
     static function render(SettingValues $sv) {
-        echo "<h3 class=\"settings\">Abstract and PDF</h3>\n";
+        echo "<h3 class=\"form-h\">Abstract and PDF</h3>\n";
 
         echo '<div id="foldpdfupload" class="fold2o fold3o">';
         echo '<div class="f-i">',
@@ -241,23 +251,24 @@ class SubForm_SettingRenderer {
         echo '</div>';
         Ht::stash_script('function sub_nopapers_change() { var v = $("#sub_nopapers").val(); fold("pdfupload",v==1,2); fold("pdfupload",v!=0,3); } $("#sub_nopapers").on("change", sub_nopapers_change); $(sub_nopapers_change)');
 
-        echo "<h3 class=\"settings\">Conflicts and collaborators</h3>\n",
-            '<div id="foldpcconf" class="settings-g fold',
+        echo "<h3 class=\"form-h\">Conflicts and collaborators</h3>\n",
+            '<div id="foldpcconf" class="form-g fold',
             ($sv->curv("sub_pcconf") ? "o" : "c"), "\">\n";
         $sv->echo_checkbox("sub_pcconf", "Collect authors’ PC conflicts", ["class" => "uich js-foldup"]);
         $cflt = array();
         $confset = $sv->conf->conflict_types();
-        foreach ($confset->basic_conflict_types() as $ct)
+        foreach ($confset->basic_conflict_types() as $ct) {
             $cflt[] = "“" . $confset->unparse_html($ct) . "”";
+        }
         $sv->echo_checkbox("sub_pcconfsel", "Collect PC conflict descriptions (" . commajoin($cflt, "or") . ")", ["group_class" => "fx"]);
         $sv->echo_checkbox("sub_collab", "Collect authors’ other collaborators as text");
         echo "</div>\n";
 
-        echo '<div class="settings-g">';
+        echo '<div class="form-g">';
         $sv->echo_message_minor("msg.conflictdef", "Definition of conflict of interest");
         echo "</div>\n";
 
-        echo '<div class="settings-g">', $sv->label("sub_pcconfvis", "When can reviewers see conflict information?"),
+        echo '<div class="form-g">', $sv->label("sub_pcconfvis", "When can reviewers see conflict information?"),
             '&nbsp; ',
             $sv->render_select("sub_pcconfvis", [1 => "Never", 0 => "When authors or tracker are visible", 2 => "Always"]),
             '</div>';

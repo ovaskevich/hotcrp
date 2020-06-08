@@ -1,13 +1,16 @@
 <?php
 // src/help/h_tags.php -- HotCRP help functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Tags_HelpTopic {
+    /** @var Conf */
     private $conf;
+    /** @var Contact */
     private $user;
+    /** @var HelpRenderer */
     private $hth;
 
-    function __construct($hth) {
+    function __construct(HelpRenderer $hth) {
         $this->conf = $hth->conf;
         $this->user = $hth->user;
         $this->hth = $hth;
@@ -15,8 +18,9 @@ class Tags_HelpTopic {
 
     function render_intro() {
         $conflictmsg = "";
-        if ($this->user->isPC && !$this->conf->tag_seeall)
+        if ($this->user->isPC && !$this->conf->tag_seeall) {
             $conflictmsg = " and conflicted PC members";
+        }
 
         echo "<p>PC members and administrators can attach tag names to papers.
 It’s easy to change tags and to list all papers with a given tag,
@@ -34,15 +38,18 @@ visible only to PC chairs.</p>";
         echo $hth->subhead("Finding tags");
         echo "<p>A paper’s tags are shown like this on the paper page:</p>
 
-<div class=\"pspcard p\" style=\"position:static\"><div class=\"pspcard_body\">
-<div class=\"psc\">
- <div class=\"pst\">
-  <span class=\"psfn\">Tags</span>
-  <span class=\"pstedit\"><a class=\"xx\"><span style=\"display:inline-block;position:relative;width:16px\">",
-    Ht::img("edit48.png", "[Edit]", "editimg"), "</span>&nbsp;<u class=\"x\">Edit</u></a></span>
-  <hr class=\"c\"></div>
-<div class=\"psv\"><div class=\"taghl\">#earlyaccept</div></div></div>
-</div></div><hr class=\"c\">
+<div class=\"pcard-left p c\" style=\"position:static;margin-bottom:1rem\">
+<div class=\"pspcard\"><div class=\"psc has-fold foldc\"><div class=\"pst ui js-foldup\">",
+    '<span class="psfn"><a href="" class="q ui js-foldup">',
+    expander(null, 0), "Tags</a></span></div><div class=\"psv\">",
+    '<div class="fn">', $hth->search_link(null, "#earlyaccept", ["class" => "nn pw"]), '</div>',
+    '<div class="fx"><textarea cols="20" rows="4" name="tags" class="w-99 want-focus need-suggest tags">earlyaccept</textarea>',
+    '<div class="aab aabr aab-compact"><div class="aabut">',
+    Ht::button("Save", ["class" => "btn-primary ui js-foldup"]),
+    '</div><div class="aabut">',
+    Ht::button("Cancel", ["class" => "ui js-foldup"]),
+    '</div></div></div>',
+    "</div></div></div></div><hr class=\"c\">
 
 <p>To find all papers with tag “#discuss”:</p>
 
@@ -54,11 +61,12 @@ as a column.</p>
 
 <p>Tags are only shown to PC members and administrators. ";
         if ($this->user->isPC) {
-            if ($this->conf->tag_seeall)
+            if ($this->conf->tag_seeall) {
                 echo "Currently PC members can see tags for any paper, including conflicts.";
-            else
+            } else {
                 echo "They are hidden from conflicted PC members; for instance, if a PC member searches for a tag, the result will never include their conflicts.";
-            echo $this->hth->setting_link("tag_seeall");
+            }
+            echo $this->hth->setting_link("tag_seeall"), " ";
         }
         echo "Additionally, twiddle tags, which have names like “#~tag”, are
 visible only to their creators; each PC member has an independent set.
@@ -70,10 +78,8 @@ Tags are not case sensitive.</p>";
         echo $hth->subhead("Changing tags", "changing");
         echo "
 <ul>
-<li><p><strong>For one paper:</strong> Go to a paper page, select the Tags box’s
-“Edit” link, and enter tags separated by spaces.</p>
-
-<p>" . Ht::img("extagsset.png", "[Tag entry on review screen]", ["width" => 142, "height" => 87]) . "</p></li>
+<li><p><strong>For one paper:</strong> Go to a paper page, click the
+“", expander(true), "Tags” expander, and enter tags separated by spaces.</p></li>
 
 <li><p><strong>For many papers:</strong> ", $hth->hotlink("Search", "search"),
 " for papers, select them, and use the action area underneath the
@@ -207,8 +213,9 @@ high-ranked paper, but it’s usually better to trust the PC.)</p>\n";
 Publishing the order lets PC members prepare to discuss upcoming papers.
 Define an ordered tag such as “#discuss”, then ask the PC to ", $this->hth->search_link("search for “order:discuss”", "order:discuss"), ".
 The PC can now see the order and use quick links to go from paper to paper.";
-        if ($this->user->isPC && !$this->conf->tag_seeall)
+        if ($this->user->isPC && !$this->conf->tag_seeall) {
             echo " However, since PC members can’t see tags for conflicted papers, each PC member might see a different list.", $this->hth->setting_link("tag_seeall");
+        }
         echo "</p>\n";
     }
 

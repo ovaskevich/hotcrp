@@ -23,40 +23,45 @@ function fix_one_delegation() {
             where r.reviewType=" . REVIEW_SECONDARY . " and r.reviewSubmitted is null
             and if(coalesce(q.ct,0)=0,1,if(q.cs=0,-1,0))!=r.reviewNeedsSubmit
             limit 1");
-    if (!$row)
+    if (!$row) {
         return false;
+    }
     $pid = (int) $row[0];
     $req_cid = (int) $row[1];
     $req_email = $row[2];
-    $prow = $Conf->fetch_paper($pid);
+    $prow = $Conf->paper_by_id($pid);
     fwrite(STDERR, "Problem: #$pid review by $req_email\n");
     fwrite(STDERR, "  reviewNeedsSubmit $row[5], " . plural($row[3] ? : 0, "delegate") . ", " . plural($row[4] ? : 0, "submitted delegate") . "\n");
 
     $result = Dbl::qe("select l.* from ActionLog l where paperId=? order by logId asc", $pid);
     $proposals = $confirmations = [];
-    while (($row = edb_orow($result))) {
+    while (($row = $result->fetch_object())) {
         if ($row->contactId == $req_cid
             && preg_match('/\ALogged proposal for (\S+) to review/', $row->action, $m)
-            && ($xid = $Conf->user_id_by_email($m[1])))
+            && ($xid = $Conf->user_id_by_email($m[1]))) {
             $proposals[$xid] = true;
-        else if (preg_match('/\AAdded External review by (\S+)/', $row->action, $m)
-                 && ($pc = $Conf->pc_member_by_email($m[1]))
-                 && $pc->can_administer($prow))
+        } else if (preg_match('/\AAdded External review by (\S+)/', $row->action, $m)
+                   && ($pc = $Conf->pc_member_by_email($m[1]))
+                   && $pc->can_administer($prow)) {
             $confirmations[$row->contactId] = $pc->contactId;
+        }
     }
     Dbl::free($result);
 
-    foreach ($proposals as $xid => $x)
+    foreach ($proposals as $xid => $x) {
         if (isset($confirmations[$xid])) {
             $result1 = Dbl::qe("update PaperReview set requestedBy=? where paperId=? and contactId=? and requestedBy=?", $req_cid, $pid, $xid, $confirmations[$xid]);
             $result2 = Dbl::qe("update PaperReview r, PaperReview q set r.reviewNeedsSubmit=0 where r.paperId=? and r.contactId=? and q.paperId=? and q.contactId=? and q.reviewSubmitted is not null", $pid, $req_cid, $pid, $xid);
-            if ($result1->affected_rows || $result2->affected_rows)
+            if ($result1->affected_rows || $result2->affected_rows) {
                 return true;
+            }
         }
+    }
 
     error_log("Failed to resolve paper #$pid review by $req_email");
     return false;
 }
 
-while (fix_one_delegation())
+while (fix_one_delegation()) {
     /* do nothing */;
+}

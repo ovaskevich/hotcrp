@@ -1,16 +1,20 @@
 <?php
 // reviewtable.php -- HotCRP helper class for table of all reviews
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 function _review_table_actas($user, $rr) {
     if (!get($rr, "contactId") || $rr->contactId == $user->contactId)
         return "";
     return ' <a href="' . $user->conf->selfurl(null, ["actas" => $rr->email]) . '">'
-        . Ht::img("viewas.png", "[Act as]", ["title" => "Act as " . Text::name_text($rr)])
+        . Ht::img("viewas.png", "[Act as]", ["title" => "Act as " . Text::nameo($rr, NAME_P)])
         . "</a>";
 }
 
 // reviewer information
+/** @param Contact $user
+ * @param list<ReviewInfo> $rrows
+ * @param ?ReviewInfo $rrow
+ * @param string $mode */
 function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
     $conf = $prow->conf;
     $subrev = [];
@@ -19,9 +23,7 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
     $admin = $user->can_administer($prow);
     $hideUnviewable = ($cflttype > 0 && !$admin)
         || (!$user->act_pc($prow) && !$conf->setting("extrev_view"));
-    $show_colors = $user->can_view_reviewer_tags($prow);
     $show_ratings = $user->can_view_review_ratings($prow);
-    $tagger = $show_colors ? new Tagger($user) : null;
     $xsep = ' <span class="barsep">·</span> ';
     $want_scores = $mode !== "assign" && $mode !== "edit" && $mode !== "re";
     $want_requested_by = false;
@@ -58,19 +60,24 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
         // review ID
         $id = $rr->is_subreview() ? "Subreview" : "Review";
         if ($rr->reviewOrdinal) {
-            $id .= " #" . $prow->paperId . unparseReviewOrdinal($rr->reviewOrdinal);
+            $id .= " #" . $rr->unparse_ordinal();
         }
         if (!$rr->reviewSubmitted
             && ($rr->timeApprovalRequested >= 0 || !$rr->is_subreview())) {
-            $id .= " (" . $rr->status_description() . ")";
+            $d = $rr->status_description();
+            if ($d === "draft")
+                $id = "Draft " . $id;
+            else
+                $id .= " (" . $d . ")";
         }
-        $rlink = unparseReviewOrdinal($rr);
+        $rlink = $rr->unparse_ordinal();
 
         $t = '<td class="rl nw">';
         if ($rrow && $rrow->reviewId == $rr->reviewId) {
-            if ($user->contactId == $rr->contactId && !$rr->reviewSubmitted)
+            if ($user->contactId == $rr->contactId && !$rr->reviewSubmitted) {
                 $id = "Your $id";
-            $t .= '<a href="' . $conf->hoturl("review", "p=$prow->paperId&r=$rlink") . '" class="q"><b>' . $id . '</b></a>';
+            }
+            $t .= '<a href="' . $prow->reviewurl(["r" => $rlink]) . '" class="q"><b>' . $id . '</b></a>';
         } else if (!$canView
                    || ($rr->reviewModified <= 1 && !$user->can_review($prow, $rr))) {
             $t .= $id;
@@ -78,21 +85,23 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
                    || $rr->reviewModified <= 1
                    || (($mode === "re" || $mode === "assign")
                        && $user->can_review($prow, $rr))) {
-            $t .= '<a href="' . $conf->hoturl("review", "p=$prow->paperId&r=$rlink") . '">' . $id . '</a>';
+            $t .= '<a href="' . $prow->reviewurl(["r" => $rlink]) . '">' . $id . '</a>';
         } else if (Navigation::page() !== "paper") {
-            $t .= '<a href="' . $conf->hoturl("paper", "p=$prow->paperId#r$rlink") . '">' . $id . '</a>';
+            $t .= '<a href="' . $prow->hoturl(["anchor" => "r$rlink"]) . '">' . $id . '</a>';
         } else {
             $t .= '<a href="#r' . $rlink . '">' . $id . '</a>';
             if ($show_ratings
                 && $user->can_view_review_ratings($prow, $rr)
                 && ($ratings = $rr->ratings())) {
                 $all = 0;
-                foreach ($ratings as $r)
+                foreach ($ratings as $r) {
                     $all |= $r;
-                if ($all & 126)
+                }
+                if ($all & 126) {
                     $t .= " &#x2691;";
-                else if ($all & 1)
+                } else if ($all & 1) {
                     $t .= " &#x2690;";
+                }
             }
         }
         $t .= '</td>';
@@ -115,7 +124,7 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
             $t .= ($rtype ? '<td class="rl">' . $rtype . '</td>' : '<td></td>');
         } else {
             if (!$showtoken || !Contact::is_anonymous_email($rr->email)) {
-                $n = $user->name_html_for($rr);
+                $n = $user->reviewer_html_for($rr);
             } else {
                 $n = "[Token " . encode_token((int) $rr->reviewToken) . "]";
             }
@@ -125,11 +134,6 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
             $t .= '<td class="rl"><span class="taghl" title="'
                 . $rr->email . '">' . $n . '</span>'
                 . ($rtype ? " $rtype" : "") . "</td>";
-            if ($show_colors
-                && ($p = $conf->pc_member_by_id($rr->contactId))
-                && ($color = $p->viewable_color_classes($user))) {
-                $tclass .= ($tclass ? " " : "") . $color;
-            }
         }
 
         // requester
@@ -160,8 +164,8 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
                     && (!$f->round_mask || $f->is_round_visible($rr))
                     && isset($rr->$fid) && $rr->$fid) {
                     if ($score_header[$fid] === "")
-                        $score_header[$fid] = '<th class="revscore">' . $f->web_abbreviation() . "</th>";
-                    $scores[$fid] = '<td class="revscore need-tooltip" data-rf="' . $f->uid() . '" data-tooltip-info="rf-score">'
+                        $score_header[$fid] = '<th class="rlscore">' . $f->web_abbreviation() . "</th>";
+                    $scores[$fid] = '<td class="rlscore need-tooltip" data-rf="' . $f->uid() . '" data-tooltip-info="rf-score">'
                         . $f->unparse_value($rr->$fid, ReviewField::VALUE_SC)
                         . '</td>';
                 }
@@ -173,12 +177,14 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
 
     // completion
     if (!empty($subrev)) {
-        if ($want_requested_by)
+        if ($want_requested_by) {
             array_unshift($score_header, '<th class="rl"></th>');
+        }
         $score_header_text = join("", $score_header);
         $t = "<div class=\"reviewersdiv\"><table class=\"reviewers";
-        if ($score_header_text)
+        if ($score_header_text) {
             $t .= " has-scores";
+        }
         $t .= "\">";
         $nscores = 0;
         if ($score_header_text) {
@@ -195,11 +201,12 @@ function review_table($user, PaperInfo $prow, $rrows, $rrow, $mode) {
         foreach ($subrev as $r) {
             $t .= '<tr class="rl' . ($r[0] ? " $r[0]" : "") . '">' . $r[1];
             if (get($r, 2)) {
-                foreach ($score_header as $fid => $header_needed)
+                foreach ($score_header as $fid => $header_needed) {
                     if ($header_needed !== "") {
                         $x = get($r[2], $fid);
-                        $t .= $x ? : "<td class=\"revscore rs_$fid\"></td>";
+                        $t .= $x ? : "<td class=\"rlscore rs_$fid\"></td>";
                     }
+                }
             } else if ($nscores > 0) {
                 $t .= '<td colspan="' . $nscores . '"></td>';
             }

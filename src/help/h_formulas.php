@@ -1,9 +1,9 @@
 <?php
 // src/help/h_formulas.php -- HotCRP help functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Formulas_HelpTopic {
-    static function render($hth) {
+    static function render(HelpRenderer $hth) {
         echo "<p>Program committee members and administrators can search and display <em>formulas</em>
 that calculate properties of paper scores&mdash;for instance, the
 standard deviation of papers’ Overall merit scores, or average Overall
@@ -23,7 +23,7 @@ $hth->search_link("Search &gt; View options", ["q" => "", "anchor" => "view"]),
 <p>Formulas use a familiar expression language.
 For example, this computes the sum of the squares of the overall merit scores:</p>
 
-<blockquote>sum(OveMer*OveMer)</blockquote>
+<blockquote>sum(OveMer**2)</blockquote>
 
 <p>This calculates an average of overall merit scores, weighted by expertise
 (high-expertise reviews are given slightly more weight):</p>
@@ -49,6 +49,8 @@ scores A, B, and D is A. For instance:</p>
         echo $hth->tgroup("Arithmetic");
         echo $hth->trow("2", "Numbers");
         echo $hth->trow("true, false", "Booleans");
+        echo $hth->trow("null", "The null value");
+        echo $hth->trow("(<em>e</em>)", "Parentheses");
         echo $hth->trow("<em>e</em> + <em>e</em>, <em>e</em> - <em>e</em>", "Addition, subtraction");
         echo $hth->trow("<em>e</em> * <em>e</em>, <em>e</em> / <em>e</em>, <em>e</em> % <em>e</em>", "Multiplication, division, remainder");
         echo $hth->trow("<em>e</em> ** <em>e</em>", "Exponentiation");
@@ -57,13 +59,13 @@ scores A, B, and D is A. For instance:</p>
         echo $hth->trow("<em>e1</em> &amp;&amp; <em>e2</em>", "Logical and (returns <em>e1</em> if <em>e1</em> is false, otherwise returns <em>e2</em>)");
         echo $hth->trow("<em>e1</em> || <em>e2</em>", "Logical or (returns <em>e1</em> if <em>e1</em> is true, otherwise returns <em>e2</em>)");
         echo $hth->trow("<em>test</em> ? <em>iftrue</em> : <em>iffalse</em>", "If-then-else operator");
-        echo $hth->trow("(<em>e</em>)", "Parentheses");
+        echo $hth->trow("let <em>var</em> = <em>val</em> in <em>e</em>", "Local variable definition");
         echo $hth->trow("greatest(<em>e</em>, <em>e</em>, ...)", "Maximum");
         echo $hth->trow("least(<em>e</em>, <em>e</em>, ...)", "Minimum");
+        echo $hth->trow("coalesce(<em>e</em>, <em>e</em>, ...)", "Null coalescing: return first of <em>e</em>s that is not null");
         echo $hth->trow("log(<em>e</em>)", "Natural logarithm");
         echo $hth->trow("log(<em>e</em>, <em>b</em>)", "Log to the base <em>b</em>");
         echo $hth->trow("round(<em>e</em>[, <em>m</em>])", "Round to the nearest multiple of <em>m</em>");
-        echo $hth->trow("null", "The null value");
         echo $hth->tgroup("Submission properties");
         echo $hth->trow("pid", "Paper ID");
         echo $hth->trow("au", "Number of authors");
@@ -90,8 +92,9 @@ scores A, B, and D is A. For instance:</p>
         echo $hth->trow("re:external", "True for external reviews");
         echo $hth->trow("re:pc", "True for PC reviews");
         echo $hth->trow("re:sylvia", "True if reviewer matches “sylvia”");
-        if (($retag = meaningful_pc_tag($hth->user)))
+        if (($retag = $hth->meaningful_pc_tag())) {
             echo $hth->trow("re:#$retag", "True if reviewer has tag “#{$retag}”");
+        }
         echo $hth->tgroup("Review preferences");
         echo $hth->trow("pref", "Review preference");
         echo $hth->trow("prefexp", "Predicted expertise");

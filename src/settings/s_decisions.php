@@ -1,12 +1,13 @@
 <?php
 // src/settings/s_decisions.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Decisions_SettingParser extends SettingParser {
     static private function render_row(SettingValues $sv, $ndec, $k, $v, $isnew, $count) {
         $vx = $v;
-        if ($ndec && $sv->use_req())
+        if ($ndec && $sv->use_req()) {
             $vx = $sv->reqv("dec_name_$ndec", $v);
+        }
         echo '<tr><td class="lentry nw">',
             Ht::entry("dec_name_$ndec", $vx, ["size" => 35, "placeholder" => "Decision name", "data-default-value" => $v]),
             '</td><td class="lentry nw">',
@@ -34,11 +35,12 @@ class Decisions_SettingParser extends SettingParser {
         // count papers per decision
         $decs_pcount = array();
         $result = $sv->conf->qe_raw("select outcome, count(*) from Paper where timeSubmitted>0 group by outcome");
-        while (($row = edb_row($result)))
+        while (($row = $result->fetch_row())) {
             $decs_pcount[$row[0]] = $row[1];
+        }
 
         // real decisions
-        echo '<div class="settings-g">',
+        echo '<div class="form-g">',
             Ht::hidden("has_decisions", 1),
             '<table><tbody id="settings-decision-types">';
         $ndec = 0;
@@ -66,22 +68,24 @@ class Decisions_SettingParser extends SettingParser {
         $dec_revmap = array();
         for ($ndec = 1; $sv->has_reqv("dec_name_$ndec"); ++$ndec) {
             $dname = simplify_whitespace($sv->reqv("dec_name_$ndec"));
-            if ($dname === "")
+            if ($dname === "") {
                 /* remove decision */;
-            else if (($derror = Conf::decision_name_error($dname)))
+            } else if (($derror = Conf::decision_name_error($dname))) {
                 $sv->error_at("dec_name_$ndec", htmlspecialchars($derror));
-            else if (isset($dec_revmap[strtolower($dname)]))
+            } else if (isset($dec_revmap[strtolower($dname)])) {
                 $sv->error_at("dec_name_$ndec", "Decision name “{$dname}” was already used.");
-            else
+            } else {
                 $dec_revmap[strtolower($dname)] = true;
+            }
             if ($sv->has_reqv("dec_class_$ndec")
                 && !$sv->has_reqv("dec_classconfirm_$ndec")) {
                 $match_accept = (stripos($dname, "accept") !== false);
                 $match_reject = (stripos($dname, "reject") !== false);
-                if ($sv->reqv("dec_class_$ndec") > 0 && $match_reject)
+                if ($sv->reqv("dec_class_$ndec") > 0 && $match_reject) {
                     $sv->error_at("dec_class_$ndec", "You are trying to add an Accept-class decision that has “reject” in its name, which is usually a mistake. To add the decision anyway, check the “Confirm” box and try again.");
-                else if ($sv->reqv("dec_class_$ndec") < 0 && $match_accept)
+                } else if ($sv->reqv("dec_class_$ndec") < 0 && $match_accept) {
                     $sv->error_at("dec_class_$ndec", "You are trying to add a Reject-class decision that has “accept” in its name, which is usually a mistake.  To add the decision anyway, check the “Confirm” box and try again.");
+                }
             }
         }
         $sv->need_lock["Paper"] = true;

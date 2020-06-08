@@ -1,13 +1,13 @@
 <?php
 // src/help/h_chairsguide.php -- HotCRP help functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class ChairsGuide_HelpTopic {
     static function render_presubmission($hth, $gj) {
         if ($gj->itemid === -1) {
             echo $hth->subhead("Submission time");
             echo "<p>Follow these steps to prepare to accept submissions.</p>\n\n<ol>\n";
-            $hth->render_group("chair/presubmission/*");
+            $hth->render_group("chair/presubmission");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -84,7 +84,7 @@ form also can include:</p>
         if ($gj->itemid === -1) {
             echo $hth->subhead("Assignments");
             echo "<p>After the submission deadline has passed:</p>\n<ol>\n";
-            $hth->render_group("chair/assignments/*");
+            $hth->render_group("chair/assignments");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -159,7 +159,7 @@ form also can include:</p>
         }
     }
 
-    static function render_chair_conflicts($hth, $gj) {
+    static function render_chair_conflicts($hth) {
         echo $hth->subhead("Chair conflicts");
         echo "<p>Chairs and system administrators can access any information stored in the
 conference system, including reviewer identities for conflicted papers.
@@ -199,7 +199,7 @@ administrator’s identity.</p>\n\n";
         if ($gj->itemid === -1) {
             echo $hth->subhead("Before the meeting");
             echo "<ol>\n";
-            $hth->render_group("chair/premeeting/*");
+            $hth->render_group("chair/premeeting");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -260,7 +260,7 @@ administrator’s identity.</p>\n\n";
         if ($gj->itemid === -1) {
             echo $hth->subhead("At the meeting");
             echo "<ol>\n";
-            $hth->render_group("chair/atmeeting/*");
+            $hth->render_group("chair/atmeeting");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {
@@ -298,7 +298,7 @@ administrator’s identity.</p>\n\n";
         if ($gj->itemid === -1) {
             echo $hth->subhead("After the meeting");
             echo "<ol>\n";
-            $hth->render_group("chair/postmeeting/*");
+            $hth->render_group("chair/postmeeting");
             echo "</ol>\n\n";
 
         } else if ($gj->itemid === 1) {

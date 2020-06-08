@@ -2,39 +2,49 @@
 $ConfSitePATH = preg_replace(',/batch/[^/]+,', '', __FILE__);
 require_once("$ConfSitePATH/lib/getopt.php");
 
-$arg = getopt_rest($argv, "hn:me:", array("help", "name:", "no-email", "modify", "expression:", "expr:"));
-if (isset($arg["h"]) || isset($arg["help"])
+$arg = getopt_rest($argv, "hn:e:u:r:", ["help", "name:", "no-email", "no-notify", "modify-only", "create-only", "no-modify", "no-create", "expression:", "expr:", "user:", "roles:", "uname:"]);
+foreach (["expr" => "e", "expression" => "e", "no-email" => "no-notify",
+          "no-create" => "modify-only", "no-modify" => "create-only",
+          "user" => "u", "roles" => "r", "help" => "h"] as $long => $short) {
+    if (isset($arg[$long]) && !isset($arg[$short]))
+        $arg[$short] = $arg[$long];
+}
+if (isset($arg["h"])
     || count($arg["_"]) > 1
-    || (count($arg["_"]) && $arg["_"][0] !== "-" && $arg["_"][0][0] === "-")) {
+    || (!empty($arg["_"]) && $arg["_"][0] !== "-" && $arg["_"][0][0] === "-")
+    || (!empty($arg["_"]) && isset($arg["u"]))
+    || ((isset($arg["r"]) || isset($arg["uname"])) && !isset($arg["u"]))
+    || (isset($arg["create-only"]) && isset($arg["modify-only"]))) {
     $status = isset($arg["h"]) || isset($arg["help"]) ? 0 : 1;
     fwrite($status ? STDERR : STDOUT,
-           "Usage: php batch/addusers.php [-n CONFID] [--modify] [--no-email] [JSONFILE | CSVFILE | -e JSON]\n");
+           "Usage: php batch/saveusers.php [OPTION]... [JSONFILE | CSVFILE | -e JSON]
+Or:    php batch/saveusers.php [OPTION]... -u EMAIL [--roles ROLES]
+                              [--uname NAME]
+
+Options: -n CONFID, --no-modify, --no-create, --no-notify\n");
     exit($status);
 }
-if (isset($arg["modify"]))
-    $arg["m"] = false;
-if (isset($arg["expr"]))
-    $arg["e"] = $arg["expr"];
-else if (isset($arg["expression"]))
-    $arg["e"] = $arg["expression"];
 
 require_once("$ConfSitePATH/src/init.php");
 
-function save_contact($ustatus, $key, $cj, $arg) {
+function save_contact(UserStatus $ustatus, $key, $cj, $arg) {
     global $status;
-    if (!isset($cj->id) && !isset($arg["m"])) {
-        $cj->id = "new";
-    }
-    if (!isset($cj->email) && validate_email($key)) {
+    if (!isset($cj->email)
+        && is_string($key)
+        && validate_email($key)) {
         $cj->email = $key;
     }
     $acct = $ustatus->save($cj);
     if ($acct) {
-        fwrite(STDOUT, "Saved account {$acct->email}.\n");
+        if (empty($ustatus->diffs)) {
+            fwrite(STDOUT, "{$acct->email}: No changes.\n");
+        } else {
+            fwrite(STDOUT, "{$acct->email}: Saved " . join(", ", array_keys($ustatus->diffs)) . ".\n");
+        }
     } else {
-        foreach ($ustatus->errors() as $msg) {
+        foreach ($ustatus->error_texts() as $msg) {
             fwrite(STDERR, $msg . "\n");
-            if (!isset($arg["m"]) && $ustatus->has_error_at("email_inuse")) {
+            if (isset($arg["create-only"]) && $ustatus->has_error_at("email_inuse")) {
                 fwrite(STDERR, "(Use --modify to modify existing users.)\n");
             }
         }
@@ -46,6 +56,8 @@ $file = count($arg["_"]) ? $arg["_"][0] : "-";
 if (isset($arg["e"])) {
     $content = $arg["e"];
     $file = "<expr>";
+} else if (isset($arg["u"])) {
+    $content = null;
 } else if ($file === "-") {
     $content = stream_get_contents(STDIN);
     $file = "<stdin>";
@@ -57,9 +69,24 @@ if ($content === false) {
     exit(1);
 }
 
-$ustatus = new UserStatus($Conf->site_contact(), ["send_email" => !isset($arg["no-email"])]);
+$ustatus = new UserStatus($Conf->root_user(), [
+    "no_notify" => isset($arg["no-notify"]),
+    "no_create" => isset($arg["modify-only"]),
+    "no_modify" => isset($arg["create-only"])
+]);
 $status = 0;
-if (!preg_match(',\A\s*[\[\{],i', $content)) {
+if (isset($arg["u"])) {
+    $cj = (object) ["email" => $arg["u"]];
+    if (isset($arg["r"])) {
+        $cj->roles = $arg["r"];
+    }
+    if (isset($arg["uname"])) {
+        $cj->name = $arg["uname"];
+    }
+    $ustatus->set_user(new Contact(null, $Conf));
+    $ustatus->clear_messages();
+    save_contact($ustatus, null, $cj, $arg);
+} else if (!preg_match('/\A\s*[\[\{]/i', $content)) {
     $csv = new CsvParser(cleannl(convert_to_utf8($content)));
     $csv->set_comment_chars("#%");
     $line = $csv->next_array();

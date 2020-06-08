@@ -1,6 +1,6 @@
 <?php
 // cacheable.php -- HotCRP cacheability helper
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 session_cache_limiter("");
 header("Cache-Control: max-age=315576000, public");
@@ -8,8 +8,9 @@ header("Expires: " . gmdate("D, d M Y H:i:s", time() + 315576000) . " GMT");
 
 // *** NB This file does not include all of the HotCRP infrastructure! ***
 $zlib_output_compression = false;
-if (function_exists("zlib_get_coding_type"))
+if (function_exists("zlib_get_coding_type")) {
     $zlib_output_compression = zlib_get_coding_type();
+}
 if ($zlib_output_compression) {
     header("Content-Encoding: $zlib_output_compression");
     header("Vary: Accept-Encoding", false);
@@ -20,15 +21,16 @@ function fail($reason, $file) {
     header("HTTP/1.0 $reason");
     header("Content-Type: text/plain; charset=utf-8");
     $result = "$file\r\n";
-    if (!$zlib_output_compression)
+    if (!$zlib_output_compression) {
         header("Content-Length: " . strlen($result));
+    }
     echo $result;
-    exit;
 }
 
-$file = isset($_GET["file"]) ? $_GET["file"] : null;
+$file = $_GET["file"] ?? null;
 if (!$file) {
     fail("400 Bad Request", "File missing");
+    exit;
 }
 
 $prefix = "";
@@ -65,15 +67,19 @@ if (preg_match(',\A(?:images|scripts|stylesheets)(?:/[^./][^/]+)+\z,', $file)
         header("Content-Type: application/vnd.ms-fontobject");
     } else {
         fail("403 Forbidden", "File cannot be served");
+        exit;
     }
     header("Access-Control-Allow-Origin: *");
 } else {
     fail("403 Forbidden", "File cannot be served");
+    exit;
 }
 
 $mtime = @filemtime($file);
-if ($mtime === false)
+if ($mtime === false) {
     fail("404 Not Found", "File not found");
+    exit;
+}
 $last_modified = gmdate("D, d M Y H:i:s", $mtime) . " GMT";
 $etag = '"' . md5("$file $last_modified") . '"';
 header("Last-Modified: $last_modified");

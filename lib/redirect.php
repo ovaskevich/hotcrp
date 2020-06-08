@@ -1,6 +1,6 @@
 <?php
 // redirect.php -- HotCRP redirection helper functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 function go($url = false) {
     Navigation::redirect($url);
@@ -67,7 +67,7 @@ function set_session_name(Conf $conf) {
     if ($secure !== null) {
         $params["secure"] = !!$secure;
     }
-    if ($domain !== null) {
+    if ($domain !== null || !isset($params["domain"])) {
         $params["domain"] = $domain;
     }
     $params["httponly"] = true;
@@ -103,26 +103,31 @@ function ensure_session($flags = 0) {
         return;
     }
 
+    $session_data = [];
     if ($has_cookie && ($flags & ENSURE_SESSION_REGENERATE_ID)) {
         // choose new id, mark old session as deleted
         if (session_id() === "") {
             session_start();
         }
-        $session_data = $_SESSION;
+        $session_data = $_SESSION ? : [];
         $new_sid = session_create_id();
         $_SESSION["deletedat"] = $Now;
         session_commit();
 
         session_id($new_sid);
-        $_COOKIE[$sn] = $new_sid;
-    } else {
-        $session_data = null;
+        if (!isset($_COOKIE[$sn]) || $_COOKIE[$sn] !== $new_sid) {
+            $params = session_get_cookie_params();
+            $params["expires"] = $Now + $params["lifetime"];
+            unset($params["lifetime"]);
+            hotcrp_setcookie($sn, $new_sid, $params);
+        }
     }
 
     session_start();
 
     // maybe kill old session
-    if (isset($_SESSION["deletedat"]) && $_SESSION["deletedat"] < $Now - 30) {
+    if (isset($_SESSION["deletedat"])
+        && $_SESSION["deletedat"] < $Now - 30) {
         $_SESSION = [];
     }
 

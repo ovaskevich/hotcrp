@@ -124,8 +124,6 @@ DROP TABLE IF EXISTS `Formula`;
 CREATE TABLE `Formula` (
   `formulaId` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(200) NOT NULL,
-  `heading` varchar(200) NOT NULL DEFAULT '',
-  `headingTitle` varbinary(4096) NOT NULL,
   `expression` varbinary(4096) NOT NULL,
   `createdBy` int(11) NOT NULL DEFAULT '0',
   `timeModified` bigint(11) NOT NULL DEFAULT '0',
@@ -188,6 +186,7 @@ CREATE TABLE `Paper` (
   `pdfFormatStatus` bigint(11) NOT NULL DEFAULT '0',
   `withdrawReason` varbinary(1024) DEFAULT NULL,
   `paperFormat` tinyint(1) DEFAULT NULL,
+  `dataOverflow` longblob,
   PRIMARY KEY (`paperId`),
   KEY `timeSubmitted` (`timeSubmitted`),
   KEY `leadContactId` (`leadContactId`),
@@ -279,6 +278,7 @@ CREATE TABLE `PaperReview` (
   `reviewAuthorNotified` bigint(11) NOT NULL DEFAULT '0',
   `reviewAuthorSeen` bigint(1) DEFAULT NULL,
   `reviewOrdinal` int(1) NOT NULL DEFAULT '0',
+  `reviewViewScore` tinyint(2) NOT NULL DEFAULT '-3',
   `timeDisplayed` bigint(11) NOT NULL DEFAULT '0',
   `timeApprovalRequested` bigint(11) NOT NULL DEFAULT '0',
   `reviewEditVersion` int(1) NOT NULL DEFAULT '0',
@@ -513,7 +513,7 @@ CREATE TABLE `TopicInterest` (
 
 
 
-insert into Settings (name, value) values ('allowPaperOption', 224);
+insert into Settings (name, value) values ('allowPaperOption', 235);
 insert into Settings (name, value) values ('setupPhase', 1);
 -- there are no submissions yet
 insert into Settings (name, value) values ('no_papersub', 1);

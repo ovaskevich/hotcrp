@@ -1,6 +1,7 @@
 <?php
 // test06.php -- HotCRP review and some setting tests
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
+/** @phan-file-suppress PhanUndeclaredProperty */
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
@@ -9,10 +10,10 @@ require_once("$ConfSitePATH/test/setup.php");
 require_once("$ConfSitePATH/src/settingvalues.php");
 
 // load users
-$user_chair = $Conf->user_by_email("chair@_.com");
-$user_mgbaker = $Conf->user_by_email("mgbaker@cs.stanford.edu"); // pc
-$user_diot = $Conf->user_by_email("christophe.diot@sophia.inria.fr"); // pc, red
-$user_pdruschel = $Conf->user_by_email("pdruschel@cs.rice.edu"); // pc
+$user_chair = $Conf->checked_user_by_email("chair@_.com");
+$user_mgbaker = $Conf->checked_user_by_email("mgbaker@cs.stanford.edu"); // pc
+$user_diot = $Conf->checked_user_by_email("christophe.diot@sophia.inria.fr"); // pc, red
+$user_pdruschel = $Conf->checked_user_by_email("pdruschel@cs.rice.edu"); // pc
 $Conf->save_setting("rev_open", 1);
 
 // 1-18 have 3 assignments, reset have 0
@@ -108,7 +109,7 @@ assert_search_papers($user_chair, "ovemer:5", "1");
 // Test offline review parsing
 
 // Change a score
-$paper1 = fetch_paper(1, $user_chair);
+$paper1 = $Conf->checked_paper_by_id(1, $user_chair);
 $rrow = fetch_review($paper1, $user_mgbaker);
 $review1A = file_get_contents("$ConfSitePATH/test/review1A.txt");
 $tf = ReviewValues::make_text($Conf->review_form(), $review1A, "review1A.txt");
@@ -137,8 +138,8 @@ xassert($tf->parse_text(false));
 xassert($tf->check_and_save($user_mgbaker));
 xassert_eqq(join(" ", $tf->unchanged), "#1A");
 xassert($tf->has_problem_at("overAllMerit"));
-xassert(strpos(join("\n", $tf->messages_at("overAllMerit")), "must provide") !== false);
-//error_log(var_export($tf->messages(true), true));
+xassert(strpos(join("\n", $tf->message_texts_at("overAllMerit")), "must provide") !== false);
+//error_log(var_export($tf->message_list(), true));
 
 // Different reviewer
 $tf = ReviewValues::make_text($Conf->review_form(), preg_replace('/Reviewer: .*/m', 'Reviewer: butt@butt.com', $review1A), "review1A-4.txt");
@@ -157,7 +158,7 @@ $tf = ReviewValues::make_text($Conf->review_form(), preg_replace('/Reviewer: .*/
 xassert($tf->parse_text(false));
 xassert($tf->check_and_save($user_mgbaker, $paper1, fetch_review($paper1, $user_mgbaker)));
 xassert(!$tf->has_problem_at("reviewerEmail"));
-//error_log(var_export($tf->messages(true), true));
+//error_log(var_export($tf->message_list(), true));
 
 
 // Settings changes
@@ -177,7 +178,7 @@ xassert($tf->parse_text(false));
 xassert($tf->check_and_save($user_mgbaker));
 xassert_eqq(join(" ", $tf->updated), "#1A");
 xassert(!$tf->has_problem_at("overAllMerit"));
-//error_log(var_export($tf->messages(true), true));
+//error_log(var_export($tf->message_list(), true));
 
 assert_search_papers($user_chair, "has:ovemer", "");
 
@@ -187,7 +188,7 @@ xassert($tf->parse_text(false));
 xassert($tf->check_and_save($user_mgbaker));
 xassert_eqq(join(" ", $tf->updated), "#1A");
 xassert(!$tf->has_problem_at("overAllMerit"));
-//error_log(var_export($tf->messages(true), true));
+//error_log(var_export($tf->message_list(), true));
 
 assert_search_papers($user_chair, "ovemer:4", "1");
 
@@ -535,24 +536,29 @@ xassert($sv->execute());
 xassert_eqq(join(" ", $sv->changes()), "review_form");
 
 // saving a JSON review defaults to ready
-$paper17 = fetch_paper(17, $user_mgbaker);
+xassert_assign($user_chair, "paper,lead\n17,pdruschel\n");
+$paper17 = $user_mgbaker->checked_paper_by_id(17);
 
 xassert_eqq($paper17->review_type($user_mgbaker), REVIEW_PRIMARY);
 xassert_eqq($paper17->review_type($user_diot), 0);
 xassert(!$user_mgbaker->can_view_authors($paper17));
 xassert(!$user_diot->can_view_authors($paper17));
+xassert(!$user_pdruschel->can_view_authors($paper17));
 $Conf->save_setting("sub_blind", Conf::BLIND_NEVER);
 Contact::update_rights();
 xassert($user_mgbaker->can_view_authors($paper17));
 xassert($user_diot->can_view_authors($paper17));
+xassert($user_pdruschel->can_view_authors($paper17));
 $Conf->save_setting("sub_blind", Conf::BLIND_OPTIONAL);
 Contact::update_rights();
 xassert(!$user_mgbaker->can_view_authors($paper17));
 xassert(!$user_diot->can_view_authors($paper17));
+xassert(!$user_pdruschel->can_view_authors($paper17));
 $Conf->save_setting("sub_blind", Conf::BLIND_UNTILREVIEW);
 Contact::update_rights();
 xassert(!$user_mgbaker->can_view_authors($paper17));
 xassert(!$user_diot->can_view_authors($paper17));
+xassert(!$user_pdruschel->can_view_authors($paper17));
 $Conf->save_setting("sub_blind", Conf::BLIND_ALWAYS);
 
 $rrow17m = fetch_review($paper17, $user_mgbaker);
@@ -587,7 +593,7 @@ xassert(!$user_diot->can_view_authors($paper17));
 $Conf->save_setting("sub_blind", Conf::BLIND_ALWAYS);
 
 // Check review diffs
-$paper18 = fetch_paper(18, $user_diot);
+$paper18 = $user_diot->checked_paper_by_id(18);
 $tf = new ReviewValues($Conf->review_form());
 xassert($tf->parse_json(["ovemer" => 2, "revexp" => 1, "papsum" => "No summary", "comaut" => "No comments"]));
 xassert($tf->check_and_save($user_diot, $paper18));
@@ -639,6 +645,7 @@ xassert_eqq($rrow18d2->t01, $gettysburg);
 
 // check some review visibility policies
 $user_external = Contact::create($Conf, null, ["email" => "external@_.com", "name" => "External Reviewer"]);
+assert(!!$user_external);
 $user_mgbaker->assign_review(17, $user_external->contactId, REVIEW_EXTERNAL,
     ["round_number" => $Conf->round_number("R2", false)]);
 xassert(!$user_external->can_view_review($paper17, $rrow17m));
@@ -658,7 +665,7 @@ xassert($user_external->can_view_review($paper17, $rrow17m));
 xassert($user_external->can_view_review_identity($paper17, $rrow17m));
 
 // per-round review visibility
-$user_lixia = $Conf->user_by_email("lixia@cs.ucla.edu");
+$user_lixia = $Conf->checked_user_by_email("lixia@cs.ucla.edu");
 $tf = new ReviewValues($Conf->review_form());
 xassert($tf->parse_json(["ovemer" => 2, "revexp" => 1, "papsum" => "Radical", "comaut" => "Nonradical"]));
 xassert($tf->check_and_save($user_lixia, $paper17));
@@ -807,7 +814,7 @@ $result = JsonResult::make($result);
 MailChecker::check_db("test06-external2-request17");
 xassert($result->content["ok"]);
 
-$user_external2 = $Conf->user_by_email("external2@_.com");
+$user_external2 = $Conf->checked_user_by_email("external2@_.com");
 save_review(17, $user_external2, [
     "ready" => true, "ovemer" => 3, "revexp" => 3
 ]);

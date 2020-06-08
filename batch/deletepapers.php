@@ -18,12 +18,12 @@ require_once("$ConfSitePATH/src/init.php");
 
 $yes = isset($arg["y"]) || isset($arg["yes"]);
 $quiet = isset($arg["q"]) || isset($arg["quiet"]);
-$user = $Conf->site_contact();
+$user = $Conf->root_user();
 $search = new PaperSearch($user, ["t" => "all", "q" => join(" ", $arg["_"])]);
 $pids = $search->paper_ids();
 if (($pids = $search->paper_ids())) {
     $ndeleted = false;
-    foreach ($user->paper_set($pids) as $prow) {
+    foreach ($user->paper_set(["paperId" => $pids]) as $prow) {
         $pid = "#{$prow->paperId}";
         if ($prow->title !== "")
             $pid .= " (" . UnicodeHelper::utf8_abbreviate($prow->title, 40) . ")";
@@ -42,8 +42,9 @@ if (($pids = $search->paper_ids())) {
         if (!$quiet) {
             fwrite(STDERR, "Deleting $pid\n");
         }
-        if (!$prow->delete_from_database($user))
+        if (!$prow->delete_from_database($user)) {
             exit(2);
+        }
         $ndeleted = true;
     }
     exit($ndeleted ? 0 : 1);

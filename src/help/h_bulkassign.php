@@ -1,9 +1,9 @@
 <?php
 // src/help/h_bulkassign.php -- HotCRP help functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class BulkAssign_HelpTopic {
-    static function render($hth, $gj) {
+    static function render($hth) {
         echo "
 <p>The ", $hth->hotlink("bulk assignments page", "bulkassign"), " offers
 fine-grained control over review assignments, tags, leads, shepherds, and many
@@ -47,10 +47,10 @@ replaced by a combination of <code>email</code>, <code>name</code>,
 columns can contain a tag value, using “tag#value” syntax, or the value
 can be supplied separately.</p>';
 
-        $hth->render_group("bulkassignactions/*");
+        $hth->render_group("bulkassignactions");
     }
 
-    static function render_action_review($hth, $gj) {
+    static function render_action_review($hth) {
         echo "<p>The <code>review</code> action assigns reviews. The
 <code>review type</code> column sets the review type; it can be
 <code>primary</code>, <code>secondary</code>, <code>pcreview</code> (optional
@@ -97,7 +97,7 @@ all,review,all,primary,R1:R2</pre>
 the corresponding review types.</p>";
     }
 
-   static function render_action_tag($hth, $gj) {
+   static function render_action_tag($hth) {
         echo "<p>The <code>tag</code> action controls ",
             $hth->help_link("tags", "tags") . ". The <code>tag</code>
 column names the tag to add; it can contain a ",
@@ -126,43 +126,57 @@ all,cleartag,p
 6,nexttag,p</pre>";
     }
 
-    static function render_action_follow($hth, $gj) {
+    static function render_action_follow($hth) {
         echo "<p>The <code>following</code> column can be “yes” (to receive
 email notifications on updates to reviews and comments), “no” (to block
 notifications), or “default” (to revert to the default, which is based
 on the user’s site preferences).</p>";
     }
 
-    static function render_action_conflict($hth, $gj) {
+    static function render_action_conflict($hth) {
         echo "<p>The <code>conflict type</code> column can be “yes”, “no”, or
 a conflict type, such as “advisor” or “institutional”.</p>";
+    }
+
+    static function add_bulk_assignment_action(&$apx, $uf, $hth) {
+        if (!isset($uf->alias)) {
+            $t = '<tr><td class="pad';
+            if ($uf->group !== $uf->name) {
+                $t .= ' padl';
+            }
+            $t .= '">';
+            $n = '<code>' . htmlspecialchars($uf->name) . '</code>';
+            if ($hth
+                && ($xt = $hth->member("bulkassignactions/{$uf->name}"))
+                && $xt->anchorid) {
+                $n = '<a href="#' . $xt->anchorid . '">' . $n . '</a>';
+            }
+            $t .= $n . '</td><td class="pad"><code>pid</code>';
+            foreach (get($uf, "parameters", []) as $param) {
+                $t .= ', ';
+                if ($param[0] === "[") {
+                    $t .= '[<code>' . substr($param, 1, -1) . '</code>]';
+                } else {
+                    $t .= '<code>' . $param . '</code>';
+                }
+            }
+            $t .= '</td><td class="pad">';
+            if (isset($uf->description_html)) {
+                $t .= $uf->description_html;
+            } else {
+                $t .= htmlspecialchars($uf->description ?? "");
+            }
+            $apx[] = $t . '</td></tr>';
+        }
     }
 
     static function echo_actions(Contact $user, $hth = null) {
         $apge = new GroupedExtensions($user, "etc/assignmentparsers.json", $user->conf->opt("assignmentParsers"));
         $apx = [];
-        foreach ($apge->all() as $name => $uf) {
-            if ($uf->name === $name) {
-                $t = '<tr><td class="pad';
-                if ($uf->group !== $uf->name)
-                    $t .= ' padl';
-                $t .= '">';
-                $n = '<code>' . htmlspecialchars($name) . '</code>';
-                if ($hth
-                    && ($xt = $hth->member("bulkassignactions/{$name}"))
-                    && $xt->anchorid)
-                    $n = '<a href="#' . $xt->anchorid . '">' . $n . '</a>';
-                $t .= $n . '</td><td class="pad"><code>pid</code>';
-                foreach (get($uf, "parameters", []) as $param) {
-                    $t .= ', ';
-                    if ($param[0] === "[")
-                        $t .= '[<code>' . substr($param, 1, -1) . '</code>]';
-                    else
-                        $t .= '<code>' . $param . '</code>';
-                }
-                $t .= '</td><td class="pad">' . get($uf, "description", "")
-                    . '</td></tr>';
-                $apx[] = $t;
+        foreach ($apge->groups() as $ufg) {
+            self::add_bulk_assignment_action($apx, $ufg, $hth);
+            foreach ($apge->members($ufg->name) as $uf) {
+                self::add_bulk_assignment_action($apx, $uf, $hth);
             }
         }
         if (!empty($apx)) {

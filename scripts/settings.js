@@ -1,5 +1,5 @@
 // settings.js -- HotCRP JavaScript library for settings
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 function next_lexicographic_permutation(i, size) {
     var y = (i & -i) || 1, c = i + y, highbit = 1 << size;
@@ -35,7 +35,7 @@ handle_ui.on("js-settings-option-description", function () {
 });
 
 handle_ui.on("js-settings-option-presence", function (event) {
-    foldup.call(this, null, {n: 5, f: false});
+    foldup.call(this, null, {n: 10, f: false});
     foldup.call(this, null, {n: 9, f: false});
     if (document.activeElement === this)
         $(this).closest(".settings-opt").find(".settings-opt-presence").focus();
@@ -91,7 +91,6 @@ handle_ui.on("js-settings-option-new", function (event) {
         ++next;
     h = h.replace(/_0/g, "_" + next);
     var odiv = $(h).appendTo("#settings_opts");
-    mktemptext(odiv);
     odiv.find(".need-autogrow").autogrow();
     odiv.find(".need-tooltip").each(tooltip);
     $("#optn_" + next)[0].focus();
@@ -131,7 +130,6 @@ handle_ui.on("js-settings-add-decision-type", function (event) {
     $("#settings-decision-type-notes").removeClass("hidden");
     var h = $("#settings-new-decision-type").html().replace(/_0/g, "_" + next),
         $r = $(h).appendTo($t);
-    mktemptext($r);
     $r.find("input[type=text]").autogrow();
     $r.find("input[name=dec_name_" + next + "]")[0].focus();
 });
@@ -150,7 +148,6 @@ handle_ui.on("js-settings-new-autosearch", function (event) {
         ++next;
     h = h.replace(/_0/g, "_" + next);
     odiv = $(h).appendTo("#settings_tag_autosearch");
-    mktemptext(odiv);
     odiv.find("input[type=text]").autogrow();
     $("#tag_autosearch_t_" + next)[0].focus();
 });
@@ -167,7 +164,6 @@ handle_ui.on("js-settings-add-track", function () {
     $("#trackgroup" + (i - 1)).after("<div id=\"trackgroup" + i + "\" class=\"mg has-fold fold3o\"></div>");
     var $j = jQuery("#trackgroup" + i);
     $j.html(jQuery("#trackgroup0").html().replace(/_track0/g, "_track" + i));
-    mktemptext($j);
     $j.find(".need-suggest").each(suggest);
     $j.find("input[name^=name]").focus();
 });
@@ -203,7 +199,6 @@ function add() {
     var $mydiv = $("#roundname_" + i).closest(".js-settings-review-round");
     $("#rev_roundtag").append('<option value="#' + i + '" id="rev_roundtag_' + i + '">(new round)</option>');
     $("#extrev_roundtag").append('<option value="#' + i + '" id="extrev_roundtag_' + i + '">(new round)</option>');
-    mktemptext($mydiv);
     $("#roundname_" + i).focus().on("input change", namechange);
 }
 
@@ -298,7 +293,7 @@ function fill_field(fid, fieldj, order) {
     fill_field1("#options_" + fid, options_to_text(fieldj), order);
     fill_field1("#option_class_prefix_flipped_" + fid, fieldj.option_letter ? "1" : "", order);
     fill_field1("#option_class_prefix_" + fid, option_class_prefix(fieldj), order);
-    fill_field1("#round_list_" + fid, (fieldj.round_list || []).join(" "), order);
+    fill_field1("#round_list_" + fid, (fieldj.round_list || ["all"]).join(" "), order);
     $("#revfield_" + fid + " textarea").trigger("change");
     $("#revfieldview_" + fid).html("").append(create_field_view(fid, fieldj));
     $("#remove_" + fid).html(fieldj.has_any_nonempty ? "Delete from form and current reviews" : "Delete from form");
@@ -488,14 +483,15 @@ function append_field(fid, pos) {
                 if (i & (1 << j))
                     text.push(rnames[j]);
             if (!text.length)
-                $j.append("<option value=\"\">All rounds</option>");
+                $j.append("<option value=\"all\">All rounds</option>");
             else if (text.length == 1)
                 $j.append("<option value=\"" + text[0] + "\">" + text[0] + " only</option>");
             else
                 $j.append("<option value=\"" + text.join(" ") + "\">" + commajoin(text) + "</option>");
         }
-    } else
+    } else {
         $f.find(".reviewrow_rounds").remove();
+    }
 
     $f.find(".revfield_remove").on("click", remove);
     $f.find(".revfield_moveup, .revfield_movedown").on("click", move_field);
@@ -527,7 +523,6 @@ function rfs(data) {
     $("#reviewform_container").on("unfold", ".settings-revfield", function (evt, opts) {
         $(this).find("textarea").css("height", "auto").autogrow();
         $(this).find("input[type=text]").autogrow();
-        mktemptext($(this));
     });
 
     // highlight errors, apply request
@@ -686,10 +681,9 @@ handle_ui.on("js-settings-resp-round-new", function () {
     var i, j;
     for (i = 1; jQuery("#response_" + i).length; ++i)
         /* do nothing */;
-    jQuery("#response_n").before("<div id=\"response_" + i + "\" class=\"settings-g\"></div>");
+    jQuery("#response_n").before("<div id=\"response_" + i + "\" class=\"form-g\"></div>");
     j = jQuery("#response_" + i);
     j.html(jQuery("#response_n").html().replace(/_n\"/g, "_" + i + "\""));
-    mktemptext(j);
     j.find("textarea").css({height: "auto"}).autogrow().val(jQuery("#response_n textarea").val());
     j.find(".need-suggest").each(suggest);
     return false;

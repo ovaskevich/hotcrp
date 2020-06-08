@@ -1,6 +1,6 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Withdraw_AssignmentFinisher {
     // When withdrawing a paper, remove voting tags so people don't have
@@ -14,7 +14,7 @@ class Withdraw_AssignmentFinisher {
         $res = $state->query_items(["type" => "status", "pid" => $this->pid]);
         if (!$res
             || $res[0]["_withdrawn"] <= 0
-            || $res[0]->get_before("_withdrawn") > 0)
+            || $res[0]->pre("_withdrawn") > 0)
             return;
         $ltre = [];
         foreach ($state->conf->tags()->filter("votish") as $dt)
@@ -116,30 +116,32 @@ class Status_Assigner extends Assigner {
         return new Status_Assigner($item, $state);
     }
     private function status_html($type) {
-        if ($this->item->get($type, "_withdrawn"))
+        if ($this->item->get($type, "_withdrawn")) {
             return "Withdrawn";
-        else if ($this->item->get($type, "_submitted"))
+        } else if ($this->item->get($type, "_submitted")) {
             return "Submitted";
-        else
+        } else {
             return "Not ready";
+        }
     }
     function unparse_display(AssignmentSet $aset) {
         return '<del>' . $this->status_html(true) . '</del> '
             . '<ins>' . $this->status_html(false) . '</ins>';
     }
     function unparse_csv(AssignmentSet $aset, AssignmentCsv $acsv) {
-        $x = [];
-        if (($this->item->get(true, "_submitted") === 0) !== ($this->item["_submitted"] === 0))
-            $x[] = ["pid" => $this->pid, "action" => $this->item["_submitted"] === 0 ? "unsubmit" : "submit"];
-        if ($this->item->get(true, "_withdrawn") === 0 && $this->item["_withdrawn"] !== 0)
-            $x[] = ["pid" => $this->pid, "action" => "revive"];
-        else if ($this->item->get(true, "_withdrawn") !== 0 && $this->item["_withdrawn"] === 0) {
-            $y = ["pid" => $this->pid, "action" => "withdraw"];
-            if ((string) $this->item["_withdraw_reason"] !== "")
-                $y["withdraw_reason"] = $this->item["_withdraw_reason"];
-            $x[] = $y;
+        if (($this->item->pre("_submitted") === 0) !== ($this->item["_submitted"] === 0)) {
+            $acsv->add(["pid" => $this->pid, "action" => $this->item["_submitted"] === 0 ? "unsubmit" : "submit"]);
         }
-        return $x;
+        if ($this->item->pre("_withdrawn") === 0 && $this->item["_withdrawn"] !== 0) {
+            $acsv->add(["pid" => $this->pid, "action" => "revive"]);
+        } else if ($this->item->pre("_withdrawn") !== 0 && $this->item["_withdrawn"] === 0) {
+            $x = ["pid" => $this->pid, "action" => "withdraw"];
+            if ((string) $this->item["_withdraw_reason"] !== "") {
+                $x["withdraw_reason"] = $this->item["_withdraw_reason"];
+            }
+            $acsv->add($x);
+        }
+        return null;
     }
     function add_locks(AssignmentSet $aset, &$locks) {
         $locks["Paper"] = "write";
@@ -147,11 +149,16 @@ class Status_Assigner extends Assigner {
     function execute(AssignmentSet $aset) {
         global $Now;
         $submitted = $this->item["_submitted"];
+        $old_submitted = $this->item->pre("_submitted");
         $withdrawn = $this->item["_withdrawn"];
+        $old_withdrawn = $this->item->pre("_withdrawn");
         $aset->stage_qe("update Paper set timeSubmitted=?, timeWithdrawn=?, withdrawReason=? where paperId=?", $submitted, $withdrawn, $this->item["_withdraw_reason"], $this->pid);
-        if (($withdrawn > 0) !== ($this->item->get(true, "_withdrawn") > 0))
-            $aset->user->log_activity($withdrawn > 0 ? "Withdrew" : "Revived", $this->pid);
-        if (($submitted > 0) !== ($this->item->get(true, "_submitted") > 0)) {
+        if (($withdrawn > 0) !== ($old_withdrawn > 0)) {
+            $aset->user->log_activity($withdrawn > 0 ? "Paper withdrawn" : "Paper revived", $this->pid);
+        } else if (($submitted > 0) !== ($old_submitted > 0)) {
+            $aset->user->log_activity($submitted > 0 ? "Paper submitted" : "Paper unsubmitted", $this->pid);
+        }
+        if (($submitted > 0) !== ($old_submitted > 0)) {
             $aset->cleanup_callback("papersub", function ($aset, $vals) {
                 $aset->conf->update_papersub_setting(min($vals));
             }, $submitted > 0 ? 1 : 0);

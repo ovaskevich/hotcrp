@@ -1,6 +1,6 @@
 <?php
 // test01.php -- HotCRP tests: permissions, assignments, search
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 global $ConfSitePATH;
 $ConfSitePATH = preg_replace(",/[^/]+/[^/]+$,", "", __FILE__);
@@ -13,26 +13,25 @@ $Conf->save_setting("sub_update", $Now + 10);
 $Conf->save_setting("sub_sub", $Now + 10);
 
 // load users
-$user_chair = $Conf->user_by_email("chair@_.com");
-$user_estrin = $Conf->user_by_email("estrin@usc.edu"); // pc
-$user_kohler = $Conf->user_by_email("kohler@seas.harvard.edu"); // none
-$user_marina = $Conf->user_by_email("marina@poema.ru"); // pc
-$user_van = $Conf->user_by_email("van@ee.lbl.gov"); // none
-$user_mgbaker = $Conf->user_by_email("mgbaker@cs.stanford.edu"); // pc
-$user_shenker = $Conf->user_by_email("shenker@parc.xerox.com"); // pc, chair
-$user_jon = $Conf->user_by_email("jon@cs.ucl.ac.uk"); // pc, red
-$user_varghese = $Conf->user_by_email("varghese@ccrc.wustl.edu"); // pc
-$user_wilma = $Conf->user_by_email("ojuelegba@gmail.com"); // pc
-$user_mjh = $Conf->user_by_email("mjh@isi.edu"); // pc
-$user_pdruschel = $Conf->user_by_email("pdruschel@cs.rice.edu"); // pc
+$user_chair = $Conf->checked_user_by_email("chair@_.com");
+$user_estrin = $Conf->checked_user_by_email("estrin@usc.edu"); // pc
+$user_kohler = $Conf->checked_user_by_email("kohler@seas.harvard.edu"); // none
+$user_marina = $Conf->checked_user_by_email("marina@poema.ru"); // pc
+$user_van = $Conf->checked_user_by_email("van@ee.lbl.gov"); // none
+$user_mgbaker = $Conf->checked_user_by_email("mgbaker@cs.stanford.edu"); // pc
+$user_shenker = $Conf->checked_user_by_email("shenker@parc.xerox.com"); // pc, chair
+$user_jon = $Conf->checked_user_by_email("jon@cs.ucl.ac.uk"); // pc, red
+$user_varghese = $Conf->checked_user_by_email("varghese@ccrc.wustl.edu"); // pc
+$user_wilma = $Conf->checked_user_by_email("ojuelegba@gmail.com"); // pc
+$user_mjh = $Conf->checked_user_by_email("mjh@isi.edu"); // pc
+$user_pdruschel = $Conf->checked_user_by_email("pdruschel@cs.rice.edu"); // pc
 $user_nobody = new Contact;
 
 // users are different
-xassert($user_chair && $user_estrin && $user_kohler && $user_marina && $user_van && $user_nobody);
-xassert($user_chair->contactId && $user_estrin->contactId && $user_kohler->contactId && $user_marina->contactId && $user_van->contactId && !$user_nobody->contactId);
 xassert($user_chair->contactId != $user_estrin->contactId);
 
 // check permissions on paper
+/** @param PaperInfo $paper1 */
 function check_paper1($paper1) {
     global $user_chair, $user_estrin, $user_kohler, $user_marina, $user_van, $user_nobody;
     xassert_neqq($paper1, null);
@@ -90,14 +89,14 @@ function check_paper1($paper1) {
     xassert(!$user_nobody->can_update_paper($paper1));
 }
 
-$paper1 = $Conf->fetch_paper(1, $user_chair);
+$paper1 = $user_chair->checked_paper_by_id(1);
 check_paper1($paper1);
-check_paper1($Conf->fetch_paper(1, $user_estrin));
+check_paper1($user_estrin->checked_paper_by_id(1));
 
 // grant user capability to read paper 1, check it doesn't allow PC view
 $user_capability = new Contact;
 xassert(!$user_capability->can_view_paper($paper1));
-$user_capability->apply_capability_text(CapabilityManager::capability_text($paper1, "a"));
+$user_capability->apply_capability_text(AuthorView_Capability::make($paper1));
 xassert(!$user_capability->contactId);
 xassert($user_capability->can_view_paper($paper1));
 xassert(!$user_capability->allow_administer($paper1));
@@ -108,16 +107,16 @@ xassert(!$user_capability->can_update_paper($paper1));
 // rejected papers cannot be updated
 xassert($user_estrin->can_update_paper($paper1));
 xassert_assign($user_chair, "paper,action,decision\n1,decision,no\n");
-$paper1 = $Conf->fetch_paper(1, $user_chair);
+$paper1 = $user_chair->checked_paper_by_id(1);
 xassert(!$user_estrin->can_update_paper($paper1));
 
 // clear decision
 xassert_eq($paper1->outcome, -1);
 xassert_assign($user_chair, "paper,action,decision\n1,cleardecision,yes\n");
-$paper1 = $Conf->fetch_paper(1, $user_chair);
+$paper1 = $user_chair->checked_paper_by_id(1);
 xassert_eq($paper1->outcome, -1);
 xassert_assign($user_chair, "paper,action,decision\n1,cleardecision,no\n");
-$paper1 = $Conf->fetch_paper(1, $user_chair);
+$paper1 = $user_chair->checked_paper_by_id(1);
 xassert_eq($paper1->outcome, 0);
 
 // check `paperacc` invariant
@@ -143,7 +142,7 @@ xassert(!$user_kohler->can_update_paper($paper1));
 xassert(!$user_nobody->can_update_paper($paper1));
 
 // role assignment works
-$paper18 = $Conf->fetch_paper(18, $user_mgbaker);
+$paper18 = $user_mgbaker->checked_paper_by_id(18);
 xassert($user_shenker->can_administer($paper18));
 xassert(!$user_mgbaker->can_administer($paper1));
 xassert(!$user_mgbaker->can_administer($paper18));
@@ -152,7 +151,7 @@ xassert(!$user_mgbaker->can_administer($paper18));
 xassert($user_mgbaker->act_author_view($paper18));
 
 // simple search
-$pl = new PaperList(new PaperSearch($user_shenker, "au:berkeley"));
+$pl = new PaperList("empty", new PaperSearch($user_shenker, "au:berkeley"));
 $j = $pl->text_json("id title");
 xassert_eqq(join(";", array_keys($j)), "1;6;13;15;24");
 
@@ -174,7 +173,7 @@ assert_search_papers($user_shenker, "au:n*@*u", "3 10");
 
 // correct conflict information returned
 $psearch = new PaperSearch($user_shenker, ["q" => "1 2 3 4 5 15-18", "reviewer" => $user_mgbaker]);
-$pl = new PaperList($psearch);
+$pl = new PaperList("empty", $psearch);
 $j = $pl->text_json("id conf");
 xassert_eqq(join(";", array_keys($j)), "1;2;3;4;5;15;16;17;18");
 xassert_eqq($j[3]->conf, "Y");
@@ -183,12 +182,13 @@ foreach ([1, 2, 4, 5, 15, 16, 17] as $i)
     xassert_eqq($j[$i]->conf, "N");
 
 $psearch = new PaperSearch($user_shenker, ["q" => "1 2 3 4 5 15-18", "reviewer" => $user_jon]);
-$pl = new PaperList($psearch);
+$pl = new PaperList("empty", $psearch);
 $j = $pl->text_json("id conf");
 xassert_eqq(join(";", array_keys($j)), "1;2;3;4;5;15;16;17;18");
 xassert_eqq($j[17]->conf, "Y");
-foreach ([1, 2, 3, 4, 5, 15, 16, 18] as $i)
+foreach ([1, 2, 3, 4, 5, 15, 16, 18] as $i) {
     xassert_eqq($j[$i]->conf, "N");
+}
 
 assert_search_papers($user_chair, "re:estrin", "4 8 18");
 assert_search_papers($user_shenker, "re:estrin", "4 8 18");
@@ -289,7 +289,7 @@ AssignmentSet::run($user_chair, "paper,action,email\n3,primary,ojuelegba@gmail.c
 xassert($user_wilma->has_outstanding_review());
 xassert(!$user_wilma->can_view_review($paper1, $review1));
 xassert(!$user_wilma->can_view_review($paper1, $review2));
-$paper3 = fetch_paper(3, $user_wilma);
+$paper3 = $user_wilma->checked_paper_by_id(3);
 save_review(3, $user_wilma, $revreq);
 xassert(!$user_wilma->has_outstanding_review());
 xassert($user_wilma->can_view_review($paper1, $review1));
@@ -298,7 +298,7 @@ xassert($user_wilma->can_view_review($paper1, $review2));
 // set up some tags and tracks
 AssignmentSet::run($user_chair, "paper,tag\n3 9 13 17,green\n", true);
 $Conf->save_setting("tracks", 1, "{\"green\":{\"assrev\":\"-red\"}}");
-$paper13 = $Conf->fetch_paper(13, $user_jon);
+$paper13 = $user_jon->checked_paper_by_id(13);
 xassert(!$paper13->has_author($user_jon));
 xassert(!$paper13->has_reviewer($user_jon));
 xassert(!$Conf->check_tracks($paper13, $user_jon, Track::ASSREV));
@@ -307,8 +307,8 @@ xassert(!$user_jon->can_accept_review_assignment_ignore_conflict($paper13));
 xassert(!$user_jon->can_accept_review_assignment($paper13));
 
 // check shepherd search visibility
-$paper11 = $Conf->fetch_paper(11, $user_chair);
-$paper12 = $Conf->fetch_paper(12, $user_chair);
+$paper11 = $user_chair->checked_paper_by_id(11);
+$paper12 = $user_chair->checked_paper_by_id(12);
 $j = call_api("shepherd", $user_chair, ["shepherd" => $user_estrin->email], $paper11);
 xassert_eqq($j->ok, true);
 $j = call_api("shepherd", $user_chair, ["shepherd" => $user_estrin->email], $paper12);
@@ -352,24 +352,60 @@ $assignset = new AssignmentSet($Admin, true);
 $assignset->parse("paper,action,tag,index
 1,tag,~vote,clear
 2,tag,marina~vote,clear\n");
-xassert_eqq(join("\n", $assignset->errors_text()), "");
+xassert_eqq(join("\n", $assignset->message_texts()), "");
 $assignset->execute();
 assert_search_papers($user_chair, "#any~vote", "1");
 
 // check AssignmentSet conflict checking
 $assignset = new AssignmentSet($Admin, false);
-$assignset->parse("paper,action,email
-1,pri,estrin@usc.edu\n");
-xassert_eqq(join("\n", $assignset->errors_text()), "Deborah Estrin <estrin@usc.edu> has a conflict with #1.");
+$assignset->parse("paper,action,email\n1,pri,estrin@usc.edu\n");
+xassert_eqq(join("\n", $assignset->message_texts()), "Deborah Estrin <estrin@usc.edu> has a conflict with #1.");
 $assignset->execute();
 assert_query("select email from PaperReview r join ContactInfo c on (c.contactId=r.contactId) where paperId=1 order by email", "mgbaker@cs.stanford.edu\nmjh@isi.edu\nvarghese@ccrc.wustl.edu");
 
+// check AssignmentSet error messages and landmarks
+$assignset = new AssignmentSet($Admin, false);
+$assignset->parse("paper,action,email\n1,pri,estrin@usc.edu\n", "fart.txt");
+xassert_eqq(join("\n", $assignset->message_texts(true)), "fart.txt:2: Deborah Estrin <estrin@usc.edu> has a conflict with #1.");
+xassert(!$assignset->execute());
+
+$assignset = new AssignmentSet($Admin, false);
+$assignset->parse("paper,action,email,landmark\n1,pri,estrin@usc.edu,butt.txt:740\n", "fart.txt");
+xassert_eqq(join("\n", $assignset->message_texts(true)), "butt.txt:740: Deborah Estrin <estrin@usc.edu> has a conflict with #1.");
+xassert(!$assignset->execute());
+
+$assignset = new AssignmentSet($Admin, false);
+$assignset->parse("paper,action,email,landmark,message\n1,pri,estrin@usc.edu,butt.txt:740\n1,error,none,butt.txt/10,GODDAMNIT", "fart.txt");
+xassert_eqq(join("\n", $assignset->message_texts(true)), "butt.txt/10: GODDAMNIT\nbutt.txt:740: Deborah Estrin <estrin@usc.edu> has a conflict with #1.");
+xassert(!$assignset->execute());
+
+assert_search_papers($user_chair, "#testo", "");
+$assignset = new AssignmentSet($Admin, false);
+$assignset->parse("paper,action,tag,message,landmark\n1,tag,testo,,butt.txt:740\n1,error,,GODDAMNIT,butt.txt/10", "fart.txt");
+xassert_eqq(join("\n", $assignset->message_texts(true)), "butt.txt/10: GODDAMNIT");
+xassert(!$assignset->execute());
+
+assert_search_papers($user_chair, "#testo", "");
+$assignset = new AssignmentSet($Admin, false);
+$assignset->parse("paper,action,tag,message,landmark\n1,tag,testo,,butt.txt:740\n1,warning,,GODDAMNIT,butt.txt/10", "fart.txt");
+xassert_eqq(join("\n", $assignset->message_texts(true)), "butt.txt/10: GODDAMNIT");
+xassert($assignset->execute());
+
+assert_search_papers($user_chair, "#testo", "1");
+xassert_assign($Admin, "paper,tag\n1,testo#clear");
+
+$assignset = new AssignmentSet($Admin, false);
+$assignset->parse("paper,action,email,landmark,message\n,error,none,butt.txt/10,GODDAMNIT", "fart.txt");
+xassert_eqq(join("\n", $assignset->message_texts(true)), "butt.txt/10: GODDAMNIT");
+xassert(!$assignset->execute());
+
+// more AssignmentSet conflict checking
 assert_search_papers($user_chair, "#fart", "");
 $assignset = new AssignmentSet($user_estrin, false);
 $assignset->parse("paper,tag
 1,fart
 2,fart\n");
-xassert_eqq(join("\n", $assignset->errors_text()), "You have a conflict with #1.");
+xassert_eqq(join("\n", $assignset->message_texts()), "You have a conflict with #1.");
 
 xassert_assign($user_estrin, "paper,tag\n2,fart\n");
 assert_search_papers($user_chair, "#fart", "2");
@@ -416,7 +452,7 @@ assert_search_papers($user_chair, "order:fart", "7 1 2 3 6 5 4");
 xassert_assign($Admin, "action,paper,tag\ntag,8,fArt#4\n", true);
 assert_search_papers($user_chair, "order:fart", "7 8 1 2 3 6 5 4");
 
-$paper8 = $Conf->fetch_paper(8, $user_chair);
+$paper8 = $user_chair->checked_paper_by_id(8);
 xassert_eqq($paper8->tag_value("fart"), 4.0);
 xassert(strpos($paper8->all_tags_text(), " fArt#") !== false);
 
@@ -540,7 +576,7 @@ assert_search_papers($user_chair, "#none", "11 12 14 15 16 18 19 20 21 22 23 24 
 assert_search_papers($user_mgbaker, "#none", "3 9 10 11 12 14 15 16 18 19 20 21 22 23 24 25 26 27 28 29 30");
 
 // comment searches
-$paper2 = $Conf->fetch_paper(2, $user_chair);
+$paper2 = $user_chair->checked_paper_by_id(2);
 xassert($user_mgbaker->can_comment($paper2, null));
 xassert(!$user_mgbaker->can_comment($paper18, null));
 xassert($user_marina->can_comment($paper1, null));
@@ -627,7 +663,7 @@ assert_search_papers($user_chair, "re:pri:mgbaker", "1 13 17");
 
 $assignset = new AssignmentSet($user_chair, null);
 $assignset->parse("action,paper,email,reviewtype\nreview,all,mgbaker@cs.stanford.edu,secondary:primary\n");
-xassert_eqq(join("\n", $assignset->errors_text()), "");
+xassert_eqq(join("\n", $assignset->message_texts()), "");
 xassert($assignset->execute());
 
 xassert_assign($user_chair, "action,paper,email,reviewtype\nreview,all,mgbaker@cs.stanford.edu,secondary:primary\n");
@@ -649,7 +685,7 @@ function get_pcassignment_csv() {
     global $user_chair;
     list($header, $texts) = ListAction::pcassignments_csv_data($user_chair, range(1, 30));
     $csvg = new CsvGenerator;
-    return $csvg->select($header)->add($texts)->unparse();
+    return $csvg->select($header)->append($texts)->unparse();
 }
 $old_pcassignments = get_pcassignment_csv();
 xassert_assign($user_chair, $old_pcassignments);
@@ -705,6 +741,7 @@ assert_search_papers($user_chair, "conflict:me", "");
 assert_search_papers($user_chair, "admin:me", "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30");
 assert_search_papers($user_marina, "admin:me", "");
 xassert(!$user_marina->is_manager());
+
 xassert_assign($user_chair, "action,paper,user\nadministrator,4,marina@poema.ru\n");
 xassert($Conf->setting("papermanager") > 0);
 assert_search_papers($user_chair, "has:admin", "4");
@@ -712,6 +749,26 @@ assert_search_papers($user_chair, "admin:me", "1 2 3 5 6 7 8 9 10 11 12 13 14 15
 assert_search_papers($user_chair, "admin:marina", "4");
 assert_search_papers($user_marina, "admin:me", "4");
 xassert($user_marina->is_manager());
+
+// conflict overrides
+xassert_assign($Conf->root_user(), "action,paper,user,tag\nconflict,4 5,chair@_.com\ntag,4 5,,testtag");
+$paper4 = $user_chair->checked_paper_by_id(4);
+$paper5 = $user_chair->checked_paper_by_id(5);
+assert(!$user_chair->can_administer($paper4));
+assert(!$user_chair->allow_administer($paper4));
+assert(!$user_chair->can_administer($paper5));
+assert($user_chair->allow_administer($paper5));
+xassert_eqq($paper4->viewable_tags($user_chair), "");
+xassert_eqq($paper5->viewable_tags($user_chair), "");
+$overrides = $user_chair->add_overrides(Contact::OVERRIDE_CONFLICT);
+assert(!$user_chair->can_administer($paper4));
+assert(!$user_chair->allow_administer($paper4));
+assert($user_chair->can_administer($paper5));
+assert($user_chair->allow_administer($paper5));
+xassert_eqq($paper4->viewable_tags($user_chair), "");
+xassert_match($paper5->viewable_tags($user_chair), '/\A fart#\d+ testtag#0\z/');
+$user_chair->set_overrides($overrides);
+xassert_assign($Conf->site_contact(), "action,paper,user\nclearconflict,4 5,chair@_.com");
 
 // preference assignments
 xassert_assign($user_chair, "paper,user,pref\n1,marina,10\n");
@@ -733,11 +790,11 @@ xassert_assign($user_marina, "paper,user,pref\n4,chair@_.com,12\n");
 
 xassert_assign($user_marina, "paper,user,action\n4,chair@_.com,noconflict\n");
 
-$paper1->load_reviewer_preferences();
-xassert_eqq($paper1->reviewer_preference($user_marina), [12, null]);
+$paper1->load_preferences();
+xassert_eqq($paper1->preference($user_marina), [12, null]);
 xassert_assign($user_marina, "paper,pref\n1,13\n");
-$paper1->load_reviewer_preferences();
-xassert_eqq($paper1->reviewer_preference($user_marina), [13, null]);
+$paper1->load_preferences();
+xassert_eqq($paper1->preference($user_marina), [13, null]);
 
 // remove paper administrators
 xassert($user_marina->is_manager());
@@ -757,65 +814,109 @@ function sorted_conflicts(PaperInfo $prow, $contacts) {
     return join(" ", $c);
 }
 
-$paper3 = $Conf->fetch_paper(3, $user_chair);
+$paper3 = $user_chair->checked_paper_by_id(3);
 xassert_eqq(sorted_conflicts($paper3, true), "sclin@leland.stanford.edu");
 xassert_eqq(sorted_conflicts($paper3, false), "mgbaker@cs.stanford.edu sclin@leland.stanford.edu");
 
-$user_sclin = $Conf->user_by_email("sclin@leland.stanford.edu");
+$user_sclin = $Conf->checked_user_by_email("sclin@leland.stanford.edu");
 $Conf->save_setting("sub_update", $Now + 10);
 $Conf->save_setting("sub_sub", $Now + 10);
 xassert($user_sclin->can_update_paper($paper3));
 xassert_assign($user_sclin, "paper,action,user\n3,conflict,rguerin@ibm.com\n");
-$paper3 = $Conf->fetch_paper(3, $user_chair);
+$paper3 = $user_chair->checked_paper_by_id(3);
 xassert_eqq(sorted_conflicts($paper3, false), "mgbaker@cs.stanford.edu rguerin@ibm.com sclin@leland.stanford.edu");
 
 // test conflict types
-$user_rguerin = $Conf->user_by_email("rguerin@ibm.com");
-xassert_eqq($paper3->conflict_type($user_rguerin), CONFLICT_AUTHORMARK);
-xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,confirmed\n");
-$paper3 = $Conf->fetch_paper(3, $user_chair);
-xassert_eqq($paper3->conflict_type($user_rguerin), CONFLICT_MAXAUTHORMARK);
-xassert_assign($user_chair, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,confirmed\n");
+$user_rguerin = $Conf->checked_user_by_email("rguerin@ibm.com");
+xassert_eqq($paper3->conflict_type($user_rguerin), Conflict::GENERAL);
+xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,pinned\n");
+$paper3 = $user_chair->checked_paper_by_id(3);
+xassert_eqq($paper3->conflict_type($user_rguerin), Conflict::GENERAL);
+xassert_assign($user_chair, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,pinned\n");
 $paper3->load_conflicts(false);
-xassert_eqq($paper3->conflict_type($user_rguerin), CONFLICT_CHAIRMARK);
-xassert_assign($user_sclin, "paper,action,user,conflict type\n3,conflict,rguerin@ibm.com,confirmed\n");
+xassert_eqq($paper3->conflict_type($user_rguerin), Conflict::set_pinned(Conflict::GENERAL, true));
+xassert_assign($user_sclin, "paper,action,user,conflict type\n3,conflict,rguerin@ibm.com,pinned\n");
 $paper3->load_conflicts(false);
-xassert_eqq($paper3->conflict_type($user_rguerin), CONFLICT_CHAIRMARK);
+xassert_eqq($paper3->conflict_type($user_rguerin), Conflict::set_pinned(Conflict::GENERAL, true));
 xassert_assign($user_chair, "paper,action,user,conflicttype\n3,conflict,rguerin@ibm.com,none\n");
 xassert_assign($user_sclin, "paper,action,user,conflicttype\n3,conflict,rguerin@ibm.com,conflict\n");
 $paper3->load_conflicts(false);
-xassert_eqq($paper3->conflict_type($user_rguerin), CONFLICT_AUTHORMARK);
+xassert_eqq($paper3->conflict_type($user_rguerin), Conflict::GENERAL);
 
 xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,collaborator\n");
 $paper3->load_conflicts(false);
 xassert_eqq($paper3->conflict_type($user_rguerin), 2);
 xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,advisor\n");
 $paper3->load_conflicts(false);
-xassert_eqq($paper3->conflict_type($user_rguerin), 3);
+xassert_eqq($paper3->conflict_type($user_rguerin), 4);
 xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,advisee\n");
 $paper3->load_conflicts(false);
-xassert_eqq($paper3->conflict_type($user_rguerin), 3);
+xassert_eqq($paper3->conflict_type($user_rguerin), 4);
 xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin,collaborator:none\n");
 $paper3->load_conflicts(false);
-xassert_eqq($paper3->conflict_type($user_rguerin), 3);
+xassert_eqq($paper3->conflict_type($user_rguerin), 4);
 xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,any,advisee:collaborator\n");
 $paper3->load_conflicts(false);
 xassert_eqq($paper3->conflict_type($user_rguerin), 2);
+xassert_assign($user_chair, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,pin unconflicted\n");
+$paper3->load_conflicts(false);
+xassert_eqq($paper3->conflict_type($user_rguerin), 1);
+xassert(!$paper3->has_conflict($user_rguerin));
+xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,advisee\n");
+$paper3->load_conflicts(false);
+xassert_eqq($paper3->conflict_type($user_rguerin), 1);
+xassert_assign($user_chair, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,unpin\n");
+$paper3->load_conflicts(false);
+xassert_eqq($paper3->conflict_type($user_rguerin), 0);
+xassert_assign($user_sclin, "paper,action,user,conflict\n3,conflict,rguerin@ibm.com,advisee\n");
+$paper3->load_conflicts(false);
+xassert_eqq($paper3->conflict_type($user_rguerin), 4);
 
 $Conf->save_setting("sub_update", $Now - 5);
 $Conf->save_setting("sub_sub", $Now - 5);
 xassert_assign_fail($user_sclin, "paper,action,user\n3,clearconflict,rguerin@ibm.com\n");
-$paper3 = $Conf->fetch_paper(3, $user_chair);
+$paper3 = $user_chair->checked_paper_by_id(3);
 xassert_eqq(sorted_conflicts($paper3, false), "mgbaker@cs.stanford.edu rguerin@ibm.com sclin@leland.stanford.edu");
 
+xassert(!$paper3->has_author($user_rguerin));
+xassert($paper3->has_conflict($user_rguerin));
+xassert_assign($user_sclin, "paper,action,user\n3,contact,rguerin@ibm.com");
+$paper3 = $user_chair->checked_paper_by_id(3);
+xassert($paper3->has_author($user_rguerin));
+xassert($paper3->has_conflict($user_rguerin));
+xassert_assign($user_sclin, "paper,action,user\n3,clearcontact,rguerin@ibm.com");
+$paper3 = $user_chair->checked_paper_by_id(3);
+xassert(!$paper3->has_author($user_rguerin));
+xassert($paper3->has_conflict($user_rguerin));
+xassert_assign($user_sclin, "paper,action,user\n3,contact,rguerin@ibm.com");
+xassert_assign($user_chair, "paper,action,user\n3,clearconflict,rguerin@ibm.com");
+$paper3 = $user_chair->checked_paper_by_id(3);
+xassert($paper3->has_author($user_rguerin));
+xassert($paper3->has_conflict($user_rguerin));
+xassert_assign($user_sclin, "paper,action,user\n3,clearcontact,rguerin@ibm.com");
+$paper3 = $user_chair->checked_paper_by_id(3);
+xassert(!$paper3->has_author($user_rguerin));
+xassert(!$paper3->has_conflict($user_rguerin));
+
 xassert_assign($user_chair, "paper,action,user\n3,clearconflict,rguerin@ibm.com\n3,clearconflict,sclin@leland.stanford.edu\n3,clearcontact,mgbaker@cs.stanford.edu\n");
-$paper3 = $Conf->fetch_paper(3, $user_chair);
+$paper3 = $user_chair->checked_paper_by_id(3);
 xassert_eqq(sorted_conflicts($paper3, true), "sclin@leland.stanford.edu");
 xassert_eqq(sorted_conflicts($paper3, false), "mgbaker@cs.stanford.edu sclin@leland.stanford.edu");
 
 xassert_assign_fail($user_chair, "paper,action,user\n3,clearcontact,sclin@leland.stanford.edu\n");
 xassert_assign($user_chair, "paper,action,user\n3,clearcontact,sclin@leland.stanford.edu\n3,contact,mgbaker@cs.stanford.edu\n");
-$paper3 = $Conf->fetch_paper(3, $user_chair);
+// though no longer a contact, sclin is still a listed author, so
+// has a conflict that way
+$paper3 = $user_chair->checked_paper_by_id(3);
+xassert_eqq($paper3->conflict_type($user_sclin), CONFLICT_AUTHOR);
+xassert_eqq(sorted_conflicts($paper3, true), "mgbaker@cs.stanford.edu sclin@leland.stanford.edu");
+xassert_eqq(sorted_conflicts($paper3, false), "mgbaker@cs.stanford.edu sclin@leland.stanford.edu");
+
+// change author list => remove conflict
+$ps = new PaperStatus($Conf);
+xassert($ps->save_paper_json(json_decode('{"id":3,"authors":[{"name":"Nick McKeown", "email": "nickm@ee.stanford.edu", "affiliation": "Stanford University"}]}')));
+$paper3->load_conflicts(false);
+xassert_eqq($paper3->conflict_type($user_sclin), 0);
 xassert_eqq(sorted_conflicts($paper3, true), "mgbaker@cs.stanford.edu");
 xassert_eqq(sorted_conflicts($paper3, false), "mgbaker@cs.stanford.edu");
 
@@ -827,7 +928,7 @@ $Conf->save_setting("pc_seeblindrev", 0);
 xassert($user_jon->has_tag("red"));
 xassert(!$user_marina->has_tag("red"));
 
-$paper13 = $Conf->fetch_paper(13, $user_jon);
+$paper13 = $user_jon->checked_paper_by_id(13);
 xassert($paper13->has_tag("green"));
 xassert(!$paper13->has_author($user_jon));
 xassert(!$paper13->has_reviewer($user_jon));
@@ -849,7 +950,7 @@ xassert($user_marina->can_accept_review_assignment_ignore_conflict($paper13));
 xassert($user_marina->can_accept_review_assignment($paper13));
 xassert($user_marina->can_review($paper13, null));
 
-$paper14 = $Conf->fetch_paper(14, $user_jon);
+$paper14 = $user_jon->checked_paper_by_id(14);
 xassert(!$paper14->has_tag("green"));
 xassert(!$paper14->has_author($user_jon));
 xassert(!$paper14->has_reviewer($user_jon));
@@ -926,15 +1027,15 @@ assert_search_papers($user_chair, "#red", "2 4 6 8");
 assert_search_papers($user_chair, "#green", "3 4 7 8");
 assert_search_papers($user_chair, "#blue", "5 6 7 8");
 
-$user_floyd = $Conf->user_by_email("floyd@ee.lbl.gov");
-$user_pfrancis = $Conf->user_by_email("pfrancis@ntt.jp");
+$user_floyd = $Conf->checked_user_by_email("floyd@ee.lbl.gov");
+$user_pfrancis = $Conf->checked_user_by_email("pfrancis@ntt.jp");
 xassert(!$user_marina->has_tag("red") && !$user_marina->has_tag("blue"));
 xassert($user_estrin->has_tag("red") && !$user_estrin->has_tag("blue"));
 xassert(!$user_pfrancis->has_tag("red") && $user_pfrancis->has_tag("blue"));
 xassert($user_floyd->has_tag("red") && $user_floyd->has_tag("blue"));
 
 for ($pid = 1; $pid <= 8; ++$pid) {
-    $paper = $Conf->fetch_paper($pid, $user_chair);
+    $paper = $user_chair->checked_paper_by_id($pid);
     foreach ([$user_marina, $user_estrin, $user_pfrancis, $user_floyd] as $cidx => $user) {
         if ((!($cidx & 1) && (($pid - 1) & 2)) /* user not red && paper green */
             || (($cidx & 1) && ($pid == 1 || (($pid - 1) & 1))) /* user red && paper red or none */
@@ -948,7 +1049,7 @@ for ($pid = 1; $pid <= 8; ++$pid) {
 // primary administrators
 $Conf->save_setting("tracks", null);
 for ($pid = 1; $pid <= 3; ++$pid) {
-    $p = $Conf->fetch_paper($pid, $user_chair);
+    $p = $user_chair->checked_paper_by_id($pid);
     xassert($user_chair->allow_administer($p));
     xassert(!$user_marina->allow_administer($p));
     xassert($user_chair->can_administer($p));
@@ -956,7 +1057,7 @@ for ($pid = 1; $pid <= 3; ++$pid) {
 }
 xassert_assign($user_chair, "paper,action,user\n2,administrator,marina@poema.ru");
 for ($pid = 1; $pid <= 3; ++$pid) {
-    $p = $Conf->fetch_paper($pid, $user_chair);
+    $p = $user_chair->checked_paper_by_id($pid);
     xassert($user_chair->allow_administer($p));
     xassert_eqq($user_marina->allow_administer($p), $pid === 2);
     xassert($user_chair->can_administer($p));
@@ -966,7 +1067,7 @@ for ($pid = 1; $pid <= 3; ++$pid) {
 }
 $Conf->save_setting("tracks", 1, "{\"green\":{\"admin\":\"+red\"}}");
 for ($pid = 1; $pid <= 3; ++$pid) {
-    $p = $Conf->fetch_paper($pid, $user_chair);
+    $p = $user_chair->checked_paper_by_id($pid);
     xassert($user_chair->allow_administer($p));
     xassert_eqq($user_marina->allow_administer($p), $pid === 2);
     xassert_eqq($user_estrin->allow_administer($p), $pid === 3);
@@ -980,17 +1081,17 @@ for ($pid = 1; $pid <= 3; ++$pid) {
 $Conf->save_setting("tracks", null);
 
 // check content upload
-$paper30 = $Conf->fetch_paper(30, $user_chair);
+$paper30 = $user_chair->checked_paper_by_id(30);
 $old_hash = $paper30->document(DTYPE_SUBMISSION)->text_hash();
 $ps = new PaperStatus($Conf);
 $ps->save_paper_json(json_decode('{"id":30,"submission":{"content_file":"/etc/passwd","mimetype":"application/pdf"}}'));
 xassert($ps->has_error_at("paper"));
-$paper30 = $Conf->fetch_paper(30, $user_chair);
+$paper30 = $user_chair->checked_paper_by_id(30);
 xassert_eqq($paper30->document(DTYPE_SUBMISSION)->text_hash(), $old_hash);
 $ps->clear();
 $ps->save_paper_json(json_decode('{"id":30,"submission":{"content_file":"./../../../../etc/passwd","mimetype":"application/pdf"}}'));
 xassert($ps->has_error_at("paper"));
-$paper30 = $Conf->fetch_paper(30, $user_chair);
+$paper30 = $user_chair->checked_paper_by_id(30);
 xassert_eqq($paper30->document(DTYPE_SUBMISSION)->text_hash(), $old_hash);
 
 // check accept invariant
@@ -1001,7 +1102,7 @@ assert_search_papers($user_chair, "dec:yes", "1");
 xassert($Conf->setting("paperacc"));
 
 // check reviewAuthorSeen
-$user_author2 = $Conf->user_by_email("micke@cdt.luth.se");
+$user_author2 = $Conf->checked_user_by_email("micke@cdt.luth.se");
 $review2b = fetch_review($paper2, $user_pdruschel);
 xassert(!$user_author2->can_view_review($paper2, $review2b));
 xassert(!$review2b->reviewAuthorSeen);
@@ -1059,7 +1160,7 @@ assert_search_papers($user_chair, "re:1 19", "");
 assert_search_papers($user_chair, "re:4 19", "19");
 
 // check that there actually are tokens
-$paper19 = fetch_paper(19, $user_chair);
+$paper19 = $user_chair->checked_paper_by_id(19);
 xassert_eqq(count($paper19->reviews_by_id()), 4);
 $revs = $paper19->reviews_by_id_order();
 for ($i = 0; $i < 4; ++$i) {
@@ -1069,12 +1170,12 @@ for ($i = 0; $i < 4; ++$i) {
 }
 
 // withdraw a paper
-$paper16 = fetch_paper(16, $user_chair);
+$paper16 = $user_chair->checked_paper_by_id(16);
 xassert($paper16->timeSubmitted > 0);
 xassert_eq($paper16->timeWithdrawn, 0);
 xassert_eqq($paper16->withdrawReason, null);
 xassert_assign($user_chair, "paper,action,reason\n16,withdraw,Paper is bad\n");
-$paper16b = fetch_paper(16, $user_chair);
+$paper16b = $user_chair->checked_paper_by_id(16);
 xassert_eq($paper16b->timeSubmitted, -$paper16->timeSubmitted);
 xassert($paper16b->timeWithdrawn > 0);
 xassert_eqq($paper16b->withdrawReason, "Paper is bad");
@@ -1082,19 +1183,19 @@ xassert_eqq($paper16b->all_tags_text(), "");
 xassert_assign($user_chair, "paper,action,reason\n16,revive\n");
 
 // author can also withdraw
-$user_mogul = $Conf->user_by_email("mogul@wrl.dec.com");
-$paper16 = fetch_paper(16, $user_mogul);
+$user_mogul = $Conf->checked_user_by_email("mogul@wrl.dec.com");
+$paper16 = $user_mogul->checked_paper_by_id(16);
 xassert($paper16->timeSubmitted > 0);
 xassert($paper16->timeWithdrawn <= 0);
 xassert_assign($user_mogul, "paper,action,reason\n16,withdraw,Sucky\n");
-$paper16 = fetch_paper(16, $user_mogul);
+$paper16 = $user_mogul->checked_paper_by_id(16);
 xassert($paper16->timeSubmitted < 0);
 xassert($paper16->timeWithdrawn > 0);
 xassert_eqq($paper16->withdrawReason, "Sucky");
 xassert_assign_fail($user_mogul, "paper,action,reason\n16,revive,Sucky\n");
 $Conf->save_setting("sub_sub", $Now + 5);
 xassert_assign($user_mogul, "paper,action,reason\n16,revive,Sucky\n");
-$paper16 = fetch_paper(16, $user_mogul);
+$paper16 = $user_mogul->checked_paper_by_id(16);
 xassert($paper16->timeSubmitted > 0);
 xassert($paper16->timeWithdrawn <= 0);
 
@@ -1126,16 +1227,28 @@ xassert_assign($user_mogul, "paper,action,reason\n16,revive,Sucky\n");
 $Conf->save_setting("tag_vote", 1, "vote#10 crap#3");
 $Conf->save_setting("tag_approval", 1, "app#0");
 xassert_assign($user_chair,
-    "paper,tag\n16,+huitema~vote#5 +crowcroft~vote#1 +crowcroft~crap#2 +estrin~app +estrin~crap#1");
-$paper16 = fetch_paper(16, $user_chair);
+    "paper,tag\n16,+huitema~vote#5 +crowcroft~vote#1 +crowcroft~crap#2 +estrin~app +estrin~crap#1 +estrin~bar");
+$paper16 = $user_chair->checked_paper_by_id(16);
 xassert_eqq($paper16->tag_value("{$user_estrin->contactId}~crap"), 1.0);
 xassert_eqq($paper16->tag_value("{$user_estrin->contactId}~app"), 0.0);
 xassert_eqq($paper16->tag_value("vote"), 6.0);
 xassert_eqq($paper16->tag_value("crap"), 3.0);
 xassert_eqq($paper16->tag_value("app"), 1.0);
+xassert_eqq($paper16->sorted_viewable_tags($user_chair), " app#1 crap#3 vote#6");
+xassert_eqq($paper16->sorted_searchable_tags($user_chair), " 2~vote#5 4~app#0 4~bar#0 4~crap#1 8~crap#2 8~vote#1 app#1 crap#3 vote#6");
+xassert(!$user_marina->allow_administer($paper16));
+xassert_eqq($paper16->sorted_viewable_tags($user_marina), " app#1 crap#3 vote#6");
+xassert_eqq($paper16->sorted_searchable_tags($user_marina), " 2~vote#5 4~app#0 4~crap#1 8~crap#2 8~vote#1 app#1 crap#3 vote#6");
+$Conf->save_setting("tag_approval", null);
+$paper16 = $user_chair->checked_paper_by_id(16);
+xassert_eqq($paper16->sorted_viewable_tags($user_marina), " app#1 crap#3 vote#6");
+xassert_eqq($paper16->sorted_searchable_tags($user_marina), " 2~vote#5 4~crap#1 8~crap#2 8~vote#1 app#1 crap#3 vote#6");
+$Conf->save_setting("tag_approval", 1, "app#0");
 xassert_assign($user_chair, "paper,action\n16,withdraw\n");
-$paper16b = fetch_paper(16, $user_chair);
-xassert_eqq($paper16b->all_tags_text(), "");
+$paper16 = $user_chair->checked_paper_by_id(16);
+xassert_eqq($paper16->all_tags_text(), " 4~bar#0");
+xassert_eqq($paper16->sorted_searchable_tags($user_marina), "");
+xassert_eqq($paper16->sorted_searchable_tags($user_estrin), " 4~bar#0");
 
 $Conf->check_invariants();
 
@@ -1154,6 +1267,15 @@ xassert(!$blank1->can_view_paper($paper16));
 xassert(!$blank2->can_view_paper($paper19));
 xassert(!$blank2->can_view_paper($paper16));
 
+// author view capabilities and "author" paper_set
+$pset = $blank1->paper_set(["author" => true]);
+xassert_array_eqq($pset->paper_ids(), [19]);
+$pset = $user_mogul->paper_set(["author" => true]);
+xassert_array_eqq($pset->paper_ids(), [16]);
+$user_mogul->set_capability("@av12", true);
+$pset = $user_mogul->paper_set(["author" => true]);
+xassert_array_eqq($pset->paper_ids(), [12, 16]);
+
 // search canonicalization
 xassert_eqq(PaperSearch::canonical_query("(a b) OR (c d)", "", "", "", $Conf),
             "(a b) OR (c d)");
@@ -1171,14 +1293,14 @@ xassert_eqq(PaperSearch::canonical_query("foo HIGHLIGHT:pink bar", "", "", "tag"
             "#foo HIGHLIGHT:pink #bar");
 
 // assignment synonyms
-xassert_eqq($paper16->reviewer_preference($user_varghese), [0, null]);
+xassert_eqq($paper16->preference($user_varghese), [0, null]);
 xassert_assign($user_varghese, "ID,Title,Preference\n16,Potential Benefits of Delta Encoding and Data Compression for HTTP,1X\n");
-$paper16->load_reviewer_preferences();
-xassert_eqq($paper16->reviewer_preference($user_varghese), [1, 1]);
+$paper16->load_preferences();
+xassert_eqq($paper16->preference($user_varghese), [1, 1]);
 
 xassert_eq($paper16->leadContactId, 0);
 xassert_assign($user_chair, "paperID,lead\n16,varghese\n", true);
-$paper16 = fetch_paper(16, $user_chair);
+$paper16 = $user_chair->checked_paper_by_id(16);
 xassert_eq($paper16->leadContactId, $user_varghese->contactId);
 
 // search types
@@ -1198,7 +1320,7 @@ assert_search_papers($user_chair, "“many applications”", "8");
 assert_search_papers($user_chair, "“many applications“", "8");
 
 // users
-xassert(!user("sclinx@leland.stanford.edu"));
+xassert(!maybe_user("sclinx@leland.stanford.edu"));
 $u = Contact::create($Conf, null, ["email" => "sclinx@leland.stanford.edu", "name" => "Stephen Lon", "affiliation" => "Fart World"]);
 xassert(!!$u);
 xassert($u->contactId > 0);
@@ -1206,9 +1328,8 @@ xassert_eqq($u->email, "sclinx@leland.stanford.edu");
 xassert_eqq($u->firstName, "Stephen");
 xassert_eqq($u->lastName, "Lon");
 xassert_eqq($u->affiliation, "Fart World");
-xassert(preg_match('/\A[-a-zA-Z0-9_=+@]+\z/', $u->plaintext_password()));
 
-xassert(!user("scliny@leland.stanford.edu"));
+xassert(!maybe_user("scliny@leland.stanford.edu"));
 $u = Contact::create($Conf, null, ["email" => "scliny@leland.stanford.edu", "affiliation" => "Fart World"]);
 xassert(!!$u);
 xassert($u->contactId > 0);
@@ -1216,20 +1337,19 @@ xassert_eqq($u->email, "scliny@leland.stanford.edu");
 xassert_eqq($u->firstName, "");
 xassert_eqq($u->lastName, "");
 xassert_eqq($u->affiliation, "Fart World");
-xassert(preg_match('/\A[-a-zA-Z0-9_=+@]+\z/', $u->plaintext_password()));
 
-xassert(!user("thalerd@eecs.umich.edu"));
+xassert(!maybe_user("thalerd@eecs.umich.edu"));
 $u = Contact::create($Conf, null, ["email" => "thalerd@eecs.umich.edu"]);
+assert($u !== null);
 xassert(!!$u);
 xassert($u->contactId > 0);
 xassert_eqq($u->email, "thalerd@eecs.umich.edu");
 xassert_eqq($u->firstName, "David");
 xassert_eqq($u->lastName, "Thaler");
 xassert_eqq($u->affiliation, "University of Michigan");
-xassert(preg_match('/\A[-a-zA-Z0-9_=+@]+\z/', $u->plaintext_password()));
-xassert(fetch_paper(27)->has_author($u));
+xassert($Conf->checked_paper_by_id(27)->has_author($u));
 
-xassert(!user("cengiz@isi.edu"));
+xassert(!maybe_user("cengiz@isi.edu"));
 $u = Contact::create($Conf, null, ["email" => "cengiz@isi.edu", "first" => "cengiz!", "last" => "ALAETTINOGLU", "affiliation" => "USC ISI"]);
 xassert(!!$u);
 xassert($u->contactId > 0);
@@ -1237,13 +1357,12 @@ xassert_eqq($u->email, "cengiz@isi.edu");
 xassert_eqq($u->firstName, "cengiz!");
 xassert_eqq($u->lastName, "ALAETTINOGLU");
 xassert_eqq($u->affiliation, "USC ISI");
-xassert(preg_match('/\A[-a-zA-Z0-9_=+@]+\z/', $u->plaintext_password()));
-xassert(fetch_paper(27)->has_author($u));
+xassert($Conf->checked_paper_by_id(27)->has_author($u));
 
-xassert(!user("anonymous10"));
+xassert(!maybe_user("anonymous10"));
 $u = Contact::create($Conf, null, ["email" => "anonymous10"], Contact::SAVE_ANY_EMAIL);
 xassert($u->contactId > 0);
-xassert_eqq($Conf->fetch_value("select password from ContactInfo where email='anonymous10'"), "*");
+xassert_eqq($Conf->fetch_value("select password from ContactInfo where email='anonymous10'"), " nologin");
 
 // contact tags
 xassert($user_chair->can_view_user_tags());

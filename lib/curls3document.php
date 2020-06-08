@@ -1,15 +1,23 @@
 <?php
 // curls3document.php -- S3 access using curl functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class CurlS3Document extends S3Result {
+    /** @var S3Document */
     public $s3;
+    /** @var string */
     public $skey;
+    /** @var resource */
     public $curlh;
+    /** @var resource */
     public $hstream;
+    /** @var resource */
     public $dstream;
+    /** @var string */
     public $url;
+    /** @var int */
     public $runindex;
+    /** @var string */
     private $method;
     private $args;
     private $tries;
@@ -63,8 +71,11 @@ class CurlS3Document extends S3Result {
         $hstr = preg_replace('/(?:\r\n?|\n)[ \t]+/s', " ", $hstr);
         $this->parse_response_lines(preg_split('/\r\n?|\n/', $hstr));
         $this->status = curl_getinfo($this->curlh, CURLINFO_RESPONSE_CODE);
-        if ($this->status === 0)
+        if ($this->status === 0) {
             $this->status = null;
+        } else if ($this->status === 403) {
+            $this->status = $this->s3->check_403();
+        }
         if ($this->status === null || $this->status === 500) {
             $now = microtime(true);
             $this->tries[] = [$this->runindex, round(($now - $this->start) * 1000) / 1000, round(($now - $this->first_start) * 1000) / 1000, $this->status, curl_errno($this->curlh)];
@@ -80,11 +91,12 @@ class CurlS3Document extends S3Result {
         while (true) {
             $this->prepare();
             $this->exec();
-            if ($this->parse_result())
+            if ($this->parse_result()) {
                 return;
+            }
             $timeout = 0.005 * (1 << $this->runindex);
             S3Document::$retry_timeout_allowance -= $timeout;
-            usleep(1000000 * $timeout);
+            usleep((int) (1000000 * $timeout));
         }
     }
 

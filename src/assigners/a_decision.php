@@ -1,6 +1,6 @@
 <?php
 // a_decision.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Decision_AssignmentParser extends UserlessAssignmentParser {
     private $remove;
@@ -25,6 +25,7 @@ class Decision_AssignmentParser extends UserlessAssignmentParser {
     }
     function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         $removepred = null;
+        $dec = null;
         if (isset($req["decision"])) {
             $matchexpr = PaperSearch::decision_matchexpr($state->conf, $req["decision"], false);
             if (!$this->remove) {
@@ -34,12 +35,13 @@ class Decision_AssignmentParser extends UserlessAssignmentParser {
                 } else {
                     $dec = $matchexpr;
                 }
-                if (count($dec) === 1)
+                if (count($dec) === 1) {
                     $dec = $dec[0];
-                else if (empty($dec))
+                } else if (empty($dec)) {
                     return "No decisions match “" . htmlspecialchars($req["decision"]) . "”.";
-                else
+                } else {
                     return "More than one decision matches “" . htmlspecialchars($req["decision"]) . "”.";
+                }
             } else {
                 $removepred = function ($item) use ($matchexpr) {
                     return CountMatcher::compare_using($item["_decision"], $matchexpr);
@@ -57,11 +59,13 @@ class Decision_AssignmentParser extends UserlessAssignmentParser {
                 Status_AssignmentParser::load_status_state($state);
                 $sm = $state->remove(["type" => "status", "pid" => $prow->paperId]);
                 $sres = $sm[0];
-                if ($sres["_submitted"] === 0)
+                if ($sres["_submitted"] === 0) {
                     $sres["_submitted"] = ($sres["_withdrawn"] > 0 ? -$Now : $Now);
+                }
                 $state->add($sres);
-                if ($sres["_submitted"] > 0)
+                if ($sres["_submitted"] > 0) {
                     $decyes = 1;
+                }
             }
             $state->add(["type" => "decision", "pid" => $prow->paperId,
                          "_decision" => +$dec, "_decyes" => $decyes]);
@@ -89,21 +93,23 @@ class Decision_Assigner extends Assigner {
     }
     function unparse_display(AssignmentSet $aset) {
         $t = [];
-        if ($this->item->existed())
-            $t[] = '<del>' . self::decision_html($aset->conf, $this->item->get(true, "_decision")) . '</del>';
+        if ($this->item->existed()) {
+            $t[] = '<del>' . self::decision_html($aset->conf, $this->item->pre("_decision")) . '</del>';
+        }
         $t[] = '<ins>' . self::decision_html($aset->conf, $this->item["_decision"]) . '</ins>';
         return join(" ", $t);
     }
     function unparse_csv(AssignmentSet $aset, AssignmentCsv $acsv) {
         $x = ["pid" => $this->pid, "action" => "decision"];
-        if ($this->item->deleted())
+        if ($this->item->deleted()) {
             $x["decision"] = "none";
-        else
+        } else {
             $x["decision"] = $aset->conf->decision_name($this->item["_decision"]);
-        return $x;
+        }
+        $acsv->add($x);
     }
     function account(AssignmentSet $aset, AssignmentCountSet $deltarev) {
-        $aset->show_column($this->description);
+        $aset->show_column("status");
     }
     function add_locks(AssignmentSet $aset, &$locks) {
         $locks["Paper"] = "write";
@@ -112,9 +118,10 @@ class Decision_Assigner extends Assigner {
         global $Now;
         $dec = $this->item->deleted() ? 0 : $this->item["_decision"];
         $aset->stage_qe("update Paper set outcome=? where paperId=?", $dec, $this->pid);
-        if ($dec > 0 || $this->item->get(true, "_decision") > 0)
+        if ($dec > 0 || $this->item->pre("_decision") > 0) {
             $aset->cleanup_callback("paperacc", function ($aset, $vals) {
                 $aset->conf->update_paperacc_setting(min($vals));
             }, $dec > 0 && $this->item["_decyes"] ? 1 : 0);
+        }
     }
 }

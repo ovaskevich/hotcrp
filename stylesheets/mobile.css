@@ -1,47 +1,68 @@
 /* -*- mode: css; indent-tabs-mode: t; css-indent-offset: 8 -*- */
 /* mobile.css -- HotCRP mobile CSS styles */
-/* Copyright (c) 2006-2019 Eddie Kohler; see LICENSE. */
+/* Copyright (c) 2006-2020 Eddie Kohler; see LICENSE. */
 
+@media screen and (max-width: 1100px) {
+.pcard-left {
+	width: 22.5%;
+}
+body.paper {
+	background: linear-gradient(to right, #e2e9ec, #e2e9ec 22.5%, white 22.5%, white);
+}
+.pcard {
+	margin-left: 22.5%;
+}
+}
 @media screen and (max-width: 1024px) {
-.paperinfo {
+.paperinfo, .paperinfo-c {
 	display: block;
+	margin-bottom: 0;
 }
 .paperinfo-c {
-	display: block;
 	padding-right: 0;
-	margin-top: 1em;
-}
-.paperinfo-c:first-child {
-	margin-top: 0;
 }
 }
 @media screen and (max-width: 768px) {
 html {
 	font-size: 14px;
 }
-#header-site, #header-page, h1.paptitle, div.submission_modes {
+#header-site, #header-page, h1.paptitle, div.submission-modes {
 	padding-left: 12px;
 }
 #header-right, h1.paptitle, div#footer {
 	padding-right: 12px;
 }
+h1.leftmenu, h2.leftmenu {
+	margin-bottom: 16px;
+}
 table.vbar {
 	margin-right: 12px;
 }
-div#body {
+body.leftmenu, body.paper {
+	background: white;
+}
+body.leftmenu > #top {
+	background: #ecf2f4;
+}
+body.paper > #top {
+	background: #dce4e8;
+}
+#body, body.paper > #body {
 	margin: 0 12px;
 }
-div#body > .demargin {
-	margin: 0 -12px;
+.demargin {
+	margin-left: -12px;
+	margin-right: -12px;
 }
-div#body > .demargin .remargin-left {
+.demargin .remargin-left, .demargin.remargin {
 	padding-left: 12px;
 }
-div#body > .demargin .remargin-right {
+.demargin .remargin-right, .demargin.remargin {
 	padding-right: 12px;
 }
-#msg-initial {
-	padding: 0 12px;
+#msgs-initial {
+	margin-left: 12px;
+	margin-right: 12px;
 }
 div.paptitle {
 	margin-left: 0;
@@ -50,12 +71,37 @@ h2.paptitle {
 	text-indent: -1.5em;
 	margin-left: 1.5em;
 }
-.pspcard, .leftmenu-menu-container {
+.pcard-left, .leftmenu-left {
 	float: none;
 	position: static;
 	width: auto;
-	margin-left: 0;
-	margin-bottom: 16px;
+}
+.pcard-left {
+	margin-left: -12px;
+	margin-right: -12px;
+}
+.pspcard {
+	padding: 8px 16px;
+	border-bottom: 1px solid #f33360;
+}
+.pspcard-open {
+	padding-bottom: 4px;
+}
+.pslcard {
+	display: none;
+}
+.leftmenu-menu {
+	margin-top: 0;
+	padding-top: 0;
+	margin-left: -12px;
+	margin-right: -12px;
+	padding-left: 12px;
+	padding-right: 12px;
+	padding-bottom: 12px;
+	background: #ecf2f4;
+}
+.leftmenu-if-left {
+	display: none;
 }
 .leftmenu-list {
 	-webkit-columns: 100px 4;
@@ -65,36 +111,30 @@ h2.paptitle {
 	-moz-column-gap: 18px;
 	column-gap: 18px;
 }
-.pspcard_fold {
-	padding: 7px 0;
+.pspcard-fold {
 	display: block;
 }
-.pspcard_open {
+.pspcard-open {
 	display: none;
 }
 .pcard, .pcontainer-nostrip > .pcard {
-	margin-left: 0;
-	margin-right: 0;
-}
-.leftmenu-content-container {
-	margin: 0 -12px;
+	margin-left: -12px;
+	margin-right: -12px;
+	padding-left: 16px;
+	padding-right: 16px;
 }
 .leftmenu-content {
+	margin: 0 -12px;
+	padding-top: 20px;
 	padding-left: 12px;
 	padding-right: 12px;
 }
-.leftmenu-content > .xmsg, .leftmenu-content > .demargin {
+.leftmenu-content > .xmsg {
 	margin-left: -12px;
 	margin-right: -12px;
 }
 .leftmenu-content > .xmsg > .xmsgc {
 	padding-left: 12px;
-	padding-right: 12px;
-}
-.leftmenu-content > .demargin .remargin-left {
-	padding-left: 12px;
-}
-.leftmenu-content > .demargin .remargin-right {
 	padding-right: 12px;
 }
 input, textarea {
@@ -109,12 +149,12 @@ table.pltable {
 	margin-top: -0.25em;
 }
 .rvl, .rvr {
-	width: 100%;
-	float: none;
+	max-width: none;
 }
-.rvr {
-	margin-top: 8px;
-	border-top: 1px solid #ffecef;
-	padding: 8px 0 0;
+}
+@media screen and (max-width: 640px) {
+.revcard-render {
+	display: block;
+	margin-bottom: 0;
 }
 }

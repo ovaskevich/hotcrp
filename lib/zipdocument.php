@@ -1,6 +1,6 @@
 <?php
 // zipdocument.php -- document helper class for zip archives
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class ZipDocument {
     private $conf;
@@ -13,6 +13,7 @@ class ZipDocument {
     private $headers;
     private $start_time;
 
+    /** @var list<DocumentInfo> */
     private $_docs;
     private $_files;
     private $_saveindex;
@@ -29,8 +30,7 @@ class ZipDocument {
     function clean() {
         $this->filestore = false;
         $this->_tmpdir = null;
-        $this->files = array();
-        $this->warnings = array();
+        $this->warnings = [];
         $this->headers = false;
         $this->start_time = time();
 
@@ -40,15 +40,17 @@ class ZipDocument {
 
     private function tmpdir() {
         if ($this->_tmpdir === null
-            && ($this->_tmpdir = tempdir()) === false)
+            && ($this->_tmpdir = tempdir()) === false) {
             $this->warnings[] = "Could not create temporary directory.";
+        }
         return $this->_tmpdir;
     }
 
     private function _save_one() {
         assert($this->_saveindex < count($this->_docs));
-        if (!($tmpdir = $this->tmpdir()))
+        if (!($tmpdir = $this->tmpdir())) {
             return false;
+        }
         $doc = $this->_docs[$this->_saveindex];
         ++$this->_saveindex;
         // create parent directories
@@ -64,9 +66,9 @@ class ZipDocument {
         // store file in temporary directory
         $zfn = $tmpdir . "/" . $fn;
         if (($path = $doc->available_content_file())
-            && @symlink($path, $zfn))
-            /* OK */;
-        else {
+            && @symlink($path, $zfn)) {
+            // OK
+        } else {
             $content = $doc->content();
             $trylen = file_put_contents($zfn, $content);
             if ($trylen !== strlen($content)) {
@@ -87,12 +89,14 @@ class ZipDocument {
     }
 
     private function _add($doc, $filename, $check_filename) {
-        if (is_string($doc))
+        if (is_string($doc)) {
             $doc = new DocumentInfo(["content" => $doc], $this->conf);
+        }
         assert($doc instanceof DocumentInfo);
 
-        if ($filename == "" && $doc->filename != "")
+        if ($filename == "" && $doc->filename != "") {
             $filename = $doc->filename;
+        }
 
         // maybe this is a warning container
         if ($doc->error) {
@@ -131,14 +135,17 @@ class ZipDocument {
         // add document to list
         $doc = clone $doc;
         $doc->filename = $filename;
-        if ($doc->available_content_file() && $doc->content !== null)
+        if ($doc->available_content_file() && $doc->content !== null) {
             $doc->content = null;
+        }
         $this->_docs[] = $doc;
-        if ($doc->content !== null)
+        if ($doc->content !== null) {
             $this->_docmem += strlen($doc->content);
+        }
         while ($this->_saveindex < count($this->_docs)
-               && $this->_docmem > 4000000)
+               && $this->_docmem > 4000000) {
             $this->_save_one();
+        }
 
         return true;
     }
@@ -159,56 +166,59 @@ class ZipDocument {
         }
     }
 
+    /** @return DocumentInfo */
     private function _make_document($error_html = false) {
-        if (!$error_html)
+        if (!$error_html) {
             return new DocumentInfo(["filename" => $this->filename, "mimetype" => $this->mimetype, "content_file" => $this->filestore], $this->conf);
-        else {
+        } else {
             $this->filestore = false;
             return new DocumentInfo(["error" => true, "error_html" => $error_html], $this->conf);
         }
     }
 
+    /** @return DocumentInfo */
     function create() {
         global $Now;
 
-        if (!empty($this->warnings))
+        if (!empty($this->warnings)) {
             $this->add_as(join("\n", $this->warnings) . "\n", "README-warnings.txt");
+        }
 
-        if ($this->conf->opt("docstore")) {
+        if (($dstore_tmp = Filer::docstore_tmpdir($this->conf))) {
             // calculate hash for zipfile contents
             $xdocs = $this->_docs;
             usort($xdocs, function ($a, $b) {
                 return strcmp($a->filename, $b->filename);
             });
             $signature = count($xdocs) . "\n";
-            foreach ($xdocs as $doc)
+            foreach ($xdocs as $doc) {
                 $signature .= $doc->filename . "\n" . $doc->text_hash() . "\n";
-            $sha1 = sha1($signature, false);
+            }
+            $this->filestore = $dstore_tmp . hash("sha256", $signature, false) . ".zip";
             // maybe zipfile with that signature already exists
-            $dstore_prefix = Filer::docstore_fixed_prefix($this->conf->opt("docstore"));
-            $zfn = $dstore_prefix . "tmp/" . $sha1 . ".zip";
-            if (Filer::prepare_docstore($dstore_prefix, $zfn)) {
-                $this->filestore = $zfn;
-                if (file_exists($zfn)) {
-                    if (@filemtime($zfn) < $Now - 21600)
-                        @touch($zfn);
-                    return $this->_make_document();
+            if (file_exists($this->filestore)) {
+                if (@filemtime($this->filestore) < $Now - 21600) {
+                    @touch($this->filestore);
                 }
+                return $this->_make_document();
             }
         }
 
-        if (!($tmpdir = $this->tmpdir()))
+        if (!($tmpdir = $this->tmpdir())) {
             return $this->_make_document("Could not create temporary directory.");
-        if (!($zipcmd = $this->conf->opt("zipCommand", "zip")))
+        }
+        if (!($zipcmd = $this->conf->opt("zipCommand", "zip"))) {
             return $this->_make_document("<code>zip</code> is not supported on this installation.");
+        }
 
         DocumentInfo::prefetch_content(array_slice($this->_docs, $this->_saveindex));
-        while ($this->_saveindex < count($this->_docs))
+        while ($this->_saveindex < count($this->_docs)) {
             $this->_save_one();
+        }
 
         if (!$this->filestore) {
-            for ($n = 0; isset($this->_files["_hotcrp$n.zip"]); ++$n)
-                /* skip */;
+            for ($n = 0; isset($this->_files["_hotcrp$n.zip"]); ++$n) {
+            }
             $this->filestore = $tmpdir . "/_hotcrp$n.zip";
         }
         $topfiles = array_filter(array_keys($this->_files), function ($f) {
@@ -219,21 +229,22 @@ class ZipDocument {
         set_time_limit(60);
         $command = "cd $tmpdir; $zipcmd $opts " . escapeshellarg($this->filestore) . " " . join(" ", array_map("escapeshellarg", $topfiles));
         $out = system("$command 2>&1", $status);
-        if ($status == 0 && file_exists($this->filestore))
+        if ($status == 0 && file_exists($this->filestore)) {
             return $this->_make_document();
-
-        if ($status != 0)
+        } else if ($status != 0) {
             return $this->_make_document("<code>zip</code> returned an error. Its output: <pre>" . htmlspecialchars($out) . "</pre>");
-        else
+        } else {
             return $this->_make_document("<code>zip</code> result unreadable or empty. Its output: <pre>" . htmlspecialchars($out) . "</pre>");
+        }
     }
 
+    /** @return DocumentInfo */
     function download() {
         $doc = $this->create();
         if (!$doc->error) {
             set_time_limit(180); // large zip files might download slowly
             $this->download_headers();
-            Filer::download_file($doc->content_file);
+            Filer::download_file($doc->content_file, $this->mimetype);
         }
         $this->clean();
         return $doc;

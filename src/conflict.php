@@ -1,109 +1,212 @@
 <?php
 // conflict.php -- HotCRP conflict type class
-// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2020 Eddie Kohler; see LICENSE.
 
 class Conflict {
+    /** @var Conf */
     private $conf;
-    private $_typemap;
-    private $_typemap_html;
+    /** @var bool */
+    private $_desc;
+    /** @var array<int,string> */
+    private $_tmap = [];
 
-    static $typedesc = [3 => "Advisor/advisee",
-                        2 => "Recent collaborator",
-                        4 => "Institutional",
-                        5 => "Personal",
-                        6 => "Other"];
-    static $type_names = array(0 => false,
-                               1 => true,
-                               2 => "collaborator",
-                               3 => "advisor",
-                               4 => "institution",
-                               5 => "personal",
-                               6 => "other",
-                               7 => true,
-                               CONFLICT_CHAIRMARK => "confirmed",
-                               CONFLICT_AUTHOR => "author",
-                               CONFLICT_CONTACTAUTHOR => "author");
+    const GENERAL = 2;
 
-    static function is_author_mark($ct) {
-        return $ct >= CONFLICT_AUTHORMARK && $ct <= CONFLICT_MAXAUTHORMARK;
+    static private $desc_map = [2 => "Recent collaborator",
+                                4 => "Advisor/advisee",
+                                6 => "Institutional",
+                                8 => "Personal",
+                                10 => "Other"];
+    static private $json_map = [2 => "collaborator",
+                                4 => "advisor",
+                                6 => "institutional",
+                                8 => "personal",
+                                10 => "other"];
+
+    /** @param int $ct
+     * @return bool */
+    static function is_conflicted($ct) {
+        return $ct > CONFLICT_MAXUNCONFLICTED;
     }
-    static function constrain_editable($ct, $admin) {
-        if (is_string($ct))
-            $ct = cvtint($ct, 0);
-        if ($ct > 0) {
-            $max = $admin ? CONFLICT_CHAIRMARK : CONFLICT_MAXAUTHORMARK;
-            return max(min($ct, $max), CONFLICT_AUTHORMARK);
-        } else
-            return 0;
+    /** @param int $ct
+     * @return bool */
+    static function is_author($ct) {
+        return $ct >= CONFLICT_AUTHOR;
+    }
+    /** @param int $ct
+     * @return bool */
+    static function is_pinned($ct) {
+        return ($ct & 1) !== 0;
+    }
+    /** @param int $ct
+     * @param bool $pinned
+     * @return int */
+    static function set_pinned($ct, $pinned) {
+        return $pinned ? $ct | 1 : $ct & ~1;
+    }
+    /** @param int $ct
+     * @return int */
+    static function nonauthor_part($ct) {
+        return $ct & 31;
     }
 
     function __construct(Conf $conf) {
         $this->conf = $conf;
+        $this->_desc = !!$conf->setting("sub_pcconfsel");
     }
+
+    /** @return list<int> */
     function basic_conflict_types() {
-        return array_keys(self::$typedesc);
+        return array_keys(self::$desc_map);
     }
-    function parse_text($text, $default_yes) {
-        if (is_bool($text))
-            return $text ? $default_yes : 0;
-        $text = strtolower(trim($text));
-        if ($text === "none")
+
+    /** @param string $text
+     * @param int $old
+     * @return int|false */
+    function parse_assignment($text, $old) {
+        // Returns a conflict type
+        if ($text === true) {
+            return $old > CONFLICT_MAXUNCONFLICTED ? $old : Conflict::GENERAL;
+        } else if ($text === false) {
             return 0;
-        else if (($b = friendly_boolean($text)) !== null)
-            return $b ? $default_yes : 0;
-        else if ($text === "conflict")
-            return $default_yes;
-        else if ($text === "collab" || $text === "collaborator" || $text === "recent collaborator")
-            return CONFLICT_AUTHORMARK /* 2 */;
-        else if ($text === "advisor" || $text === "student" || $text === "advisor/student" || $text === "advisee")
-            return 3;
-        else if ($text === "institution" || $text === "institutional")
-            return 4;
-        else if ($text === "personal")
-            return 5;
-        else if ($text === "other")
-            return 6;
-        else if ($text === "confirmed" || $text === "chair-confirmed")
-            return CONFLICT_CHAIRMARK;
-        else
-            return false;
-    }
-    function parse_json($j) {
-        if (is_bool($j))
-            return $j ? CONFLICT_AUTHORMARK : 0;
-        else if (is_int($j) && isset(self::$type_names[$j]))
-            return $j;
-        else if (is_string($j))
-            return $this->parse_text($j, CONFLICT_AUTHORMARK);
-        else
-            return false;
-    }
-    private function type_map() {
-        if ($this->_typemap === null) {
-            $this->_typemap = [];
-            foreach ([0 => "No conflict",
-                      1 => "Conflict",
-                      CONFLICT_CHAIRMARK => "Pinned conflict",
-                      CONFLICT_AUTHOR => "Author",
-                      CONFLICT_CONTACTAUTHOR => "Contact"] as $n => $t)
-                $this->_typemap[$n] = $this->conf->_c("conflict_type", $t);
-            foreach (self::$typedesc as $n => $t)
-                $this->_typemap[$n] = $this->conf->_c("conflict_type", $t);
         }
-        return $this->_typemap;
+        $pinned = null;
+        $ct = null;
+        $au = 0;
+        foreach (explode(" ", strtolower($text)) as $w) {
+            $thisct = null;
+            if ($w === "pin" || $w === "pinned") {
+                $pinned = true;
+            } else if ($w === "unpin" || $w === "unpinned") {
+                $pinned = false;
+            } else if ($w === "none" || $w === "unconflicted" || $w === "noconflict" || $w === "n" || $w === "no") {
+                $thisct = 0;
+            } else if ($w === "conflict" || $w === "conflicted" || $w === "y" || $w === "yes") {
+                $thisct = $old > CONFLICT_MAXUNCONFLICTED ? $old : Conflict::GENERAL;
+            } else if ($w === "author") {
+                $au |= CONFLICT_AUTHOR;
+            } else if ($w === "contact") {
+                $au |= CONFLICT_CONTACTAUTHOR;
+            } else if ($w === "collab" || $w === "collaborator") {
+                $thisct = 2;
+            } else if ($w === "student" || $w === "advisor" || $w === "advisee") {
+                $thisct = 4;
+            } else if ($w === "institution" || $w === "institutional") {
+                $thisct = 6;
+            } else if ($w === "personal") {
+                $thisct = 8;
+            } else if ($w === "other") {
+                $thisct = 10;
+            } else if (ctype_digit($w)) {
+                $thisct = (int) $w;
+            } else if ($w !== "") {
+                return false;
+            }
+            if ($thisct !== null) {
+                if ($ct !== null && $ct !== $thisct) {
+                    return false;
+                }
+                $ct = $thisct;
+            }
+        }
+        if (($au !== 0 || is_bool($pinned)) && $ct === null) {
+            $ct = $old;
+        }
+        if ($ct !== null) {
+            return self::set_pinned($au | $ct, $pinned ?? (($ct & 1) !== 0));
+        } else {
+            return false;
+        }
     }
+
+    /** @return int|false */
+    function parse_json($j) {
+        if (is_bool($j)) {
+            return $j ? self::GENERAL : 0;
+        } else if (is_int($j)) {
+            return $j;
+        } else if (is_string($j)) {
+            return $this->parse_assignment($j, 0);
+        } else {
+            return false;
+        }
+    }
+
+    /** @param int $ct */
     function unparse_text($ct) {
-        $ct = min($ct, CONFLICT_CONTACTAUTHOR);
-        $tm = $this->type_map();
-        return $tm[isset($tm[$ct]) ? $ct : 1];
+        if (!isset($this->_tmap[$ct])) {
+            if ($ct <= CONFLICT_MAXUNCONFLICTED) {
+                $t = "No conflict";
+            } else if ($ct >= CONFLICT_CONTACTAUTHOR) {
+                $t = "Contact";
+            } else if ($ct >= CONFLICT_AUTHOR) {
+                $t = "Author";
+            } else if ($ct === (self::GENERAL | 1)) {
+                $t = "Pinned conflict";
+            } else if ($this->_desc && isset(self::$desc_map[$ct & ~1])) {
+                $t = self::$desc_map[$ct & ~1];
+            } else {
+                $t = "Conflict";
+            }
+            $this->_tmap[$ct] = $this->conf->_c("conflict_type", $t);
+        }
+        return $this->_tmap[$ct];
     }
+
+    /** @param int $ct
+     * @return string */
     function unparse_html($ct) {
-        if ($this->_typemap_html === null)
-            $this->_typemap_html = array_map("htmlspecialchars", $this->type_map());
-        $ct = min($ct, CONFLICT_CONTACTAUTHOR);
-        return $this->_typemap_html[isset($this->_typemap_html[$ct]) ? $ct : 1];
+        return htmlspecialchars($this->unparse_text($ct));
     }
+
+    /** @param int $ct
+     * @return string */
+    function unparse_csv($ct) {
+        if ($ct <= CONFLICT_MAXUNCONFLICTED) {
+            return "N";
+        } else if (!$this->_desc) {
+            return "Y";
+        } else {
+            return $this->unparse_text($ct);
+        }
+    }
+
+    /** @param int $ct
+     * return bool|string */
     function unparse_json($ct) {
-        return self::$type_names[$ct];
+        if ($ct <= 0) {
+            return false;
+        } else if (!$this->_desc && $ct === self::GENERAL) {
+            return true;
+        }
+        $w = [];
+        if ($ct & 1) {
+            $w[] = "pinned";
+        }
+        if (isset(self::$json_map[$ct & 30])) {
+            $w[] = self::$json_map[$ct & 30];
+        } else if ($ct & 30) {
+            $w[] = (string) ($ct & 30);
+        } else if ($ct & 1) {
+            $w[] = "unconflicted";
+        }
+        if ($ct & CONFLICT_AUTHOR) {
+            $w[] = "author";
+        }
+        if ($ct & CONFLICT_CONTACTAUTHOR) {
+            $w[] = "contact";
+        }
+        return join(" ", $w);
+    }
+
+    /** @param int $ct
+     * @return string */
+    function unparse_assignment($ct) {
+        $j = $this->unparse_json($ct);
+        if (is_bool($j)) {
+            return $j ? "conflict" : "no";
+        } else {
+            return $j;
+        }
     }
 }

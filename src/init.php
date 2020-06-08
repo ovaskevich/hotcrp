@@ -1,10 +1,10 @@
 <?php
 // init.php -- HotCRP initialization (test or site)
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 define("HOTCRP_VERSION", "2.102");
 
-// All review types must be 1 digit
+// All positive review types must be 1 digit
 define("REVIEW_META", 5);
 define("REVIEW_PRIMARY", 4);
 define("REVIEW_SECONDARY", 3);
@@ -13,13 +13,9 @@ define("REVIEW_EXTERNAL", 1);
 define("REVIEW_REQUEST", -1);
 define("REVIEW_REFUSAL", -2);
 
-define("CONFLICT_NONE", 0);
-define("CONFLICT_PCMARK", 1); /* unused */
-define("CONFLICT_AUTHORMARK", 2);
-define("CONFLICT_MAXAUTHORMARK", 7);
-define("CONFLICT_CHAIRMARK", 8);
-define("CONFLICT_AUTHOR", 64);
-define("CONFLICT_CONTACTAUTHOR", 65);
+define("CONFLICT_MAXUNCONFLICTED", 1);
+define("CONFLICT_AUTHOR", 32);
+define("CONFLICT_CONTACTAUTHOR", 64);
 
 define("REV_RATINGS_PC", 0);
 define("REV_RATINGS_PC_EXTERNAL", 1);
@@ -29,13 +25,24 @@ define("DTYPE_SUBMISSION", 0);
 define("DTYPE_FINAL", -1);
 define("DTYPE_COMMENT", -2);
 
-define("VIEWSCORE_EMPTY", -3);         // score no one can see
+define("VIEWSCORE_EMPTY", -3);         // score no one can see; see also reviewViewScore
 define("VIEWSCORE_ADMINONLY", -2);
 define("VIEWSCORE_REVIEWERONLY", -1);
 define("VIEWSCORE_PC", 0);
 define("VIEWSCORE_AUTHORDEC", 1);
 define("VIEWSCORE_AUTHOR", 2);
 define("VIEWSCORE_EMPTYBOUND", 3);     // bound that can see nothing
+
+define("NAME_E", 1);   // include email
+define("NAME_B", 2);   // always put email in angle brackets
+define("NAME_EB", 3);  // NAME_E + NAME_B
+define("NAME_P", 4);   // return email or "[No name]" instead of empty string
+define("NAME_L", 8);   // "last, first"
+define("NAME_I", 16);  // first initials instead of first name
+define("NAME_S", 32);  // "last, first" according to conference preference
+define("NAME_U", 64);  // unaccented
+define("NAME_MAILQUOTE", 128); // quote name by RFC822
+define("NAME_A", 256); // affiliation
 
 define("COMMENTTYPE_DRAFT", 1);
 define("COMMENTTYPE_BLIND", 2);
@@ -54,9 +61,6 @@ define("TAG_REGEX", '~?~?' . TAG_REGEX_NOTWIDDLE);
 define("TAG_MAXLEN", 80);
 define("TAG_INDEXBOUND", 2147483646);
 
-define("CAPTYPE_RESETPASSWORD", 1);
-define("CAPTYPE_CHANGEEMAIL", 2);
-
 global $Now, $ConfSitePATH;
 $Now = time();
 $ConfSitePATH = null;
@@ -67,10 +71,12 @@ function set_path_variables() {
     global $ConfSitePATH;
     if (!isset($ConfSitePATH)) {
         $ConfSitePATH = substr(__FILE__, 0, strrpos(__FILE__, "/"));
-        while ($ConfSitePATH !== "" && !file_exists("$ConfSitePATH/src/init.php"))
+        while ($ConfSitePATH !== "" && !file_exists("$ConfSitePATH/src/init.php")) {
             $ConfSitePATH = substr($ConfSitePATH, 0, strrpos($ConfSitePATH, "/"));
-        if ($ConfSitePATH === "")
+        }
+        if ($ConfSitePATH === "") {
             $ConfSitePATH = "/var/www/html";
+        }
     }
     require_once("$ConfSitePATH/lib/navigation.php");
 }
@@ -85,13 +91,11 @@ class SiteLoader {
         "AssignmentParser" => "src/assignmentset.php",
         "AutoassignerCosts" => "src/autoassigner.php",
         "BanalSettings" => "src/settings/s_subform.php",
-        "CapabilityManager" => "src/capability.php",
         "Collator" => "lib/collatorshim.php",
         "ContactCountMatcher" => "src/papersearch.php",
         "CsvGenerator" => "lib/csv.php",
         "CsvParser" => "lib/csv.php",
-        "FeatureRender" => "src/paperoption.php", // XXX
-        "FieldRender" => "src/paperoption.php",
+        "Fexpr" => "src/formula.php",
         "FormatChecker" => "src/formatspec.php",
         "HashAnalysis" => "lib/filer.php",
         "JsonSerializable" => "lib/json.php",
@@ -102,6 +106,7 @@ class SiteLoader {
         "NumericOrderPaperColumn" => "src/papercolumn.php",
         "PaperInfoSet" => "src/paperinfo.php",
         "PaperOptionList" => "src/paperoption.php",
+        "PaperValue" => "src/paperoption.php",
         "ReviewField" => "src/review.php",
         "ReviewFieldInfo" => "src/review.php",
         "ReviewForm" => "src/review.php",
@@ -122,6 +127,8 @@ class SiteLoader {
         "_api.php" => ["api_", "api"],
         "_assigner.php" => ["a_", "assigners"],
         "_assignmentparser.php" => ["a_", "assigners"],
+        "_capability.php" => ["cap_", "capabilities"],
+        "_fexpr.php" =>  ["f_", "formulas"],
         "_helptopic.php" => ["h_", "help"],
         "_listaction.php" => ["la_", "listactions"],
         "_papercolumn.php" => ["pc_", "papercolumns"],
@@ -135,29 +142,35 @@ class SiteLoader {
 
     static function read_main_options() {
         global $ConfSitePATH, $Opt;
-        if (defined("HOTCRP_OPTIONS"))
+        if (defined("HOTCRP_OPTIONS")) {
             $files = [HOTCRP_OPTIONS];
-        else
+        } else  {
             $files = ["$ConfSitePATH/conf/options.php", "$ConfSitePATH/conf/options.inc", "$ConfSitePATH/Code/options.inc"];
-        foreach ($files as $f)
+        }
+        foreach ($files as $f) {
             if ((@include $f) !== false) {
                 $Opt["loaded"][] = $f;
                 break;
             }
+        }
     }
 }
 
 spl_autoload_register(function ($class_name) {
     global $ConfSitePATH;
     $f = null;
-    if (isset(SiteLoader::$map[$class_name]))
+    if (isset(SiteLoader::$map[$class_name])) {
         $f = SiteLoader::$map[$class_name];
-    if (!$f)
+    }
+    if (!$f) {
         $f = strtolower($class_name) . ".php";
-    foreach (expand_includes($f, ["autoload" => true]) as $fx)
+    }
+    foreach (expand_includes($f, ["autoload" => true]) as $fx) {
         require_once($fx);
+    }
 });
 
+require_once("$ConfSitePATH/lib/polyfills.php");
 require_once("$ConfSitePATH/lib/base.php");
 require_once("$ConfSitePATH/lib/redirect.php");
 require_once("$ConfSitePATH/lib/dbl.php");
@@ -171,87 +184,100 @@ setlocale(LC_COLLATE, "C");
 setlocale(LC_CTYPE, "C");
 
 // Don't want external entities parsed by default
-if (function_exists("libxml_disable_entity_loader"))
+if (function_exists("libxml_disable_entity_loader")) {
     libxml_disable_entity_loader(true);
+}
 
 
 // Set up conference options
 function expand_includes_once($file, $includepath, $globby) {
     foreach ($file[0] === "/" ? [""] : $includepath as $idir) {
         $try = $idir . $file;
-        if (!$globby && is_readable($try))
+        if (!$globby && is_readable($try)) {
             return [$try];
-        else if ($globby && ($m = glob($try, GLOB_BRACE)))
+        } else if ($globby && ($m = glob($try, GLOB_BRACE))) {
             return $m;
+        }
     }
     return [];
 }
 
+/** @param string|list<string> $files */
 function expand_includes($files, $expansions = array()) {
     global $Opt, $ConfSitePATH;
-    if (!is_array($files))
+    if (!is_array($files)) {
         $files = array($files);
-    $confname = get($Opt, "confid") ? : get($Opt, "dbName");
+    }
+    $confname = $Opt["confid"] ?? $Opt["dbName"] ?? null;
     $expansions["confid"] = $expansions["confname"] = $confname;
-    $expansions["siteclass"] = get($Opt, "siteclass");
+    $expansions["siteclass"] = $Opt["siteclass"] ?? null;
 
-    if (isset($expansions["autoload"]) && strpos($files[0], "/") === false)
+    if (isset($expansions["autoload"]) && strpos($files[0], "/") === false) {
         $includepath = [$ConfSitePATH . "/src/", $ConfSitePATH . "/lib/"];
-    else
+    } else {
         $includepath = [$ConfSitePATH . "/"];
+    }
     if (isset($Opt["includepath"]) && is_array($Opt["includepath"])) {
-        foreach ($Opt["includepath"] as $i)
+        foreach ($Opt["includepath"] as $i) {
             if ($i)
                 $includepath[] = str_ends_with($i, "/") ? $i : $i . "/";
+        }
     }
 
     $results = array();
     foreach ($files as $f) {
         if (strpos((string) $f, '$') !== false) {
-            foreach ($expansions as $k => $v)
-                if ($v !== false && $v !== null)
+            foreach ($expansions as $k => $v) {
+                if ($v !== false && $v !== null) {
                     $f = preg_replace(',\$\{' . $k . '\}|\$' . $k . '\b,', $v, $f);
-                else if (preg_match(',\$\{' . $k . '\}|\$' . $k . '\b,', $f)) {
+                } else if (preg_match(',\$\{' . $k . '\}|\$' . $k . '\b,', $f)) {
                     $f = "";
                     break;
                 }
+            }
         }
-        if ((string) $f === "")
+        if ((string) $f === "") {
             continue;
+        }
         $matches = [];
         $ignore_not_found = $globby = false;
         if (str_starts_with($f, "?")) {
             $ignore_not_found = true;
             $f = substr($f, 1);
         }
-        if (preg_match(',[\[\]\*\?\{\}],', $f))
+        if (preg_match(',[\[\]\*\?\{\}],', $f)) {
             $ignore_not_found = $globby = true;
+        }
         $matches = expand_includes_once($f, $includepath, $globby);
         if (empty($matches)
             && isset($expansions["autoload"])
             && ($underscore = strpos($f, "_"))
-            && ($f2 = get(SiteLoader::$suffix_map, substr($f, $underscore)))) {
+            && ($f2 = SiteLoader::$suffix_map[substr($f, $underscore)] ?? null)) {
             $xincludepath = array_merge($f2[1] ? ["{$ConfSitePATH}/src/{$f2[1]}/"] : [], $includepath);
             $matches = expand_includes_once($f2[0] . substr($f, 0, $underscore) . ".php", $xincludepath, $globby);
         }
         $results = array_merge($results, $matches);
-        if (empty($matches) && !$ignore_not_found)
+        if (empty($matches) && !$ignore_not_found) {
             $results[] = $f[0] === "/" ? $f : $includepath[0] . $f;
+        }
     }
     return $results;
 }
 
 function read_included_options(&$files) {
     global $Opt;
-    if (is_string($files))
+    if (is_string($files)) {
         $files = [$files];
-    for ($i = 0; $i != count($files); ++$i)
+    }
+    for ($i = 0; $i !== count($files); ++$i) {
         foreach (expand_includes($files[$i]) as $f) {
             $key = "missing";
-            if ((@include $f) !== false)
+            if ((@include $f) !== false) {
                 $key = "loaded";
+            }
             $Opt[$key][] = $f;
         }
+    }
 }
 
 function expand_json_includes_callback($includelist, $callback) {
@@ -260,18 +286,21 @@ function expand_json_includes_callback($includelist, $callback) {
     foreach (is_array($includelist) ? $includelist : [$includelist] as $k => $str) {
         $expandable = null;
         if (is_string($str)) {
-            if (str_starts_with($str, "@"))
+            if (str_starts_with($str, "@")) {
                 $expandable = substr($str, 1);
-            else if (!preg_match('/\A[\s\[\{]/', $str)
-                     || ($str[0] === "[" && !preg_match('/\]\s*\z/', $str)))
+            } else if (!preg_match('/\A[\s\[\{]/', $str)
+                       || ($str[0] === "[" && !preg_match('/\]\s*\z/', $str))) {
                 $expandable = $str;
+            }
         }
         if ($expandable) {
-            foreach (expand_includes($expandable) as $f)
+            foreach (expand_includes($expandable) as $f) {
                 if (($x = file_get_contents($f)))
                     $includes[] = [$x, $f];
-        } else
+            }
+        } else {
             $includes[] = [$str, "entry $k"];
+        }
     }
     foreach ($includes as $xentry) {
         list($entry, $landmark) = $xentry;
@@ -285,42 +314,54 @@ function expand_json_includes_callback($includelist, $callback) {
             $entry = $x;
         }
         foreach (is_array($entry) ? $entry : [$entry] as $k => $v) {
-            if ($v === null || $v === false)
+            if ($v === null || $v === false) {
                 continue;
-            if (is_object($v))
+            }
+            if (is_object($v)) {
                 $v->__subposition = ++Conf::$next_xt_subposition;
-            if (!call_user_func($callback, $v, $k, $landmark))
+            }
+            if (!call_user_func($callback, $v, $k, $landmark)) {
                 error_log(($Conf ? "$Conf->dbname: " : "") . "$landmark: Invalid expansion " . json_encode($v) . ".");
+            }
         }
     }
 }
 
 global $Opt;
-if (!$Opt)
+if (!$Opt) {
     $Opt = array();
-if (!get($Opt, "loaded")) {
-    SiteLoader::read_main_options();
-    if (get($Opt, "multiconference"))
-        Multiconference::init();
-    if (get($Opt, "include"))
-        read_included_options($Opt["include"]);
 }
-if (!get($Opt, "loaded") || get($Opt, "missing"))
+if (!($Opt["loaded"] ?? null)) {
+    SiteLoader::read_main_options();
+    if ($Opt["multiconference"] ?? null) {
+        Multiconference::init();
+    }
+    if (isset($Opt["include"]) && $Opt["include"]) {
+        read_included_options($Opt["include"]);
+    }
+}
+if (!($Opt["loaded"] ?? null) || ($Opt["missing"] ?? null)) {
     Multiconference::fail_bad_options();
-if (get($Opt, "dbLogQueries"))
-    Dbl::log_queries($Opt["dbLogQueries"], get($Opt, "dbLogQueryFile"));
+}
+if (isset($Opt["dbLogQueries"]) && $Opt["dbLogQueries"]) {
+    Dbl::log_queries($Opt["dbLogQueries"], $Opt["dbLogQueryFile"] ?? null);
+}
 
 
 // Allow lots of memory
-if (!get($Opt, "memoryLimit") && ini_get_bytes("memory_limit") < (128 << 20))
+if (!($Opt["memoryLimit"] ?? null) && ini_get_bytes("memory_limit") < (128 << 20)) {
     $Opt["memoryLimit"] = "128M";
-if (get($Opt, "memoryLimit"))
+}
+if (isset($Opt["memoryLimit"]) && $Opt["memoryLimit"]) {
     ini_set("memory_limit", $Opt["memoryLimit"]);
+}
 
 
 // Create the conference
 global $Conf;
-if (!$Conf)
+if (!$Conf) {
     $Conf = Conf::$g = new Conf($Opt, true);
-if (!$Conf->dblink)
+}
+if (!$Conf->dblink) {
     Multiconference::fail_bad_database();
+}

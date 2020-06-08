@@ -1,36 +1,39 @@
 <?php
 // initweb.php -- HotCRP initialization for web scripts
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 require_once("init.php");
 global $Conf, $Me, $Qreq;
 
 // Check method: GET/HEAD/POST only, except OPTIONS is allowed for API calls
-if ($_SERVER["REQUEST_METHOD"] !== "GET"
-    && $_SERVER["REQUEST_METHOD"] !== "HEAD"
-    && $_SERVER["REQUEST_METHOD"] !== "POST"
-    && (Navigation::page() !== "api"
-        || $_SERVER["REQUEST_METHOD"] !== "OPTIONS")) {
+if (!($_SERVER["REQUEST_METHOD"] === "GET"
+      || $_SERVER["REQUEST_METHOD"] === "HEAD"
+      || $_SERVER["REQUEST_METHOD"] === "POST"
+      || (Navigation::page() === "api"
+          && $_SERVER["REQUEST_METHOD"] === "OPTIONS"))) {
     header("HTTP/1.0 405 Method Not Allowed");
     exit;
 }
 
 // Check for PHP suffix
-if ($Conf->opt("phpSuffix") !== null)
+if ($Conf->opt("phpSuffix") !== null) {
     Navigation::get()->php_suffix = $Conf->opt("phpSuffix");
+}
 
 // Collect $Qreq
 $Qreq = make_qreq();
 
 // Check for redirect to https
-if ($Conf->opt("redirectToHttps"))
+if ($Conf->opt("redirectToHttps")) {
     Navigation::redirect_http_to_https($Conf->opt("allowLocalHttp"));
+}
 
 // Check and fix zlib output compression
 global $zlib_output_compression;
 $zlib_output_compression = false;
-if (function_exists("zlib_get_coding_type"))
+if (function_exists("zlib_get_coding_type")) {
     $zlib_output_compression = zlib_get_coding_type();
+}
 if ($zlib_output_compression) {
     header("Content-Encoding: $zlib_output_compression");
     header("Vary: Accept-Encoding", false);
@@ -50,6 +53,20 @@ if ($Me === false) {
 
 
 // Initialize user
+function initialize_user_redirect($nav, $uindex, $nusers) {
+    if ($nav->page === "api") {
+        json_exit(["ok" => false, "error" => "You have been signed out."]);
+    } else if ($_SERVER["REQUEST_METHOD"] === "GET") {
+        $page = $nusers > 0 ? "u/$uindex/" : "";
+        if ($nav->page !== "index" || $nav->path !== "") {
+            $page .= $nav->page . $nav->php_suffix . $nav->path;
+        }
+        Navigation::redirect_base($page . $nav->query);
+    } else {
+        Conf::msg_error("You have been signed out from this account.");
+    }
+}
+
 function initialize_user() {
     global $Conf, $Me, $Now, $Qreq;
     $nav = Navigation::get();
@@ -57,6 +74,7 @@ function initialize_user() {
     // set up session
     if (isset($Conf->opt["sessionHandler"])) {
         $sh = $Conf->opt["sessionHandler"];
+        /** @phan-suppress-next-line PhanTypeExpectedObjectOrClassName, PhanNonClassMethodCall */
         $Conf->_session_handler = new $sh($Conf);
         session_set_save_handler($Conf->_session_handler, true);
     }
@@ -64,17 +82,13 @@ function initialize_user() {
     $sn = session_name();
 
     // check CSRF token, using old value of session ID
-    if ($Qreq->post && $sn) {
-        if (isset($_COOKIE[$sn])) {
-            $sid = $_COOKIE[$sn];
-            $l = strlen($Qreq->post);
-            if ($l >= 8 && $Qreq->post === substr($sid, strlen($sid) > 16 ? 8 : 0, $l))
-                $Qreq->approve_post();
-            else
-                error_log("{$Conf->dbname}: bad post={$Qreq->post}, cookie={$sid}, url=" . $_SERVER["REQUEST_URI"]);
-        } else if ($Qreq->post === "<empty-session>"
-                   || $Qreq->post === ".empty") {
+    if ($Qreq->post && $sn && isset($_COOKIE[$sn])) {
+        $sid = $_COOKIE[$sn];
+        $l = strlen($Qreq->post);
+        if ($l >= 8 && $Qreq->post === substr($sid, strlen($sid) > 16 ? 8 : 0, $l)) {
             $Qreq->approve_post();
+        } else if ($_SERVER["REQUEST_METHOD"] === "POST") {
+            error_log("{$Conf->dbname}: bad post={$Qreq->post}, cookie={$sid}, url=" . $_SERVER["REQUEST_URI"]);
         }
     }
     ensure_session(ENSURE_SESSION_ALLOW_EMPTY);
@@ -82,36 +96,30 @@ function initialize_user() {
     // upgrade session format
     if (!isset($_SESSION["u"]) && isset($_SESSION["trueuser"])) {
         $_SESSION["u"] = $_SESSION["trueuser"]->email;
+        unset($_SESSION["trueuser"]);
     }
 
     // determine user
-    $trueemail = isset($_SESSION["u"]) ? $_SESSION["u"] : null;
-    if (isset($_SESSION["us"])) {
-        $uindex = false;
-        if ($nav->shifted_path !== ""
-            && substr($nav->shifted_path, 0, 2) === "u/") {
-            $uindex = (int) substr($nav->shifted_path, 2);
-        } else if ($nav->shifted_path === ""
-                   && isset($_GET["i"])
-                   && $_SERVER["REQUEST_METHOD"] === "GET") {
+    $trueemail = $_SESSION["u"] ?? null;
+    $userset = $_SESSION["us"] ?? ($trueemail ? [$trueemail] : []);
+    '@phan-var list<string> $userset';
+
+    $uindex = 0;
+    if ($nav->shifted_path === "") {
+        if (isset($_GET["i"]) && $_SERVER["REQUEST_METHOD"] === "GET") {
             $uindex = Contact::session_user_index($_GET["i"]);
+        } else if (count($userset) > 1 && $_SERVER["REQUEST_METHOD"] === "GET") {
+            $uindex = -1;
         }
-        if ($uindex !== false
-            && $uindex >= 0
-            && $uindex < count($_SESSION["us"])) {
-            $trueemail = $_SESSION["us"][$uindex];
-        } else {
-            $uindex = (int) Contact::session_user_index($trueemail);
-        }
-        if ($nav->shifted_path === ""
-            && $_SERVER["REQUEST_METHOD"] === "GET") {
-            $page = "u/" . $uindex . "/";
-            if ($nav->page !== "index" || $nav->path !== "") {
-                $page .= $nav->page . $nav->php_suffix . $nav->path;
-            }
-            Navigation::redirect_base($page . $nav->query);
-        }
+    } else if (substr($nav->shifted_path, 0, 2) === "u/") {
+        $uindex = empty($userset) ? -1 : (int) substr($nav->shifted_path, 2);
     }
+    if ($uindex > 0 && $uindex < count($userset)) {
+        $trueemail = $userset[$uindex];
+    } else if ($uindex !== 0) {
+        initialize_user_redirect($nav, 0, count($userset));
+    }
+
     if (isset($_GET["i"])
         && $_SERVER["REQUEST_METHOD"] === "GET"
         && $trueemail
@@ -129,11 +137,17 @@ function initialize_user() {
     }
     $Me = $Me->activate($Qreq, true);
 
+    // author view capability documents should not be indexed
+    if (!$Me->email
+        && $Me->has_author_view_capability()
+        && !$Conf->opt("allowIndexPapers")) {
+        header("X-Robots-Tag: noindex, noarchive");
+    }
+
     // redirect if disabled
     if ($Me->is_disabled()) {
-        if ($nav->page === "api") {
-            json_exit(["ok" => false, "error" => "Your account is disabled."]);
-        } else if ($nav->page !== "index" && $nav->page !== "resetpassword") {
+        $gj = $Conf->page_partials($Me)->get($nav->page);
+        if (!$gj || !get($gj, "allow_disabled")) {
             Navigation::redirect_site($Conf->hoturl_site_relative_raw("index"));
         }
     }
@@ -151,9 +165,11 @@ function initialize_user() {
         if ($lb[0] == $Conf->dsn
             && $lb[2] !== "index"
             && $lb[2] == Navigation::page()) {
-            foreach ($lb[3] as $k => $v)
+            assert($Qreq instanceof Qrequest);
+            foreach ($lb[3] as $k => $v) {
                 if (!isset($Qreq[$k]))
                     $Qreq[$k] = $v;
+            }
             $Qreq->set_annex("after_login", true);
         }
         unset($_SESSION["login_bounce"]);
@@ -168,9 +184,10 @@ function initialize_user() {
             || $_SESSION["addrs"][0] !== $_SERVER["REMOTE_ADDR"])) {
         $as = [$_SERVER["REMOTE_ADDR"]];
         if (isset($_SESSION["addrs"]) && is_array($_SESSION["addrs"])) {
-            foreach ($_SESSION["addrs"] as $a)
+            foreach ($_SESSION["addrs"] as $a) {
                 if ($a !== $_SERVER["REMOTE_ADDR"] && count($as) < 5)
                     $as[] = $a;
+            }
         }
         $_SESSION["addrs"] = $as;
     }

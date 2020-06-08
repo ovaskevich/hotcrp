@@ -1,29 +1,32 @@
 <?php
 // bulkassign.php -- HotCRP bulk paper assignment page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 if (!$Me->is_manager())
     $Me->escape();
-$null_mailer = new HotCRPMailer($Conf,
-    null, null, array("requester_contact" => $Me,
-                      "other_contact" => $Me /* backwards compat */,
-                      "reason" => "",
-                      "width" => false));
+$null_mailer = new HotCRPMailer($Conf, null, [
+    "requester_contact" => $Me,
+    "other_contact" => $Me /* backwards compat */,
+    "reason" => "", "width" => false
+]);
 
 $Qreq->rev_round = (string) $Conf->sanitize_round_name($Qreq->rev_round);
-if ($Qreq->post_ok())
+if ($Qreq->post_ok()) {
     header("X-Accel-Buffering: no");  // NGINX: do not hold on to file
+}
 
 
 function assignment_defaults($qreq) {
     $defaults = [];
-    if (($action = $qreq->default_action) && $action !== "guess")
+    if (($action = $qreq->default_action) && $action !== "guess") {
         $defaults["action"] = $action;
+    }
     $defaults["round"] = $qreq->rev_round;
-    if ($qreq->requestreview_notify && $qreq->requestreview_body)
+    if ($qreq->requestreview_notify && $qreq->requestreview_body) {
         $defaults["extrev_notify"] = ["subject" => $qreq->requestreview_subject,
                                       "body" => $qreq->requestreview_body];
+    }
     return $defaults;
 }
 
@@ -34,28 +37,30 @@ function keep_browser_alive($assignset, $lineno, $line) {
     global $Conf, $csv_lineno, $csv_preparing, $csv_started;
     $time = microtime(true);
     $csv_lineno = $lineno;
-    if (!$csv_started)
+    if (!$csv_started) {
         $csv_started = $time;
-    else if ($time - $csv_started > 1) {
+    } else if ($time - $csv_started > 1) {
         if (!$csv_preparing) {
             echo '<div id="foldmail" class="foldc fold2o">',
                 '<div class="fn fx2 merror">Preparing assignments.<br><span id="mailcount"></span></div>',
                 "</div>";
             $csv_preparing = true;
         }
-        if ($assignset->filename)
+        if ($assignset->filename) {
             $text = '<span class="lineno">'
                 . htmlspecialchars($assignset->filename) . ":$lineno:</span>";
-        else
+        } else {
             $text = "<span class=\"lineno\">line $lineno:</span>";
-        if ($line === false)
+        }
+        if ($line === false) {
             $text .= " processing";
-        else
-            $text .= " <code>" . htmlspecialchars(join(",", $line)) . "</code>";
+        } else {
+            $text .= " <code>" . htmlspecialchars(join(",", $line->as_array())) . "</code>";
+        }
         echo Ht::unstash_script("\$\$('mailcount').innerHTML=" . json_encode_browser($text) . ";");
         flush();
-        while (@ob_end_flush())
-            /* skip */;
+        while (@ob_end_flush()) {
+        }
     }
 }
 
@@ -92,7 +97,7 @@ if (isset($Qreq->saveassignment)
 }
 
 
-$Conf->header(["Assignments", "Bulk update"], "bulkassign");
+$Conf->header("Assignments", "bulkassign", ["subtitle" => "Bulk update"]);
 echo '<div class="psmode">',
     '<div class="papmode"><a href="', hoturl("autoassign"), '">Automatic</a></div>',
     '<div class="papmode"><a href="', hoturl("manualassign"), '">Manual</a></div>',
@@ -140,6 +145,7 @@ if (isset($Qreq->upload)
         Conf::msg_error("Internal error: cannot read file.");
     } else {
         $assignset = new AssignmentSet($Me, true);
+        $assignset->set_flags(AssignmentState::FLAG_CSV_CONTEXT);
         $defaults = assignment_defaults($Qreq);
         $text = convert_to_utf8($text);
         $assignset->parse($text, $filename, $defaults, "keep_browser_alive");
@@ -255,23 +261,17 @@ echo '<div style="margin-top:1.5em"><a href="', hoturl_post("search", "fn=get&am
 
 echo "</form>
 
-<hr style=\"margin-top:1em\" />
+<section class=\"mt-7\">
+<h3><a class=\"x\" href=\"", $Conf->hoturl("help", ["t" => "bulkassign"]), "\">Instructions</a></h3>
 
-<div class=\"settingstext\">
-<h3><a href=\"", $Conf->hoturl("help", ["t" => "bulkassign"]), "\">Instructions</a></h3>
-
-<p>Upload a CSV (comma-separated value file) to prepare an assignment; HotCRP
+<p class=\"w-text\">Upload a CSV (comma-separated value file) to prepare an assignment; HotCRP
 will display the consequences of the requested assignment for confirmation and
 approval. The <code>action</code> column determines what kind of assignment is
-performed. Supported actions include:</p>
-
-</div>";
+performed. Supported actions include:</p>";
 
 BulkAssign_HelpTopic::echo_actions($Me);
 
-echo "<div class=\"settingstext\">
-
-<p>For example, this file clears existing R1 review assignments for papers
+echo "<p class=\"w-text\">For example, this file clears existing R1 review assignments for papers
 tagged #redo, then assigns two primary reviews for submission #1 and one
 secondary review for submission #2:</p>
 
@@ -281,8 +281,8 @@ secondary review for submission #2:</p>
 2,secondary,slugger@manny.com
 1,primary,slugger@manny.com</pre>
 
-<p><a href=\"", $Conf->hoturl("help", ["t" => "bulkassign"]), "\"><strong>Detailed instructions</strong></a></p>
-</div>\n";
+<p class=\"w-text\"><a href=\"", $Conf->hoturl("help", ["t" => "bulkassign"]), "\"><strong>Detailed instructions</strong></a></p>
+</section>\n";
 
 Ht::stash_script('$("#tsel").trigger("change")');
 $Conf->footer();

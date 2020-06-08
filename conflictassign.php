@@ -1,6 +1,6 @@
 <?php
 // manualassign.php -- HotCRP chair's paper assignment page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 require_once("src/initweb.php");
 require_once("src/papersearch.php");
@@ -8,7 +8,7 @@ if (!$Me->is_manager())
     $Me->escape();
 $Me->add_overrides(Contact::OVERRIDE_CONFLICT);
 
-$Conf->header(["Assignments", "Conflicts"], "assignpc");
+$Conf->header("Assignments", "assignpc", ["subtitle" => "Conflicts"]);
 echo '<div class="psmode">',
     '<div class="papmode"><a href="', hoturl("autoassign"), '">Automatic</a></div>',
     '<div class="papmode"><a href="', hoturl("manualassign"), '">Manual</a></div>',
@@ -16,7 +16,7 @@ echo '<div class="psmode">',
     '<div class="papmode"><a href="', hoturl("bulkassign"), '">Bulk update</a></div>',
     '</div><hr class="c" />';
 
-echo '<div class="settingstext">';
+echo '<div class="w-text">';
 
 if ($Qreq->neg) {
 } else {
@@ -26,22 +26,27 @@ if ($Qreq->neg) {
 echo "</div>\n";
 
 
-$search = new PaperSearch($Me, ["t" => "alladmin", "q" => "",
-        "urlbase" => $Conf->hoturl_site_relative_raw("conflictassign")]);
+$search = new PaperSearch($Me, [
+    "t" => "alladmin", "q" => "",
+    "pageurl" => $Conf->hoturl_site_relative_raw("conflictassign", ["neg" => $Qreq->neg ? 1 : null])
+]);
 $rowset = $Conf->paper_set(["allConflictType" => 1, "allReviewerPreference" => 1, "tags" => 1, "paperId" => $search->paper_ids()], $Me);
 
 if ($Qreq->neg) {
     $filter = function ($pl, $row) {
         $user = $pl->reviewer_user();
         $ct = $row->conflict_type($user);
-        return $ct > 0 && $ct < CONFLICT_AUTHOR
+        return !Conflict::is_pinned($ct)
+            && Conflict::is_conflicted($ct)
             && !$row->potential_conflict($user);
     };
 } else {
     $filter = function ($pl, $row) {
         $user = $pl->reviewer_user();
-        return $row->conflict_type($user) == 0
-            && ($row->reviewer_preference($user)[0] <= -100
+        $ct = $row->conflict_type($user);
+        return !Conflict::is_pinned($ct)
+            && !Conflict::is_conflicted($ct)
+            && ($row->preference($user)[0] <= -100
                 || $row->potential_conflict($user));
     };
 }
@@ -49,30 +54,32 @@ $args = ["display" => "show:authors show:aufull", "rowset" => $rowset];
 
 $any = false;
 foreach ($Conf->full_pc_members() as $pc) {
-    $paperlist = new PaperList($search, $args, $Qreq);
-    $paperlist->set_report("conflictassign");
+    $paperlist = new PaperList("conflictassign", $search, $args, $Qreq);
     $paperlist->set_reviewer_user($pc);
     $paperlist->set_row_filter($filter);
     $paperlist->set_table_id_class(null, "pltable-fullw");
-    $tr = $paperlist->table_render("conflictassign", ["header_links" => false, "nofooter" => true]);
+    $tr = $paperlist->table_render(["nofooter" => true]);
     if ($paperlist->count > 0) {
-        if (!$any)
+        if (!$any) {
             echo Ht::form(hoturl("conflictassign")),
                 $tr->table_start,
                 Ht::unstash(),
                 ($tr->thead ? : ""),
                 $tr->tbody_start();
-        else
+        } else {
             echo $tr->heading_separator_row();
+        }
         $t = $Me->reviewer_html_for($pc);
-        if ($pc->affiliation)
+        if ($pc->affiliation) {
             $t .= " <span class=\"auaff\">(" . htmlspecialchars($pc->affiliation) . ")</span>";
+        }
         echo $tr->heading_row($t, ["no_titlecol" => true]), $tr->body_rows();
         $any = true;
     }
 }
-if ($any)
+if ($any) {
     echo "  </tbody>\n</table></form>";
+}
 
 echo '<hr class="c" />';
 $Conf->footer();

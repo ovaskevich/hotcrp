@@ -1,6 +1,6 @@
 <?php
 // src/settings/s_options.php -- HotCRP settings > submission form page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Options_SettingRenderer {
     private $option_classes = [];
@@ -21,7 +21,7 @@ class Options_SettingRenderer {
         if ($optvt === "text" && $o->display_space > 3)
             $optvt .= ":ds_" . $o->display_space;
 
-        $self->add_option_class("fold4" . ($o->has_selector() ? "o" : "c"));
+        $self->add_option_class("fold4" . ($o instanceof SelectorPaperOption ? "o" : "c"));
 
         $jtypes = $sv->conf->option_type_map();
         if (!isset($jtypes[$optvt])
@@ -46,7 +46,7 @@ class Options_SettingRenderer {
 
         $rows = 3;
         $value = "";
-        if ($o->has_selector() && count($o->selector_options())) {
+        if ($o instanceof SelectorPaperOption && count($o->selector_options())) {
             $value = join("\n", $o->selector_options()) . "\n";
             $rows = max(count($o->selector_options()), 3);
         }
@@ -67,8 +67,8 @@ class Options_SettingRenderer {
             . '</div></div>';
     }
     static function render_presence_property(SettingValues $sv, PaperOption $o, $xpos, $self, $gj) {
-        $self->add_option_class("fold5" . ($o->final || !$o->id ? "o" : "c"));
-        return '<div class="' . $sv->control_class("optec_$xpos", "entryi fx5")
+        $self->add_option_class("fold10" . ($o->final || !$o->id ? "o" : "c"));
+        return '<div class="' . $sv->control_class("optec_$xpos", "entryi fx10")
             . '">' . $sv->label("optec_$xpos", "Condition")
             . '<div class="entry">'
             . '<span class="sep">'
@@ -108,12 +108,14 @@ class Options_SettingRenderer {
     }
     private function render_option(SettingValues $sv, PaperOption $o = null, $xpos) {
         if (!$o) {
-            $o = PaperOption::make(array("id" => 0,
+            $o = PaperOption::make((object) [
+                    "id" => 0,
                     "name" => "Field name",
                     "description" => "",
                     "type" => "checkbox",
                     "position" => count($sv->conf->paper_opts->nonfixed_option_list()) + 1,
-                    "display" => "prominent"), $sv->conf);
+                    "display" => "prominent"
+                ], $sv->conf);
         }
 
         if ($sv->use_req()) {
@@ -134,9 +136,10 @@ class Options_SettingRenderer {
                     $args["final"] = true;
                 else if ($sv->reqv("optec_$oxpos") === "search")
                     $args["exists_if"] = $sv->reqv("optecs_$oxpos");
-                $o = PaperOption::make($args, $sv->conf);
-                if ($o->has_selector())
+                $o = PaperOption::make((object) $args, $sv->conf);
+                if ($o instanceof SelectorPaperOption) {
                     $o->set_selector_options(explode("\n", rtrim($sv->reqv("optv_$oxpos", ""))));
+                }
             }
         }
 
@@ -189,7 +192,7 @@ class Options_SettingRenderer {
     }
 
     static function render(SettingValues $sv) {
-        echo "<h3 class=\"settings\">Submission fields</h3>\n";
+        echo "<h3 class=\"form-h\">Submission fields</h3>\n";
         echo "<hr class=\"g\">\n",
             Ht::hidden("has_options", 1), "\n\n";
 
@@ -268,18 +271,20 @@ class Options_SettingParser extends SettingParser {
             $oarg["type"] = "checkbox";
 
         if (($optec = $sv->reqv("optec_$xpos"))) {
-            if ($optec === "final")
+            if ($optec === "final") {
                 $oarg["final"] = true;
-            else if ($optec === "search") {
+            } else if ($optec === "search") {
                 $optecs = (string) $sv->reqv("optecs_$xpos");
                 if ($optecs !== "" && $optecs !== "(All)") {
-                    $ps = new PaperSearch($sv->conf->site_contact(), $optecs);
-                    if (!$this->fake_prow)
+                    $ps = new PaperSearch($sv->conf->root_user(), $optecs);
+                    if (!$this->fake_prow) {
                         $this->fake_prow = new PaperInfo(null, null, $sv->conf);
-                    if ($ps->term()->compile_condition($this->fake_prow, $ps) === null)
+                    }
+                    if ($ps->term()->compile_condition($this->fake_prow, $ps) === null) {
                         $sv->error_at("optecs_$xpos", "Search too complex for field condition. (Not all search keywords are supported for field conditions.)");
-                    else
+                    } else {
                         $oarg["exists_if"] = $optecs;
+                    }
                     if (!empty($ps->warnings))
                         $sv->warning_at("optecs_$xpos", join("<br>", $ps->warnings));
                 }
@@ -293,8 +298,9 @@ class Options_SettingParser extends SettingParser {
             if ($seltext != "") {
                 foreach (explode("\n", $seltext) as $t)
                     $oarg["selector"][] = $t;
-            } else
+            } else {
                 $sv->error_at("optv_$xpos", "Enter selectors one per line.");
+            }
         }
 
         $oarg["visibility"] = $sv->reqv("optp_$xpos", "rev");
@@ -302,10 +308,7 @@ class Options_SettingParser extends SettingParser {
         $oarg["display"] = $sv->reqv("optdt_$xpos");
         $oarg["required"] = !!$sv->reqv("optreq_$xpos");
 
-        $o = PaperOption::make($oarg, $sv->conf);
-        $o->req_xpos = $xpos;
-        $o->is_new = $is_new;
-        return $o;
+        return PaperOption::make((object) $oarg, $sv->conf);
     }
 
     function parse(SettingValues $sv, Si $si) {
@@ -313,17 +316,19 @@ class Options_SettingParser extends SettingParser {
 
         // consider option ids
         $optids = array_map(function ($o) { return $o->id; }, $new_opts);
-        for ($i = 1; $sv->has_reqv("optid_$i"); ++$i)
+        for ($i = 1; $sv->has_reqv("optid_$i"); ++$i) {
             $optids[] = intval($sv->reqv("optid_$i"));
+        }
         $optids[] = 0;
         $this->req_optionid = max($optids) + 1;
 
         // convert request to JSON
         for ($i = 1; $sv->has_reqv("optid_$i"); ++$i) {
-            if ($sv->reqv("optfp_$i") === "deleted")
+            if ($sv->reqv("optfp_$i") === "deleted") {
                 unset($new_opts[cvtint($sv->reqv("optid_$i"))]);
-            else if (($o = $this->option_request_to_json($sv, $i)))
+            } else if (($o = $this->option_request_to_json($sv, $i))) {
                 $new_opts[$o->id] = $o;
+            }
         }
 
         if (!$sv->has_error()) {
@@ -336,15 +341,17 @@ class Options_SettingParser extends SettingParser {
 
     function unparse_json(SettingValues $sv, Si $si, $j) {
         $oj = [];
-        foreach ($sv->conf->paper_opts->nonfixed_option_list() as $o)
+        foreach ($sv->conf->paper_opts->nonfixed_option_list() as $o) {
             $oj[] = $o->unparse();
+        }
         $j->options = $oj;
     }
 
     function save(SettingValues $sv, Si $si) {
         $newj = [];
-        foreach ($this->stashed_options as $o)
+        foreach ($this->stashed_options as $o) {
             $newj[] = $o->unparse();
+        }
         $sv->save("next_optionid", null);
         $sv->save("options", empty($newj) ? null : json_encode_db($newj));
 
@@ -354,11 +361,13 @@ class Options_SettingParser extends SettingParser {
             if (!$newo
                 || ($newo->type !== $o->type
                     && !$newo->change_type($o, true, true)
-                    && !$o->change_type($newo, false, true)))
+                    && !$o->change_type($newo, false, true))) {
                 $deleted_ids[] = $o->id;
+            }
         }
-        if (!empty($deleted_ids))
+        if (!empty($deleted_ids)) {
             $sv->conf->qe("delete from PaperOption where optionId?a", $deleted_ids);
+        }
 
         // invalidate cached option list
         $sv->conf->invalidate_caches(["options" => true]);

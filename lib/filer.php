@@ -1,6 +1,6 @@
 <?php
 // filer.php -- generic document helper class
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class HashAnalysis {
     private $prefix;
@@ -103,32 +103,41 @@ class Filer {
     static public $no_touch;
 
     // download
-    static function download_file($filename, $no_accel = false) {
-        global $Conf, $zlib_output_compression;
+    /** @param string $filename
+     * @param ?string $mimetype
+     * @param bool $no_accel */
+    static function download_file($filename, $mimetype, $no_accel = false) {
+        global $zlib_output_compression;
         // if docstoreAccelRedirect, output X-Accel-Redirect header
-        if (($dar = $Conf->opt("docstoreAccelRedirect"))
-            && ($ds = $Conf->opt("docstore"))
+        if (($dar = Conf::$g->opt("docstoreAccelRedirect"))
+            && ($dsp = self::docstore_fixed_prefix(Conf::$g->docstore()))
             && !$no_accel) {
-            if (!str_ends_with($ds, "/"))
-                $ds .= "/";
-            if (str_starts_with($filename, $ds)
-                && ($tail = substr($filename, strlen($ds)))
-                && preg_match(',\A[^/]+,', $tail)) {
-                if (!str_ends_with($dar, "/"))
-                    $dar .= "/";
-                header("X-Accel-Redirect: $dar$tail");
+            assert(str_ends_with($dsp, "/"));
+            if (str_starts_with($filename, $dsp)
+                && strlen($filename) > strlen($dsp)
+                && $filename[strlen($dsp)] !== "/") {
+                // XXX Chromium issue 961617: samesite cookies don't work in
+                // Chrome PDF viewer
+                if (str_ends_with($mimetype, "pdf")
+                    && ($dpr = Conf::$g->opt("docstoreAccelRedirectPdf"))) {
+                    $dar = $dpr;
+                }
+                header("X-Accel-Redirect: $dar" . substr($filename, strlen($dsp)));
                 return;
             }
         }
         // write length header, flush output buffers
-        if (!$zlib_output_compression)
+        if (!$zlib_output_compression) {
             header("Content-Length: " . filesize($filename));
+        }
         flush();
-        while (@ob_end_flush())
-            /* do nothing */;
+        while (@ob_end_flush()) {
+            // do nothing
+        }
         // read file directly to output
         readfile($filename);
     }
+    /** @param DocumentInfo|list<DocumentInfo> $doc */
     static function multidownload($doc, $downloadname = null, $opts = null) {
         global $Now, $zlib_output_compression;
         if (is_array($doc) && count($doc) == 1) {
@@ -136,48 +145,62 @@ class Filer {
             $downloadname = null;
         } else if (is_array($doc)) {
             $z = new ZipDocument($downloadname);
-            foreach ($doc as $d)
+            foreach ($doc as $d) {
                 $z->add($d);
+            }
             return $z->download();
         }
 
-        if (!$doc->ensure_content()) {
+        if ($doc->size == 0 && !$doc->ensure_size()) {
+            return (object) ["error" => true, "error_html" => "Empty file."];
+        }
+
+        $no_accel = $opts["no_accel"] ?? false;
+        $s3_accel = $no_accel ? false : $doc->s3_accel_redirect();
+        if (!$s3_accel && !$doc->ensure_content()) {
             $error_html = "Don’t know how to download.";
-            if ($doc->error && isset($doc->error_html))
+            if ($doc->error && isset($doc->error_html)) {
                 $error_html = $doc->error_html;
+            }
             return (object) ["error" => true, "error_html" => $error_html];
         }
-        if ($doc->size == 0 && !$doc->ensure_size())
-            return (object) ["error" => true, "error_html" => "Empty file."];
 
-        // Print paper
+        // Print headers
         header("Content-Type: " . Mimetype::type_with_charset($doc->mimetype));
-        $attachment = null;
-        if (is_bool($opts))
+        if (is_bool($opts)) {
             $attachment = $opts;
-        else if (is_array($opts) && isset($opts["attachment"]))
+        } else if (is_array($opts) && isset($opts["attachment"])) {
             $attachment = $opts["attachment"];
-        if ($attachment === null)
+        } else {
             $attachment = !Mimetype::disposition_inline($doc->mimetype);
+        }
         if (!$downloadname) {
             $downloadname = $doc->filename;
             if (($slash = strrpos($downloadname, "/")) !== false)
                 $downloadname = substr($downloadname, $slash + 1);
         }
         header("Content-Disposition: " . ($attachment ? "attachment" : "inline") . "; filename=" . mime_quote_string($downloadname));
-        if (is_array($opts) && get($opts, "cacheable")) {
+        if (is_array($opts) && ($opts["cacheable"] ?? false)) {
             header("Cache-Control: max-age=315576000, private");
             header("Expires: " . gmdate("D, d M Y H:i:s", $Now + 315576000) . " GMT");
         }
         // reduce likelihood of XSS attacks in IE
         header("X-Content-Type-Options: nosniff");
-        if ($doc->has_hash())
+        if ($doc->has_hash()) {
             header("ETag: \"" . $doc->text_hash() . "\"");
-        if (($path = $doc->available_content_file()))
-            self::download_file($path, get($doc, "no_cache") || get($doc, "no_accel"));
-        else {
-            if (!$zlib_output_compression)
+        }
+
+        // Download or redirect
+        if ($s3_accel) {
+            $doc->conf->s3_docstore()->load_accel_redirect($doc->s3_key(), $s3_accel);
+            // XXX Chrome bug
+            header("Accept-Ranges: " . (str_ends_with($doc->mimetype, "pdf") ? "none" : "bytes"));
+        } else if (($path = $doc->available_content_file())) {
+            self::download_file($path, $doc->mimetype, $no_accel);
+        } else {
+            if (!$zlib_output_compression) {
                 header("Content-Length: " . strlen($doc->content));
+            }
             echo $doc->content;
         }
         return (object) ["error" => false];
@@ -204,56 +227,71 @@ class Filer {
     const FPATH_MKDIR = 2;
     static function docstore_path(DocumentInfo $doc, $flags = 0) {
         global $Now;
-        if ($doc->error || !($pattern = $doc->conf->docstore()))
+        if ($doc->error || !($pattern = $doc->conf->docstore())) {
             return null;
-        if (!($path = self::_expand_docstore($pattern, $doc, true)))
+        }
+        if (!($path = self::_expand_docstore($pattern, $doc, true))) {
             return null;
+        }
         if ($flags & self::FPATH_EXISTS) {
             if (!is_readable($path)) {
                 // clean up presence of old files saved w/o extension
                 $g = self::_expand_docstore($pattern, $doc, false);
                 if ($path && $g !== $path && is_readable($g)) {
-                    if (!@rename($g, $path))
+                    if (!@rename($g, $path)) {
                         $path = $g;
-                } else
+                    }
+                } else {
                     return null;
+                }
             }
-            if (filemtime($path) < $Now - 172800 && !self::$no_touch)
+            if (filemtime($path) < $Now - 172800 && !self::$no_touch) {
                 @touch($path, $Now);
+            }
         }
         if (($flags & self::FPATH_MKDIR)
-            && !self::prepare_docstore(self::docstore_fixed_prefix($pattern), $path))
+            && !self::prepare_docstore(self::docstore_fixed_prefix($pattern), $path)) {
             return $doc->add_error_html("File system storage cannot be initialized.", true);
-        return $path;
+        } else {
+            return $path;
+        }
     }
 
+    /** @param ?string $pattern
+     * @return ?string */
     static function docstore_fixed_prefix($pattern) {
-        if ($pattern == "")
-            return $pattern;
+        if ($pattern === null || $pattern === "") {
+            return null;
+        }
         $prefix = "";
         while (($pos = strpos($pattern, "%")) !== false) {
-            if ($pos == strlen($pattern) - 1)
+            if ($pos == strlen($pattern) - 1) {
                 break;
-            else if ($pattern[$pos + 1] === "%") {
+            } else if ($pattern[$pos + 1] === "%") {
                 $prefix .= substr($pattern, 0, $pos + 1);
                 $pattern = substr($pattern, $pos + 2);
             } else {
                 $prefix .= substr($pattern, 0, $pos);
-                if (($rslash = strrpos($prefix, "/")) !== false)
+                if (($rslash = strrpos($prefix, "/")) !== false) {
                     return substr($prefix, 0, $rslash + 1);
-                else
-                    return "";
+                } else {
+                    return null;
+                }
             }
         }
         $prefix .= $pattern;
-        if ($prefix[strlen($prefix) - 1] !== "/")
+        if ($prefix[strlen($prefix) - 1] !== "/") {
             $prefix .= "/";
+        }
         return $prefix;
     }
 
-    static function prepare_docstore($parent, $path) {
-        if (!self::_make_fpath_parents($parent, $path))
+    /** @param string $parent
+     * @param string $path */
+    static private function prepare_docstore($parent, $path) {
+        if (!self::_make_fpath_parents($parent, $path)) {
             return false;
+        }
         // Ensure an .htaccess file exists, even if someone else made the
         // filestore directory
         $htaccess = "$parent/.htaccess";
@@ -265,41 +303,58 @@ class Filer {
         return true;
     }
 
+    /** @return ?non-empty-string */
+    static function docstore_tmpdir(Conf $conf = null) {
+        $conf = $conf ?? Conf::$g;
+        if (($prefix = self::docstore_fixed_prefix($conf->docstore()))) {
+            $tmpdir = $prefix . "tmp/";
+            '@phan-var non-empty-string $tmpdir';
+            if (self::prepare_docstore($tmpdir, $tmpdir)) {
+                return $tmpdir;
+            }
+        }
+        return null;
+    }
+
     static private function _expand_docstore($pattern, DocumentInfo $doc, $extension) {
         $x = "";
         $hash = false;
         while (preg_match('/\A(.*?)%(\d*)([%hxHjaA])(.*)\z/', $pattern, $m)) {
             $x .= $m[1];
             list($fwidth, $fn, $pattern) = [$m[2], $m[3], $m[4]];
-            if ($fn === "%")
+            if ($fn === "%") {
                 $x .= "%";
-            else if ($fn === "x") {
-                if ($extension)
+            } else if ($fn === "x") {
+                if ($extension) {
                     $x .= Mimetype::extension($doc->mimetype);
+                }
             } else {
                 if ($hash === false
-                    && ($hash = $doc->text_hash()) === false)
+                    && ($hash = $doc->text_hash()) === false) {
                     return false;
-                if ($fn === "h" && $fwidth === "")
+                }
+                if ($fn === "h" && $fwidth === "") {
                     $x .= $hash;
-                else if ($fn === "a")
+                } else if ($fn === "a") {
                     $x .= $doc->hash_algorithm();
-                else if ($fn === "A")
+                } else if ($fn === "A") {
                     $x .= $doc->hash_algorithm_prefix();
-                else if ($fn === "j")
+                } else if ($fn === "j") {
                     $x .= substr($hash, 0, strlen($hash) === 40 ? 2 : 3);
-                else {
+                } else {
                     $h = $hash;
                     if (strlen($h) !== 40) {
                         $pos = strpos($h, "-") + 1;
-                        if ($fn === "h")
+                        if ($fn === "h") {
                             $x .= substr($h, 0, $pos);
+                        }
                         $h = substr($h, $pos);
                     }
-                    if ($fwidth === "")
+                    if ($fwidth === "") {
                         $x .= $h;
-                    else
+                    } else {
                         $x .= substr($h, 0, intval($fwidth));
+                    }
                 }
             }
         }
@@ -309,14 +364,15 @@ class Filer {
     static private function _make_fpath_parents($fdir, $fpath) {
         $lastslash = strrpos($fpath, "/");
         $container = substr($fpath, 0, $lastslash);
-        while (str_ends_with($container, "/"))
+        while (str_ends_with($container, "/")) {
             $container = substr($container, 0, strlen($container) - 1);
+        }
         if (!is_dir($container)) {
             if (strlen($container) < strlen($fdir)
                 || !($parent = self::_make_fpath_parents($fdir, $container))
-                || !@mkdir($container, 0770))
+                || !@mkdir($container, 0770)) {
                 return false;
-            if (!@chmod($container, 02770 & fileperms($parent))) {
+            } else if (!@chmod($container, 02770 & fileperms($parent))) {
                 @rmdir($container);
                 return false;
             }

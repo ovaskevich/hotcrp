@@ -1,16 +1,24 @@
 <?php
 // listsorter.php -- HotCRP list sorter information
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class ListSorter {
     public $type;
+    /** @var ?bool */
     public $reverse = false;
     public $score;
+    /** @var ?list<string> */
     public $anno;
+    /** @var ?int */
+    public $ianno;
+    /** @var bool */
     public $empty = false;
-    public $thenmap;
+    /** @var int */
+    public $thenval = -1;
     public $field;
+    /** @var string */
     public $uid;
+    /** @var ?PaperList */
     public $pl;
 
     static private $next_uid = 1;
@@ -19,6 +27,8 @@ class ListSorter {
         $this->type = $type;
     }
 
+    /** @param bool $truly_empty
+     * @return ListSorter */
     static function make_empty($truly_empty) {
         $l = new ListSorter(null);
         $l->reverse = null;
@@ -26,6 +36,7 @@ class ListSorter {
         return $l;
     }
 
+    /** @return ListSorter */
     static function make_field($field) {
         $l = new ListSorter(null);
         $l->field = $field;
@@ -53,11 +64,11 @@ class ListSorter {
     ];
 
     static function canonical_short_score_sort($x) {
-        return get(self::$score_sort_map, $x, null);
+        return self::$score_sort_map[$x] ?? null;
     }
 
     static function canonical_long_score_sort($x) {
-        $x = get(self::$score_sort_map, $x, null);
+        $x = self::$score_sort_map[$x] ?? null;
         return $x ? self::$score_sort_long_map[$x] : $x;
     }
 
@@ -68,32 +79,39 @@ class ListSorter {
     }
 
     static function default_score_sort(Contact $user, $nosession = false) {
-        if (!$nosession && ($x = $user->session("scoresort")))
+        if (!$nosession && ($x = $user->session("scoresort"))) {
             return $x;
-        else
+        } else {
             return $user->conf->opt("defaultScoreSort", "C");
+        }
     }
 
-    static function append(&$output, $sinput) {
+    static function compress($sorters) {
         $cur = null;
-        foreach ($sinput as $s) {
+        $output = [];
+        foreach ($sorters as $s) {
             if ($cur
                 && ((!$cur->type && !$cur->field) || (!$s->type && !$s->field))
-                && $cur->thenmap === $s->thenmap) {
-                foreach (["type", "reverse", "score", "field"] as $k)
+                && $cur->thenval === $s->thenval) {
+                foreach (["type", "reverse", "score", "field"] as $k) {
                     if ($cur->$k === null && $s->$k !== null) {
                         $cur->$k = $s->$k;
                         $cur->empty = false;
                     }
-                foreach ($s->anno ? : [] as $anno)
+                }
+                foreach ($s->anno ? : [] as $anno) {
                     $cur->anno[] = $anno;
+                }
             } else {
-                if ($cur)
+                if ($cur) {
                     $output[] = $cur;
+                }
                 $cur = $s;
             }
         }
-        if ($cur)
+        if ($cur) {
             $output[] = $cur;
+        }
+        return $output;
     }
 }

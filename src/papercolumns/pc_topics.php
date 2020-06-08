@@ -1,6 +1,6 @@
 <?php
 // pc_topics.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Topics_PaperColumn extends PaperColumn {
     private $interest_contact;
@@ -8,19 +8,19 @@ class Topics_PaperColumn extends PaperColumn {
         parent::__construct($conf, $cj);
     }
     function prepare(PaperList $pl, $visible) {
-        if (!$pl->conf->has_topics())
+        if (!$pl->conf->has_topics()) {
             return false;
-        if ($visible)
+        }
+        if ($visible) {
             $pl->qopts["topics"] = 1;
+        }
         // only managers can see other users’ topic interests
         $this->interest_contact = $pl->reviewer_user();
         if ($this->interest_contact->contactId !== $pl->user->contactId
-            && !$pl->user->is_manager())
+            && !$pl->user->is_manager()) {
             $this->interest_contact = null;
+        }
         return true;
-    }
-    function header(PaperList $pl, $is_text) {
-        return "Topics";
     }
     function content_empty(PaperList $pl, PaperInfo $row) {
         return !isset($row->topicIds) || $row->topicIds == "";

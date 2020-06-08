@@ -1,6 +1,6 @@
 <?php
 // api.php -- HotCRP JSON API access page
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 // argument cleaning
 require_once("lib/navigation.php");
@@ -62,7 +62,7 @@ if ($Qreq->p) {
 }
 
 // requests
-if ($Conf->has_api($Qreq->fn)) {
+if ($Conf->has_api($Qreq->fn) || $Me->is_disabled()) {
     $Conf->call_api_exit($Qreq->fn, $Me, $Qreq, $Conf->paper);
 }
 
@@ -78,13 +78,14 @@ if ($Qreq->fn === "events") {
     $rows = [];
     $more = false;
     foreach ($events->events($when, 11) as $xr) {
-        if (count($rows) == 10)
+        if (count($rows) == 10) {
             $more = true;
-        else {
-            if ($xr->crow)
+        } else {
+            if ($xr->crow) {
                 $rows[] = $xr->crow->unparse_flow_entry($Me);
-            else
+            } else {
                 $rows[] = $rf->unparse_flow_entry($xr->prow, $xr->rrow, $Me);
+            }
             $when = $xr->eventTime;
         }
     }

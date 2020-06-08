@@ -1,6 +1,6 @@
 <?php
 // papersaver.php -- HotCRP helper for mapping requests to JSON
-// Copyright (c) 2008-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2020 Eddie Kohler; see LICENSE.
 
 class PaperSaver {
     static private $list = [];
@@ -8,40 +8,68 @@ class PaperSaver {
     static function register($prio, PaperSaver $saver) {
         self::$list[] = [$prio, count(self::$list), $saver];
         usort(self::$list, function ($a, $b) {
-            if ($a[0] != $b[0])
+            if ($a[0] != $b[0]) {
                 return $a[0] - $b[0];
-            else
+            } else {
                 return $a[1] - $b[1];
+            }
         });
     }
     static function apply_all(Qrequest $qreq, PaperInfo $prow = null, Contact $user, $action) {
         $ps = new PaperStatus($user->conf);
         $pj = (object) $ps->paper_json($prow);
-        if (!isset($pj->pid))
+        if (!isset($pj->pid)) {
             $pj->pid = -1;
-        foreach (self::$list as $fn)
+        }
+        foreach (self::$list as $fn) {
             $fn[2]->apply($pj, $qreq, $prow, $user, $action);
+        }
         return $pj;
     }
 
     function apply($pj, Qrequest $qreq, PaperInfo $prow = null, Contact $user, $action) {
     }
 
-    static function replace_contacts($pj, $qreq) {
-        $pj->contacts = array();
-        for ($i = 1; isset($qreq["contact_email_{$i}"]); ++$i) {
-            if ($qreq["contact_active_{$i}"])
-                $pj->contacts[] = (object) ["email" => $qreq["contact_email_{$i}"], "index" => $i];
+    /** @param Qrequest $qreq */
+    static function translate_contact_qreq($qreq) {
+        $n = 1;
+        while (isset($qreq["contact_email_$n"])) {
+            $qreq["contacts:email_$n"] = $qreq["contact_email_$n"];
+            $qreq["contacts:active_$n"] = $qreq["contact_active_$n"];
+            ++$n;
         }
-        for ($i = 1; isset($qreq["newcontact_email_{$i}"]); ++$i) {
-            $email = trim((string) $qreq["newcontact_email_{$i}"]);
-            if ($qreq["newcontact_active_{$i}"]
-                && $email !== ""
-                && $email !== "Email") {
-                $name = simplify_whitespace((string) $qreq["newcontact_name_{$i}"]);
-                if ($name === "Name")
-                    $name = "";
-                $pj->contacts[] = (object) ["email" => $email, "name" => $name, "index" => $i, "is_new" => true];
+        $newi = 1;
+        while (isset($qreq["newcontact_email_$newi"])) {
+            $qreq["contacts:email_$n"] = $qreq["newcontact_email_$newi"];
+            $qreq["contacts:active_$n"] = $qreq["newcontact_active_$newi"];
+            $qreq["contacts:name_$n"] = $qreq["newcontact_name_$newi"];
+            $qreq["contacts:isnew_$n"] = "1";
+            ++$newi;
+            ++$n;
+        }
+    }
+
+    /** @param Qrequest $qreq */
+    static function replace_contacts($pj, $qreq) {
+        $pj->contacts = [];
+        if (!isset($qreq["contacts:email_1"])) {
+            self::translate_contact_qreq($qreq);
+        }
+        for ($n = 1; isset($qreq["contacts:email_$n"]); ++$n) {
+            $email = trim($qreq["contacts:email_$n"]);
+            if (strcasecmp($email, "Email") === 0) {
+                $email = "";
+            }
+            $name = simplify_whitespace((string) $qreq["contacts:name_$n"]);
+            if (strcasecmp($name, "Name") === 0) {
+                $name = "";
+            }
+            if ($qreq["contacts:active_$n"] && $email !== "") {
+                $pj->contacts[] = (object) [
+                    "email" => $email,
+                    "name" => $name === "" ? null : $name,
+                    "is_new" => !!$qreq["contacts:isnew_$n"], "index" => $n
+                ];
             }
         }
     }
@@ -52,17 +80,24 @@ class Default_PaperSaver extends PaperSaver {
         $admin = $prow ? $user->can_administer($prow) : $user->privChair;
 
         // Contacts
-        if ($qreq->setcontacts || $qreq->has_contacts || $action === "updatecontacts")
+        if ($qreq->has_contacts
+            || $action === "updatecontacts") {
             PaperSaver::replace_contacts($pj, $qreq);
-        else if (!$prow)
-            $pj->contacts = array($user);
-        if ($action === "updatecontacts")
+        }
+        if (!$prow) {
+            if (!isset($pj->contacts)) {
+                $pj->contacts = [];
+            }
+            $has_me = !!array_filter($pj->contacts, function ($c) use ($user) {
+                return strcasecmp($c->email, $user->email) === 0;
+            });
+            if (!$has_me) {
+                $pj->contacts[] = Author::make_keyed($user);
+            }
+        }
+        if ($action === "updatecontacts") {
             return;
-
-        // Title, abstract, collaborators
-        foreach (array("title", "abstract", "collaborators") as $k)
-            if (isset($qreq[$k]))
-                $pj->$k = UnicodeHelper::remove_f_ligatures($qreq[$k]);
+        }
 
         // Authors
         $aukeys = ["name" => "Name", "email" => "Email", "aff" => "Affiliation"];
@@ -111,65 +146,60 @@ class Default_PaperSaver extends PaperSaver {
 
             $authors[] = $au;
         }
-        if ($n !== 1)
+        if ($n !== 1) {
             $pj->authors = $authors;
-
-        // Status
-        if ($action === "submit")
-            $pj->submitted = true;
-        else if ($action === "final")
-            $pj->final_submitted = $pj->submitted = true;
-        else
-            $pj->submitted = false;
-
-        // Paper upload
-        if ($qreq->has_file("paperUpload")) {
-            if ($action === "final")
-                $pj->final = DocumentInfo::make_file_upload($pj->pid, DTYPE_FINAL, $qreq->file("paperUpload"), $user->conf);
-            else if ($action === "update" || $action === "submit")
-                $pj->submission = DocumentInfo::make_file_upload($pj->pid, DTYPE_SUBMISSION, $qreq->file("paperUpload"), $user->conf);
         }
 
-        // Blindness
-        if ($action !== "final" && $user->conf->subBlindOptional())
-            $pj->nonblind = !$qreq->blind;
+        // Status
+        if ($action === "submit") {
+            $pj->submitted = true;
+        } else if ($action === "final") {
+            $pj->final_submitted = $pj->submitted = true;
+        } else {
+            $pj->submitted = false;
+        }
 
-        // Topics
-        if ($qreq->has_topics) {
-            $pj->topics = (object) array();
-            foreach ($user->conf->topic_set() as $tid => $tname)
-                if (+$qreq["top$tid"] > 0)
-                    $pj->topics->$tname = true;
+        // Paper upload
+        if ($action === "final") {
+            $fname = $qreq->has_file("opt-1") ? "opt-1" : "paperUpload";
+            if (($f1 = $qreq->file($fname))) {
+                $pj->final = DocumentInfo::make_uploaded_file($f1, $pj->pid, DTYPE_FINAL, $user->conf);
+            } else if (($f2 = $qreq["opt-1:upload"])) {
+                $pj->final = DocumentInfo::make_capability($f2, $pj->pid, DTYPE_FINAL, $user->conf);
+            }
+        } else if ($action === "update" || $action === "submit") {
+            $fname = $qreq->has_file("opt0") ? "opt0" : "paperUpload";
+            if (($f1 = $qreq->file($fname))) {
+                $pj->submission = DocumentInfo::make_uploaded_file($f1, $pj->pid, DTYPE_SUBMISSION, $user->conf);
+            } else if (($f2 = $qreq["opt0:upload"])) {
+                $pj->submission = DocumentInfo::make_capability($f2, $pj->pid, DTYPE_SUBMISSION, $user->conf);
+            }
         }
 
         // Options
+        $nnprow = $prow ? : PaperInfo::make_new($user);
         if (!isset($pj->options)) {
             $pj->options = (object) [];
         }
-        foreach ($user->conf->paper_opts->option_list() as $o) {
-            if ($qreq["has_{$o->formid}"]
+        foreach ($user->conf->paper_opts->form_field_list($nnprow) as $o) {
+            if (($qreq["has_{$o->formid}"] || isset($qreq[$o->formid]))
+                && ($o->id > 0 || $o->type === "intrinsic2")
                 && (!$o->final || $action === "final")) {
                 // XXX test_editable
                 $okey = $o->json_key();
-                $pj->options->$okey = $o->parse_request(get($pj->options, $okey), $qreq, $user, $prow);
+                $ov = $o->parse_web($nnprow, $qreq);
+                if ($ov === false) {
+                    throw new Error("option {$o->id} {$o->title()} should implement parse_web but doesn't");
+                }
+                if ($o->id <= 0) {
+                    $pj->$okey = $ov;
+                } else {
+                    $pj->options->$okey = $ov;
+                }
             }
         }
         if (!count(get_object_vars($pj->options))) {
             unset($pj->options);
-        }
-
-        // PC conflicts
-        if ($user->conf->setting("sub_pcconf")
-            && ($action !== "final" || $admin)
-            && $qreq->has_pcconf) {
-            $pj->pc_conflicts = (object) array();
-            foreach ($user->conf->pc_members() as $pcid => $pc) {
-                $ctype = Conflict::constrain_editable($qreq["pcc$pcid"], $admin);
-                if ($ctype) {
-                    $email = $pc->email;
-                    $pj->pc_conflicts->$email = $user->conf->conflict_types()->unparse_json($ctype);
-                }
-            }
         }
     }
 }

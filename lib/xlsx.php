@@ -1,6 +1,6 @@
 <?php
 // xlsx.php -- HotCRP XLSX generator functions
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class XlsxGenerator {
 
@@ -20,14 +20,18 @@ class XlsxGenerator {
     }
 
     static function colname($col) {
-        if ($col < 26)
+        if ($col < 26) {
             return chr($col + 65);
-        else {
+        } else {
             $x = (int) ($col / 26);
             return chr($x + 65) . chr(($col % 26) + 65);
         }
     }
 
+    /** @param int $row
+     * @param list<null|int|float|string> $data
+     * @param int $style
+     * @return string */
     private function row_data($row, $data, $style) {
         $t = "";
         $style = ($style ? " s=\"$style\"" : "");
@@ -35,25 +39,28 @@ class XlsxGenerator {
         foreach ($data as $x) {
             if ($x !== null && $x !== "") {
                 $t .= "<c r=\"" . self::colname($col) . $row . "\"" . $style;
-                if (is_int($x) || is_float($x))
+                if (is_int($x) || is_float($x)) {
                     $t .= "><v>$x</v></c>";
-                else {
+                } else {
                     if (!isset($this->sst[$x])) {
                         $this->sst[$x] = $this->nsst;
                         ++$this->nsst;
                     }
                     $t .= " t=\"s\"><v>" . $this->sst[$x] . "</v></c>";
                 }
-                $this->widths[$col] = max(strlen($x), (int) get($this->widths, $col));
+                $this->widths[$col] = max(strlen((string) $x), $this->widths[$col] ?? 0);
             }
             ++$col;
         }
-        if ($t !== "")
+        if ($t !== "") {
             return "<row r=\"$row\">" . $t . "</row>";
-        else
+        } else {
             return "";
+        }
     }
 
+    /** @param list<null|int|float|string> $header
+     * @param list<list<null|int|float|string>> $rows */
     function add_sheet($header, $rows) {
         assert(!$this->done);
         $extra = "";
@@ -64,14 +71,16 @@ class XlsxGenerator {
             $this->any_headers = true;
             $extra = "<sheetViews><sheetView workbookViewId=\"0\"><pane topLeftCell=\"A2\" ySplit=\"1.0\" state=\"frozen\" activePane=\"bottomLeft\"/></sheetView></sheetViews>\n";
         }
-        foreach ($rows as $row)
+        foreach ($rows as $row) {
             $rout[] = $this->row_data(count($rout) + 1, $row, 0);
-        for ($c = $numcol = 0; $numcol != count($this->widths); ++$c)
+        }
+        for ($c = $numcol = 0; $numcol !== count($this->widths); ++$c) {
             if (isset($this->widths[$c])) {
                 $w = min($this->widths[$c] + 3, 120);
                 $this->widths[$c] = "<col min=\"" . ($c + 1) . "\" max=\"" . ($c + 1) . "\" bestFit=\"1\" width=\"$w\"/>";
                 ++$numcol;
             }
+        }
         $t = self::PROCESSING . "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:mx=\"http://schemas.microsoft.com/office/mac/excel/2008/main\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:mv=\"urn:schemas-microsoft-com:mac:vml\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\">\n"
             . $extra
             . "<sheetFormatPr customHeight=\"1\" defaultRowHeight=\"15.75\"/>"

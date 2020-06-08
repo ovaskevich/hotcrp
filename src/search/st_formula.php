@@ -1,6 +1,6 @@
 <?php
 // search/st_formula.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2019 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2020 Eddie Kohler; see LICENSE.
 
 class Formula_SearchTerm extends SearchTerm {
     private $formula;
@@ -12,24 +12,28 @@ class Formula_SearchTerm extends SearchTerm {
     }
     static private function read_formula($word, $quoted, $is_graph, PaperSearch $srch) {
         $formula = null;
-        if (preg_match('/\A[^(){}\[\]]+\z/', $word))
+        if (preg_match('/\A[^(){}\[\]]+\z/', $word)) {
             $formula = $srch->conf->find_named_formula($word);
-        if (!$formula)
-            $formula = new Formula($word, $is_graph);
+        }
+        if (!$formula) {
+            $formula = new Formula($word, $is_graph ? Formula::ALLOW_INDEXED : 0);
+        }
         if (!$formula->check($srch->user)) {
-            $srch->warn($formula->error_html());
+            $srch->warn("Formula error: " . $formula->error_html());
             $formula = null;
         }
         return $formula;
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
-        if (($formula = self::read_formula($word, $sword->quoted, false, $srch)))
+        if (($formula = self::read_formula($word, $sword->quoted, false, $srch))) {
             return new Formula_SearchTerm($formula);
+        }
         return new False_SearchTerm;
     }
     static function parse_graph($word, SearchWord $sword, PaperSearch $srch) {
-        if (($formula = self::read_formula($word, $sword->quoted, true, $srch)))
+        if (($formula = self::read_formula($word, $sword->quoted, true, $srch))) {
             return SearchTerm::make_float(["view" => [["graph($word)", "show"]]]);
+        }
         return null;
     }
     function sqlexpr(SearchQueryInfo $sqi) {
