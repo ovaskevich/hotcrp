@@ -232,7 +232,8 @@ class Mimetype {
             $type = $tx;
         }
         // unreliable sniffs
-        if ($content !== null && $content !== ""
+        if ($content !== null
+            && $content !== ""
             && (!$type || $type === self::BIN_TYPE)) {
             if (strncmp("%!PS-", $content, 5) == 0) {
                 return self::PS_TYPE;
@@ -243,7 +244,7 @@ class Mimetype {
             if (!self::$finfo) {
                 self::$finfo = new finfo(FILEINFO_MIME_TYPE);
             }
-            $type = self::$finfo->buffer($content);
+            $type = self::$finfo->buffer(substr($content, 0, 4096));
             // canonicalize
             if ($type
                 && !isset(self::$tinfo[$type])
