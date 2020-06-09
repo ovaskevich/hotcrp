@@ -762,14 +762,33 @@ class PaperTable {
         return $needle === "" || strrpos($haystack, $needle, -strlen($haystack)) !== false;
     }
 
+    private function paperOptGet($var) {
+        // get reference to the paper option based on variable name
+        $paperOpt = $this->conf->paper_opts->find($var);
+        //error_log("Var name: {$var}");
+        if ($paperOpt) {
+            // fetch value for this paper
+            $varOption = $this->prow->option($paperOpt->id);
+            if ($varOption) {
+                //error_log ("Lookup Paper Var '{$var}' got id: '{$paperOpt->id}' of type '{$varOption->option->type}'."); 
+                return $varOption;
+            } else {
+                // var esists in type definition but not for this paper
+                //error_log ("Lookup Var '{$var}' not found for paper.");
+                return null;
+            }
+        } else {
+            // wrong var name, it does not exist
+            return null;
+        }
+    }
+
     // template text replacement
     // conference option $optionName contains html template which is
     // filled the paper data here. Used for custom summary (ahead of 
     // abstract and for custom link
     private function paptabTemplateText($optionName) {
         global $Opt;
-        // get options of this paper
-        $options = $this->prow->options();
         // load the template from conference definition
         $summaryTemplate = $this->conf->opt($optionName);
         // if no template, return 
@@ -813,8 +832,9 @@ class PaperTable {
               // variable name without the leading !
               $var = substr($var, 1);
             }
-            // get reference to the paper option based on variable name
-            $varOption = reset(array_filter($options, function ($o) use ($var) {return $o->option->name == $var;}));
+
+            // get the paper option  value based on option name
+            $varOption = $this->paperOptGet($var); 
             // get positions of where the conditional section ends
             //TODO nested BEGIN_IF not yet supported
             $contentStart = $varEnd + BEGIN_IF_END_LEN;
@@ -837,22 +857,27 @@ class PaperTable {
             $var = $matches[0];
             // cut out option name 
             $var = substr($var, 2, strlen($var) - 3);
-            // get reference to the paper option based on variable name
-            $varOption = reset(array_filter($options, function ($o) use ($var) {return $o->option->name == $var;}));
+
+            // special handling for non-option value for paperId
+            if ($var == 'paperId') {
+                return $this->prow->paperId;
+            } 
+            // get option value for this paper 
+            $varOption = $this->paperOptGet($var); 
+
             // determine value, return [???] if option not defined (means user did not define conditional in template)
             // for text options, return data(), for others return data() if defined or its numeric value otherwise
             $value = $varOption ? ($varOption->option->type == "text" ? $varOption->data() : ($varOption->data() ? $varOption->data() : $varOption->value)) : "[???]";
-            // special handling for non-option value for paperId
-            if ($var == 'paperId') {
-                $value = $this->prow->paperId;
-            }
+
             // convert checkbox value 
             if ($varOption && $varOption->option->type == "checkbox") {
                 $value = $value ? 'Yes' : 'No';
             }
+
             return $value;
         }, $summary);
         
+        error_log("Summar: {$summary}.");
         return $summary;
     }
 
@@ -860,6 +885,7 @@ class PaperTable {
         $fr->title = false;
         $fr->value_format = 5;
 
+        $text = $this->entryData("abstract");
         // get the summary from template
         $summary = $this->paptabTemplateText('summaryTemplate');
         // emtpy abstract (both by summary and submission)?
@@ -869,10 +895,15 @@ class PaperTable {
                 return false;
             } else { 
                 // add default text if we don't have a summary
-                if ($summary == null)
+                if ($summary == null) {
                     $text = "[No abstract]";
+                    $summary = '';
+                }
             }
-        }        
+        } else {
+            // put the summary in a similar div as the abstract for formatting 
+            $summary = '<div class="pavb abstract">' . $summary . '</div>';
+        }      
         $extra = [];
         if ($this->allFolded && $this->abstract_foldable($text)) {
             $extra = ["fold" => "paper", "foldnum" => 6,
@@ -880,6 +911,7 @@ class PaperTable {
         }
         $fr->value = '<div class="paperinfo-abstract"><div class="pg">'
             . $this->papt("abstract", $o->title_html(), $extra)
+            . $summary // emit custom summary before actual abstract
             . '<div class="pavb abstract';
         if (!$this->entryMatches
             && ($format = $this->prow->format_of($text))) {
